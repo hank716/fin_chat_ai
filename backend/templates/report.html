@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ report.report_type }}・{{ report.data_as_of }}{% endblock %}
+{% block content %}
+<header>
+  <h1>AI 多市場研究報告</h1>
+  <div class="meta">
+    {{ report.report_type }}　•　產生時間 {{ report.generated_at }}　•　資料日期 {{ report.data_as_of }}
+    　•　引用欄位 {{ report.sources|length }}
+  </div>
+</header>
+
+{% if report.raw_query %}
+<div class="card"><strong>使用者問題</strong><br>{{ report.raw_query }}</div>
+{% endif %}
+
+<div class="card summary"><strong>簡短結論</strong><br>{{ report.summary }}</div>
+
+{% for sec in report.sections %}
+<div class="card">
+  <h2>{{ sec.section }}</h2>
+  <ul class="claims">
+    {% for c in sec.claims %}
+    <li>
+      <span class="tag {{ c.claim_type }}">{{ tag_label(c.claim_type) }}</span>
+      {{ c.text }}
+      {% if c.source_ref %}<span class="ref">（來源：{{ c.source_ref }}）</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+
+<div class="card copybox">
+  <h2>給其他 AI 的分析包</h2>
+  <p class="meta">複製下面整段，貼到 Claude / ChatGPT / Gemini 做進一步深度分析。系統不會自動呼叫。</p>
+  <textarea id="copyText" readonly>{{ report.copy_for_ai }}</textarea>
+  <p style="margin-top:10px;">
+    <button class="copy" onclick="copyPack()">📋 複製分析包</button>
+    <a href="/report/{{ report.report_id }}.md" style="margin-left:12px;">下載 Markdown</a>
+    <a href="/report/{{ report.report_id }}.json" style="margin-left:12px;">下載 JSON</a>
+  </p>
+</div>
+
+<p class="disclaimer">本報告由系統自動產生，僅供家庭內部市場研究，不構成投資建議。</p>
+
+<script>
+function copyPack() {
+  const t = document.getElementById('copyText');
+  t.select(); t.setSelectionRange(0, 999999);
+  navigator.clipboard.writeText(t.value).then(() => {
+    const b = document.querySelector('button.copy');
+    const o = b.textContent; b.textContent = '✓ 已複製';
+    setTimeout(() => b.textContent = o, 1500);
+  });
+}
+</script>
+{% endblock %}

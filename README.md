@@ -15,7 +15,7 @@
 ## 建構進度（垂直切片，見 ARCHITECTURE.md §5）
 
 - [x] **M0** — repo 骨架 + docker-compose（backend + redis）+ FastAPI `/health`
-- [ ] M1 — 黃金路徑垂直切片（yfinance → intermarket → Gemini → Web + Copy-for-Claude）
+- [x] M1 — 黃金路徑垂直切片 ✅ (yfinance → intermarket features → Gemini 結構化 → md/json/copy-for-AI → Web SSR；`POST /brief/morning`、`GET /report/{id}`、`/brief/latest`)
 - [~] M2 — 移植 finflow 抓取層 ✅ (rate_limiter/twse/finmind + parquet sink + storage_monitor + `/storage`)；**待補**：US/crypto loader（finflow 無，全新）+ universe 過濾 + FinMind 歷史 backfill
 - [ ] M3 — Scheduler + catch-up
 - [ ] M4 — Discord 互動 bot + 成本上限

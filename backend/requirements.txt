@@ -13,3 +13,6 @@ pyarrow>=18.0,<19.0
 
 # M1：黃金路徑（yfinance 抓美股指數 + BTC）
 yfinance>=0.2.50,<0.3
+
+# M1 step 5：Web Report SSR
+jinja2>=3.1,<4.0
