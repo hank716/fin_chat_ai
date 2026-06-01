@@ -1,0 +1,6 @@
+# M0 骨架最小依賴。後續里程碑（資料源/LLM/儲存）再逐步加。
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.32,<0.33
+redis>=5.0,<6.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0

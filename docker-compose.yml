@@ -1,0 +1,36 @@
+# AI 多市場研究助理 — docker-compose
+# M0 範圍：backend + redis（無 Postgres，見 ARCHITECTURE.md §5/§2）。
+# 後續里程碑加入：discord-bot(M4)、scheduler(M3)、cloudflared(M6)。設計見 design_docs §26.1。
+
+services:
+  backend:
+    build: ./backend
+    container_name: ai-market-backend
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./storage:/app/storage
+      - ./configs:/app/configs
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: ai-market-redis
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis_data:
