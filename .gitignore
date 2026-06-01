@@ -14,7 +14,8 @@ venv/
 .pytest_cache/
 
 # Local data / storage (local-first, max 10GB)
-storage/
+# 只忽略根目錄 runtime 資料夾，不要誤殺 backend/storage 這個 Python 套件
+/storage/
 *.parquet
 
 # Logs

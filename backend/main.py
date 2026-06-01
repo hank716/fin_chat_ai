@@ -12,6 +12,7 @@ import redis.asyncio as redis
 from fastapi import FastAPI
 
 from api.health import router as health_router
+from api.storage import router as storage_router
 from config import settings
 
 logging.basicConfig(level=settings.log_level.upper())
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI 多市場研究助理", version="0.0.1-m0", lifespan=lifespan)
 app.include_router(health_router)
+app.include_router(storage_router)
 
 
 @app.get("/")

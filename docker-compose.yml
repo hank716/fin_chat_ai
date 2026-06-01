@@ -10,8 +10,10 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      # runtime 資料掛 /data，避免蓋掉 /app/storage 這個 Python 套件
+      - LOCAL_STORAGE_PATH=/data
     volumes:
-      - ./storage:/app/storage
+      - ./storage:/data
       - ./configs:/app/configs
     ports:
       - "8000:8000"
