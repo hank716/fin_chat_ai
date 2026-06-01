@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # ── LLM（Gemini-only）──
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-flash-latest"
     daily_cost_limit_twd: int = 30
 
     # ── Discord ──
