@@ -1,0 +1,27 @@
+# Secrets — never commit (design_docs.md §29.1)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local data / storage (local-first, max 10GB)
+storage/
+*.parquet
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
