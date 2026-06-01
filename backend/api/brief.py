@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
+from ai.gemini_client import GeminiError, GeminiQuotaExceeded
 from reports import morning_brief
 from reports.web_renderer import render_report_html
 
@@ -12,7 +13,15 @@ router = APIRouter(tags=["brief"])
 
 @router.post("/brief/morning")
 async def post_morning(raw_query: str | None = Query(default=None)) -> dict:
-    report = morning_brief.generate_morning_brief(raw_query=raw_query)
+    try:
+        report = morning_brief.generate_morning_brief(raw_query=raw_query)
+    except GeminiQuotaExceeded as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gemini 配額已用盡（換個有額度的 GEMINI_MODEL 或等每日重置）：{exc}",
+        ) from exc
+    except GeminiError as exc:
+        raise HTTPException(status_code=503, detail=f"Gemini 暫時無法使用：{exc}") from exc
     return {
         "report_id": report["report_id"],
         "data_as_of": report["data_as_of"],

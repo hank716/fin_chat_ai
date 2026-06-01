@@ -30,7 +30,11 @@ class GeminiError(RuntimeError):
 
 
 class GeminiUnavailable(GeminiError):
-    """暫時性錯誤（503/429）→ 值得 retry。"""
+    """暫時性過載（503）→ 值得 retry。"""
+
+
+class GeminiQuotaExceeded(GeminiError):
+    """配額用盡（429）→ 短時間內不會恢復，fail-fast 不 retry。"""
 
 
 @retry(
@@ -53,8 +57,11 @@ def _generate_json(prompt: str, response_schema: dict) -> dict[str, Any]:
     }
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
     resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
-    if resp.status_code in (429, 503):
-        raise GeminiUnavailable(f"Gemini {resp.status_code}: {resp.text[:160]}")
+    if resp.status_code == 503:
+        raise GeminiUnavailable(f"Gemini 503 overloaded: {resp.text[:160]}")
+    if resp.status_code == 429:
+        # 每日/每分鐘配額；retry 4 次只會白等，直接 fail-fast 讓上層回清楚訊息
+        raise GeminiQuotaExceeded(f"Gemini 429 quota exceeded: {resp.text[:200]}")
     if resp.status_code != 200:
         raise GeminiError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
     body = resp.json()
