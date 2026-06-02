@@ -46,10 +46,23 @@ class GeminiQuotaExceeded(GeminiError):
 )
 def _usage_of(body: dict) -> dict[str, int]:
     um = body.get("usageMetadata", {}) or {}
+    # output 計費含 thinking tokens（thoughtsTokenCount），否則會嚴重低估 PRO/思考模型成本
+    output = int(um.get("candidatesTokenCount", 0)) + int(um.get("thoughtsTokenCount", 0))
     return {
         "input_tokens": int(um.get("promptTokenCount", 0)),
-        "output_tokens": int(um.get("candidatesTokenCount", 0)),
+        "output_tokens": output,
     }
+
+
+def _grounding_sources(candidate: dict) -> list[tuple[str, str]]:
+    """從 groundingMetadata 取 (標題, url) 清單。"""
+    gm = candidate.get("groundingMetadata", {}) or {}
+    out: list[tuple[str, str]] = []
+    for ch in gm.get("groundingChunks", []) or []:
+        w = ch.get("web", {}) or {}
+        if w.get("uri"):
+            out.append((w.get("title") or w["uri"], w["uri"]))
+    return out
 
 
 def _generate_json(
@@ -109,15 +122,26 @@ def analyze_full_brief(features: dict[str, Any]) -> tuple[BriefResult, dict[str,
     wait=wait_exponential(multiplier=1, min=2, max=20),
     reraise=True,
 )
-def generate_text(prompt: str, model: str | None = None) -> tuple[str, dict[str, int]]:
-    """純文字生成（Discord 互動 Q&A 用，預設 Flash），回 (文字, token usage)。"""
+@retry(
+    retry=retry_if_exception_type((httpx.RequestError, GeminiUnavailable)),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=1, min=2, max=20),
+    reraise=True,
+)
+def generate_text(
+    prompt: str, model: str | None = None, *, use_search: bool = False
+) -> tuple[str, dict[str, int]]:
+    """純文字生成（Discord Q&A / 市場情境）。use_search=True 啟用 Google 搜尋 grounding，
+    並把來源附在文末。回 (文字, token usage)。503 會重試、429 fail-fast。"""
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
     url = f"{BASE_URL}/{model or settings.gemini_model_qa}:generateContent"
-    payload = {
+    payload: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4},
     }
+    if use_search:
+        payload["tools"] = [{"google_search": {}}]  # Gemini 2.x grounding
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
     resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
     if resp.status_code == 503:
@@ -130,11 +154,21 @@ def generate_text(prompt: str, model: str | None = None) -> tuple[str, dict[str,
     candidates = body.get("candidates") or []
     if not candidates:
         raise GeminiError(f"Gemini 無 candidates: {json.dumps(body)[:300]}")
-    parts = candidates[0].get("content", {}).get("parts", [])
+    cand = candidates[0]
+    parts = cand.get("content", {}).get("parts", [])
     text = "".join(p.get("text", "") for p in parts).strip()
-    um = body.get("usageMetadata", {}) or {}
-    usage = {
-        "input_tokens": int(um.get("promptTokenCount", 0)),
-        "output_tokens": int(um.get("candidatesTokenCount", 0)),
-    }
-    return text, usage
+    if use_search:
+        srcs = _grounding_sources(cand)
+        if srcs:
+            text += "\n\n🔎 來源：" + "　".join(f"[{t}]({u})" for t, u in srcs[:4])
+    return text, _usage_of(body)
+
+
+def fetch_web_context(date_str: str, model: str | None = None) -> tuple[str, dict[str, int]]:
+    """用 Google 搜尋抓近兩日影響台/美/加密市場的重大事件（附來源），給晨報強化事實基礎。"""
+    prompt = (
+        f"用 Google 搜尋，列出 {date_str} 前後最新、會影響台股／美股／加密貨幣市場的重大事件"
+        f"（總經數據、央行/利率、政策、地緣政治、重大企業或產業消息）。"
+        f"繁體中文條列 5–8 點，每點一句話並標日期，只列最近兩天、務必基於可信來源。"
+    )
+    return generate_text(prompt, model=model or settings.gemini_model_qa, use_search=True)

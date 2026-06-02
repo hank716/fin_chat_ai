@@ -77,7 +77,7 @@ async def ask(req: AskRequest) -> AskResponse:
     on_demand = _ondemand_symbols(req.question, known)
     prompt = build_qa_prompt(req.question, report, on_demand=on_demand)
     try:
-        answer, usage = gemini_client.generate_text(prompt)
+        answer, usage = gemini_client.generate_text(prompt, use_search=True)
     except GeminiQuotaExceeded as exc:
         raise HTTPException(status_code=503, detail=f"Gemini 配額用盡：{exc}") from exc
     except GeminiError as exc:

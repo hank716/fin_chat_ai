@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import universe
 from config import settings
+from ai import gemini_client
 from ai.llm_client import get_llm_client
 from cost import tracker
 from data_sources import news_loader, yfinance_loader
@@ -88,11 +89,23 @@ def generate_morning_brief(
 
     feats, landed = _build_combined_features(refresh_tw)
 
-    # Gemini 完整敘事晨報（含 token 計費）
+    # 強化事實基礎：用 Google 搜尋抓近兩日市場重大事件，注入 features（失敗不阻斷）
+    web_usage = {"input_tokens": 0, "output_tokens": 0}
+    try:
+        web_ctx, web_usage = gemini_client.fetch_web_context(generated_at.strftime("%Y-%m-%d"))
+        feats["web_context"] = web_ctx
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("web_context 取得失敗，略過: %s", exc)
+
+    # Gemini 完整敘事晨報（含 token 計費；晨報 PRO + 搜尋情境 Flash 一起計）
     result, usage = get_llm_client().analyze_full_brief(feats)
-    brief_cost = tracker.estimate_cost_twd(
-        usage["input_tokens"], usage["output_tokens"], model=settings.gemini_model_brief
+    brief_cost = (
+        tracker.estimate_cost_twd(usage["input_tokens"], usage["output_tokens"],
+                                  model=settings.gemini_model_brief)
+        + tracker.estimate_cost_twd(web_usage["input_tokens"], web_usage["output_tokens"],
+                                    model=settings.gemini_model_qa)
     )
+    brief_cost = round(brief_cost, 4)
     tracker.record_cost(brief_cost)
     cost_info = {
         "brief_twd": brief_cost,
