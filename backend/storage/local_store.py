@@ -23,6 +23,7 @@ PARQUET_ROOT = Path(settings.local_storage_path) / "local_parquet"
 
 PRICE_COLUMNS = ["trade_date", "open", "high", "low", "close", "volume", "amount", "source"]
 CHIP_COLUMNS = ["trade_date", "foreign_net_buy", "trust_net_buy", "dealer_net_buy", "source"]
+MARGIN_COLUMNS = ["trade_date", "margin_balance", "short_balance", "source"]
 
 
 def _to_native(v: Any) -> Any:
@@ -86,6 +87,11 @@ def write_chip(rows: Iterable[Any], market: str) -> dict[str, Any]:
     return _write_by_symbol(rows, CHIP_COLUMNS, PARQUET_ROOT / market / "_chip")
 
 
+def write_margin(rows: Iterable[Any], market: str) -> dict[str, Any]:
+    """寫融資融券餘額（MarginRow）到 local_parquet/{market}/_margin/{symbol}.parquet。"""
+    return _write_by_symbol(rows, MARGIN_COLUMNS, PARQUET_ROOT / market / "_margin")
+
+
 def read_prices(symbol: str, market: str) -> pd.DataFrame:
     """讀回單檔 OHLCV（不存在回空 DataFrame）。"""
     path = PARQUET_ROOT / market / f"{symbol}.parquet"
@@ -99,4 +105,12 @@ def read_chip(symbol: str, market: str) -> pd.DataFrame:
     path = PARQUET_ROOT / market / "_chip" / f"{symbol}.parquet"
     if not path.exists():
         return pd.DataFrame(columns=CHIP_COLUMNS)
+    return pd.read_parquet(path)
+
+
+def read_margin(symbol: str, market: str) -> pd.DataFrame:
+    """讀回單檔融資融券餘額（不存在回空 DataFrame）。"""
+    path = PARQUET_ROOT / market / "_margin" / f"{symbol}.parquet"
+    if not path.exists():
+        return pd.DataFrame(columns=MARGIN_COLUMNS)
     return pd.read_parquet(path)

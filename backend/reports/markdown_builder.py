@@ -47,9 +47,9 @@ def build_markdown(
     for sec in result.sections:
         parts.append(_render_section(sec))
 
-    if result.tw_watchlist:
-        lines = ["## 候選觀察標的", "", "_觀察研究用途，非買賣建議。_", ""]
-        for w in result.tw_watchlist:
+    def _watch_block(title: str, note: str, items: list) -> str:
+        lines = [f"## {title}", "", f"_{note}_", ""]
+        for w in items:
             sector = f"〔{w.sector}〕" if w.sector else ""
             lines.append(f"### {w.symbol} {w.name} {sector}")
             lines.append(w.thesis)
@@ -59,7 +59,12 @@ def build_markdown(
             if w.uncertainty:
                 lines.append(f"\n> ⚠️ 待驗證：{w.uncertainty}")
             lines.append("")
-        parts.append("\n".join(lines).rstrip())
+        return "\n".join(lines).rstrip()
+
+    if result.tw_watchlist:
+        parts.append(_watch_block("候選觀察標的（正向）", "訊號偏多、值得關注；觀察研究用途，非買賣建議。", result.tw_watchlist))
+    if result.tw_caution:
+        parts.append(_watch_block("要注意標的（負向）", "訊號偏空或有追高/籌碼風險；觀察研究用途，非買賣建議。", result.tw_caution))
 
     if result.risks:
         parts.append("## 今日風險提醒\n\n" + "\n".join(f"- {r}" for r in result.risks))

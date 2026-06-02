@@ -63,7 +63,10 @@ def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str
 
     us_crypto = build_intermarket_features()
     tw = build_tw_features()
-    news = news_loader.fetch_news(_news_focus_symbols(tw), days=3, per_symbol=3)
+    # FinMind 新聞為單日語意：用資料日(as_of)與 today 當 start_date 才拿得到最新新聞
+    news = news_loader.fetch_news(
+        _news_focus_symbols(tw), as_of=tw.get("as_of"), per_symbol=2
+    )
 
     combined = {
         "as_of": tw.get("as_of") or us_crypto.get("as_of"),

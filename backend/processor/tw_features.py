@@ -106,6 +106,29 @@ def _chip_block(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _margin_block(df: pd.DataFrame) -> dict[str, Any]:
+    """融資融券：餘額(張)、融資增減、資券比(=融券餘額/融資餘額%)。"""
+    if df.empty:
+        return {}
+    df = df.sort_values("trade_date").reset_index(drop=True)
+    margin = df["margin_balance"]
+    short = df["short_balance"]
+    m_last = margin.iloc[-1]
+    s_last = short.iloc[-1]
+    m_prev = margin.iloc[-2] if len(margin) >= 2 else None
+    m_5ago = margin.iloc[-6] if len(margin) >= 6 else None
+    ratio = None
+    if m_last and not pd.isna(m_last) and m_last != 0 and not pd.isna(s_last):
+        ratio = round(float(s_last) / float(m_last) * 100, 2)
+    return {
+        "margin_balance_lots": _lots(m_last),
+        "margin_chg_1d_lots": _lots(m_last - m_prev) if m_prev is not None and not pd.isna(m_prev) else None,
+        "margin_chg_5d_lots": _lots(m_last - m_5ago) if m_5ago is not None and not pd.isna(m_5ago) else None,
+        "short_balance_lots": _lots(s_last),
+        "short_margin_ratio_pct": ratio,
+    }
+
+
 def build_tw_features(window: int = 20) -> dict[str, Any]:
     # 大盤
     index_df = local_store.read_prices(INDEX_SYMBOL, TW_MARKET)
@@ -132,6 +155,7 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
             **price,
             "vs_index_20d_pct": vs_index,
             **_chip_block(local_store.read_chip(sym, TW_MARKET)),
+            **_margin_block(local_store.read_margin(sym, TW_MARKET)),
         }
         stocks[sym] = entry
         if price.get("as_of"):
@@ -195,4 +219,6 @@ def _movers(stocks: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "top_losers_5d": _rank("return_5d_pct", False),
         "top_foreign_buy_5d": _rank("foreign_net_buy_5d_lots", True),
         "top_foreign_sell_5d": _rank("foreign_net_buy_5d_lots", False),
+        "top_short_margin_ratio": _rank("short_margin_ratio_pct", True),
+        "top_below_index_20d": _rank("vs_index_20d_pct", False),
     }

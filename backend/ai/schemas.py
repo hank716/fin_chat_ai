@@ -76,7 +76,8 @@ class NewsDigestItem(BaseModel):
 class BriefResult(BaseModel):
     headline: str  # 今日簡短結論（敘事 3–5 句）
     sections: list[BriefSection] = Field(default_factory=list)
-    tw_watchlist: list[WatchItem] = Field(default_factory=list)
+    tw_watchlist: list[WatchItem] = Field(default_factory=list)  # 正向：值得關注
+    tw_caution: list[WatchItem] = Field(default_factory=list)  # 負向：需注意風險
     risks: list[str] = Field(default_factory=list)
     follow_ups: list[str] = Field(default_factory=list)
     news_digest: list[NewsDigestItem] = Field(default_factory=list)
@@ -97,6 +98,22 @@ _EVIDENCE_SCHEMA = {
     },
 }
 
+_WATCHITEM_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "name": {"type": "string"},
+            "sector": {"type": "string", "nullable": True},
+            "thesis": {"type": "string"},
+            "signals": {"type": "array", "items": {"type": "string"}},
+            "uncertainty": {"type": "string", "nullable": True},
+        },
+        "required": ["symbol", "name", "thesis"],
+    },
+}
+
 GEMINI_BRIEF_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -113,21 +130,8 @@ GEMINI_BRIEF_SCHEMA: dict = {
                 "required": ["title", "narrative"],
             },
         },
-        "tw_watchlist": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string"},
-                    "name": {"type": "string"},
-                    "sector": {"type": "string", "nullable": True},
-                    "thesis": {"type": "string"},
-                    "signals": {"type": "array", "items": {"type": "string"}},
-                    "uncertainty": {"type": "string", "nullable": True},
-                },
-                "required": ["symbol", "name", "thesis"],
-            },
-        },
+        "tw_watchlist": _WATCHITEM_SCHEMA,
+        "tw_caution": _WATCHITEM_SCHEMA,
         "risks": {"type": "array", "items": {"type": "string"}},
         "follow_ups": {"type": "array", "items": {"type": "string"}},
         "news_digest": {

@@ -165,6 +165,55 @@ def fetch_stock_chip_normalized(
     return out
 
 
+def get_stock_margin(stock_id: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """單檔融資融券（餘額單位：張）。"""
+    return _request(
+        "TaiwanStockMarginPurchaseShortSale",
+        {"data_id": stock_id, "start_date": start_date, "end_date": end_date},
+    )
+
+
+def fetch_stock_margin_normalized(
+    stock_id: str, start_date: str, end_date: str
+) -> list[Any]:
+    """單檔融資融券 → 統一輸出 MarginRow（餘額換成『股』對齊 twse_loader.MarginRow）。
+
+    FinMind 餘額單位為張，×1000 轉股。margin_balance=融資今日餘額、
+    short_balance=融券今日餘額。source='finmind'。
+    """
+    from datetime import datetime as _dt
+
+    from .twse_loader import MarginRow
+
+    raw = get_stock_margin(stock_id, start_date, end_date)
+    out: list[MarginRow] = []
+    for r in raw:
+        try:
+            d = _dt.strptime(r["date"], "%Y-%m-%d").date()
+        except (KeyError, ValueError):
+            continue
+
+        def _shares(key: str) -> int | None:
+            v = r.get(key)
+            if v in (None, ""):
+                return None
+            try:
+                return int(v) * 1000
+            except (TypeError, ValueError):
+                return None
+
+        out.append(
+            MarginRow(
+                symbol=stock_id,
+                trade_date=d,
+                margin_balance=_shares("MarginPurchaseTodayBalance"),
+                short_balance=_shares("ShortSaleTodayBalance"),
+                source="finmind",
+            )
+        )
+    return out
+
+
 def _to_decimal(v: Any) -> Any:
     from decimal import Decimal, InvalidOperation
 

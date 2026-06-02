@@ -32,43 +32,34 @@ def backfill_watchlist(days: int = 90) -> dict[str, Any]:
     start_s, end_s = start.isoformat(), end.isoformat()
     symbols = sorted(universe.watchlist_symbols())
 
-    price_ok = price_fail = chip_ok = chip_fail = 0
+    counts = {"price": [0, 0], "chip": [0, 0], "margin": [0, 0]}  # [ok, fail]
     errors: dict[str, str] = {}
 
-    for sym in symbols:
-        # 價格
+    def _run(kind: str, fetch, write) -> None:
         try:
-            rows = _dq_filter(finmind_loader.fetch_stock_prices_normalized(sym, start_s, end_s))
+            rows = _dq_filter(fetch(sym, start_s, end_s))
             if rows:
-                local_store.write_prices(rows, TW_MARKET)
-                price_ok += 1
+                write(rows, TW_MARKET)
+                counts[kind][0] += 1
             else:
-                price_fail += 1
-                logger.warning("backfill prices %s: 0 valid rows", sym)
+                counts[kind][1] += 1
+                logger.warning("backfill %s %s: 0 valid rows", kind, sym)
         except Exception as exc:  # noqa: BLE001 — 單檔失敗不阻斷其他
-            price_fail += 1
-            errors[f"price:{sym}"] = str(exc)
-            logger.warning("backfill prices %s failed: %s", sym, exc)
+            counts[kind][1] += 1
+            errors[f"{kind}:{sym}"] = str(exc)
+            logger.warning("backfill %s %s failed: %s", kind, sym, exc)
 
-        # 籌碼
-        try:
-            rows = _dq_filter(finmind_loader.fetch_stock_chip_normalized(sym, start_s, end_s))
-            if rows:
-                local_store.write_chip(rows, TW_MARKET)
-                chip_ok += 1
-            else:
-                chip_fail += 1
-                logger.warning("backfill chip %s: 0 valid rows", sym)
-        except Exception as exc:  # noqa: BLE001
-            chip_fail += 1
-            errors[f"chip:{sym}"] = str(exc)
-            logger.warning("backfill chip %s failed: %s", sym, exc)
+    for sym in symbols:
+        _run("price", finmind_loader.fetch_stock_prices_normalized, local_store.write_prices)
+        _run("chip", finmind_loader.fetch_stock_chip_normalized, local_store.write_chip)
+        _run("margin", finmind_loader.fetch_stock_margin_normalized, local_store.write_margin)
 
     summary = {
         "window": {"start": start_s, "end": end_s, "days": days},
         "symbols": len(symbols),
-        "price": {"ok": price_ok, "fail": price_fail},
-        "chip": {"ok": chip_ok, "fail": chip_fail},
+        "price": {"ok": counts["price"][0], "fail": counts["price"][1]},
+        "chip": {"ok": counts["chip"][0], "fail": counts["chip"][1]},
+        "margin": {"ok": counts["margin"][0], "fail": counts["margin"][1]},
         "errors": errors,
     }
     logger.info("台股回補完成: %s", summary)
