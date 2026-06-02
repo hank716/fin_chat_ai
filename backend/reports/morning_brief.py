@@ -173,6 +173,27 @@ def latest_report_id() -> str | None:
     return files[-1].stem if files else None
 
 
+def list_reports(limit: int = 120) -> list[dict[str, Any]]:
+    """歷史報告清單（新到舊），給首頁列表用。只取輕量欄位。"""
+    if not REPORTS_DIR.exists():
+        return []
+    files = sorted(REPORTS_DIR.glob("morning_*.json"), reverse=True)[:limit]
+    out: list[dict[str, Any]] = []
+    for f in files:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — 壞檔跳過
+            continue
+        out.append({
+            "report_id": d.get("report_id", f.stem),
+            "report_type": d.get("report_type", "每日跨市場晨報"),
+            "data_as_of": d.get("data_as_of"),
+            "generated_at": d.get("generated_at"),
+            "headline": d.get("headline", ""),
+        })
+    return out
+
+
 def report_date_exists(d: date) -> bool:
     """當日（report_id 前綴 morning_YYYYMMDD）是否已有報告。給 scheduler catch-up 用。"""
     if not REPORTS_DIR.exists():

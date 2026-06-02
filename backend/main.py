@@ -39,8 +39,3 @@ app.include_router(storage_router)
 app.include_router(features_router)
 app.include_router(brief_router)
 app.include_router(ask_router)
-
-
-@app.get("/")
-async def root() -> dict:
-    return {"service": "ai-market-backend", "docs": "/docs", "health": "/health"}

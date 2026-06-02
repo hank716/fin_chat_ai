@@ -6,9 +6,15 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 
 from ai.gemini_client import GeminiError, GeminiQuotaExceeded
 from reports import morning_brief
-from reports.web_renderer import render_report_html
+from reports.web_renderer import render_history_html, render_report_html
 
 router = APIRouter(tags=["brief"])
+
+
+@router.get("/", response_class=HTMLResponse)
+async def home() -> str:
+    """首頁＝歷史報告列表（登入後落地頁）。"""
+    return render_history_html(morning_brief.list_reports())
 
 
 @router.post("/brief/morning")

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}AI 多市場研究報告・歷史{% endblock %}
+{% block content %}
+<header>
+  <h1>AI 多市場研究報告</h1>
+  <div class="meta">歷史報告列表　•　共 {{ reports|length }} 篇　•　點擊任一篇查看完整內容</div>
+</header>
+
+{% if reports %}
+{% for r in reports %}
+<a class="hist" href="/report/{{ r.report_id }}">
+  <div class="hist-date">{{ r.data_as_of or r.report_id }}</div>
+  <div class="hist-body">
+    <div class="hist-type">{{ r.report_type }}</div>
+    <div class="hist-head">{{ r.headline }}</div>
+  </div>
+  <div class="hist-go">›</div>
+</a>
+{% endfor %}
+{% else %}
+<div class="card">尚無報告。可由排程每日 08:30 自動產生，或 <code>POST /brief/morning</code>。</div>
+{% endif %}
+
+<p class="disclaimer">本報告由系統自動產生，僅供家庭內部市場研究，不構成投資建議。</p>
+{% endblock %}
