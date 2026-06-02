@@ -69,6 +69,7 @@ cat .env
 | 類別 | 變數 |
 |---|---|
 | LLM | `GEMINI_API_KEY`、`GEMINI_MODEL_BRIEF`、`GEMINI_MODEL_QA`、`DAILY_COST_LIMIT_TWD`、`MONTHLY_COST_LIMIT_TWD` |
+| 排程 | `SCHEDULE_TZ`、`REPORT_TIMES`（逗號分隔 HH:MM，控制每日自動產報告的時間點） |
 | 資料源 | `FINMIND_TOKEN` |
 | Discord | `DISCORD_TOKEN`、`DISCORD_GUILD_ID`、`DISCORD_DAILY_REPORT_CHANNEL_ID`、`DISCORD_JAY_CHAT_CHANNEL_ID`、`DISCORD_HANK_CHAT_CHANNEL_ID`、`DISCORD_JAY_USER_ID`、`DISCORD_HANK_USER_ID` |
 | Supabase | `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`（report_index 表沿用同一個，不用重建） |
@@ -93,7 +94,7 @@ docker compose up -d --build
 | 服務 | 用途 |
 |---|---|
 | `backend` | FastAPI：產報告 / Q&A / guardrail / 成本 / Web 頁 |
-| `scheduler` | 每日台股交易日 08:30 觸發晨報 + 啟動 catch-up |
+| `scheduler` | 台股交易日依 `REPORT_TIMES`（預設 08:30）觸發報告 + 啟動 catch-up |
 | `bot` | Discord 互動 bot（FinBot） |
 | `caddy` | 反向代理（Cloudflare tunnel → `caddy:80` → `backend:8000`） |
 | `cloudflared` | Cloudflare tunnel，對外 `www.hank-finflow.com` |
@@ -167,7 +168,77 @@ docker compose up -d --build      # 只會重建有變動的 image
 
 ---
 
-## 8. 從機器 A 正式搬到機器 B（切換）
+## 8. 改 `.env` 設定（Docker 運作中要改動時）
+
+`.env` 是**啟動時**被 Docker Compose 讀進容器當環境變數的，所以**改了 `.env` 不會自動生效，
+要重啟對應服務**（不用 `--build`，因為 `.env` 不是 build 進 image 的）。
+
+### 流程（三步）
+
+```bash
+cd ~/Documents/fin_chat_ai          # Windows：cd 到你的 repo 資料夾
+
+# 1) 編輯 .env
+#    Linux/mac：nano .env  或  vim .env
+#    Windows：用記事本 / VS Code 開 .env（存檔請保持 UTF-8、不要存成 .env.txt）
+
+# 2) 重啟「會用到那個變數」的服務（見下表）
+docker compose up -d scheduler      # 例：只改了排程
+
+# 3) 確認新值生效
+docker exec ai-market-scheduler env | grep REPORT_TIMES
+docker logs ai-market-scheduler --tail 5      # 應看到「scheduler 啟動：每日 …」
+```
+
+> 改 `.env` 後若懶得分辨，`docker compose up -d` 不帶服務名也行——Compose 會自動只重建/重啟
+> 設定有變動的容器。**不需要 `down`**，也**不要加 `--build`**（那是給改程式碼用的）。
+
+### 哪個變數改完要重啟哪個服務
+
+| 改了什麼 | 重啟指令 |
+|---|---|
+| `REPORT_TIMES` / `SCHEDULE_TZ`（排程時間點） | `docker compose up -d scheduler` |
+| `DAILY_COST_LIMIT_TWD` / `MONTHLY_COST_LIMIT_TWD` / `GEMINI_*` / `FINMIND_TOKEN` | `docker compose up -d backend` |
+| `DISCORD_*`（頻道 / token / 使用者） | `docker compose up -d bot` |
+| `CLOUDFLARE_TUNNEL_TOKEN` / `PUBLIC_*` | `docker compose up -d cloudflared caddy` |
+| 不確定 | `docker compose up -d`（全部，自動只動有變的） |
+
+### 例：新增 / 修改報告時間點
+
+編輯 `.env` 的 `REPORT_TIMES`（逗號分隔，時區 = `SCHEDULE_TZ`）：
+
+```ini
+# 只要盤前晨報（預設）
+REPORT_TIMES=08:30
+# 盤前 + 台股盤後
+REPORT_TIMES=08:30,14:00
+# 盤前 + 台股盤後 + 美股盤前
+REPORT_TIMES=08:30,14:00,21:30
+```
+
+存檔後 `docker compose up -d scheduler`。每篇報告 token 成本 ≈ NT$7.7、每月約 21 交易日，
+所以 1 次/日 ≈ NT$160、2 次 ≈ NT$320、3 次 ≈ NT$480/月——加時段時記得對照 `MONTHLY_COST_LIMIT_TWD`。
+
+### 校正 / 重設「本月 AI 花費」數字（首頁橫幅）
+
+首頁橫幅與每日上限是用 redis 累計的 token 估算，和 Google 後台的真實帳單會有落差。要對齊後台真實值：
+
+```bash
+# 看現在的桶（YYYYMM / YYYYMMDD = 你的 SCHEDULE_TZ 當下日期）
+docker exec ai-market-redis redis-cli keys 'cost:*'
+
+# 直接覆寫成後台真實金額（例：本月 79.70）
+docker exec ai-market-redis redis-cli set cost:month:202606 79.70
+# 重設今日累計（例如測試後想歸零）
+docker exec ai-market-redis redis-cli set cost:day:20260602 0
+```
+
+> 月桶 TTL 70 天、日桶 48 小時，跨月/隔日自然汰換，平時不用手動清。重啟服務不會清掉
+> redis（volume 保留）；只有 `docker compose down -v` 才會連 redis 資料一起刪。
+
+---
+
+## 9. 從機器 A 正式搬到機器 B（切換）
 
 1. 機器 B：完成 §2–§5，確認 `docker compose ps` 六個服務 OK、Discord bot 上線、網址可開。
 2. **機器 A：停掉服務**（避免雙跑衝突）：
@@ -179,7 +250,7 @@ docker compose up -d --build      # 只會重建有變動的 image
 
 ---
 
-## 9. 常見問題
+## 10. 常見問題
 
 - **開網址出現一段 JSON 而不是頁面**：那是舊版；本版 `/` 是歷史列表。確認 `--build` 重建過。
 - **網址 502 / 1033**：`cloudflared` 沒連上，或 `caddy` 沒起。看 `docker logs ai-market-cloudflared`、

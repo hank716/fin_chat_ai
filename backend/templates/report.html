@@ -7,7 +7,7 @@
   <div class="meta">
     {{ report.report_type }}　•　報告日期 {{ report.report_date or report.data_as_of }}　•　資料日期 {{ report.data_as_of }}
     　•　引用來源 {{ report.sources|length }}
-    {% if report.cost %}<br>💰 本月 AI 花費 NT${{ '%.2f'|format(report.cost.month_total_twd) }} / NT${{ '%.0f'|format(report.cost.monthly_limit_twd or 0) }}（今日 NT${{ '%.2f'|format(report.cost.day_total_twd or 0) }}・本篇 NT${{ '%.4f'|format(report.cost.brief_twd) }}）{% endif %}
+    {% if report.cost %}<br>💰 本篇報告花費 NT${{ '%.4f'|format(report.cost.brief_twd) }}{% endif %}
   </div>
 </header>
 
@@ -116,6 +116,11 @@
 </div>
 
 <p class="disclaimer">⚠️ 本報告之方向看法、目標價與止損價皆為技術面輔助參考，非保證獲利或準確，亦不保證成交；請自行評估風險後決策。系統自動產生，僅供家庭內部研究。</p>
+
+<nav class="bottom-nav">
+  <a href="/">← 回報告列表</a>
+  <button type="button" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑ 回到最上方</button>
+</nav>
 
 <script>
 function copyPack() {

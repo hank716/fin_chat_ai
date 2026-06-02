@@ -13,8 +13,18 @@ router = APIRouter(tags=["brief"])
 
 @router.get("/", response_class=HTMLResponse)
 async def home() -> str:
-    """首頁＝歷史報告列表（登入後落地頁）。"""
-    return render_history_html(morning_brief.list_reports())
+    """首頁＝歷史報告列表（登入後落地頁）＋本月全站 AI 花費（即時、含晨報＋問答）。"""
+    from config import settings
+    from cost import tracker
+
+    cost = {
+        "month": tracker.current_month(),
+        "month_total_twd": tracker.month_total(),
+        "day_total_twd": tracker.today_total(),
+        "monthly_limit_twd": float(settings.monthly_cost_limit_twd),
+        "daily_limit_twd": float(settings.daily_cost_limit_twd),
+    }
+    return render_history_html(morning_brief.list_reports(), cost=cost)
 
 
 @router.post("/brief/morning")

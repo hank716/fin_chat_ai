@@ -64,9 +64,47 @@
     .hist-go { color:#c7d2e0; font-size:1.4rem; }
     .nav { margin:0 0 4px; font-size:.9rem; }
     .nav a { text-decoration:none; }
+
+    /* 本月 AI 花費橫幅（最外層，含晨報＋問答） */
+    .cost-banner { background:linear-gradient(135deg,#1f6feb,#0ea5e9); color:#fff; border-radius:14px;
+      padding:16px 20px; margin:0 0 22px; box-shadow:0 6px 20px rgba(31,111,235,.18); }
+    .cost-banner .cb-top { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:6px; }
+    .cost-banner .cb-label { font-size:.84rem; opacity:.92; }
+    .cost-banner .cb-amount { font-size:1.5rem; font-weight:800; letter-spacing:.3px; }
+    .cost-banner .cb-amount small { font-size:.86rem; font-weight:600; opacity:.85; }
+    .cost-banner .cb-bar { height:7px; background:rgba(255,255,255,.28); border-radius:99px; margin:11px 0 8px; overflow:hidden; }
+    .cost-banner .cb-fill { height:100%; background:#fff; border-radius:99px; transition:width .4s; }
+    .cost-banner .cb-sub { font-size:.8rem; opacity:.92; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+
+    /* 回到最上方 浮動按鈕 */
+    #backTop { position:fixed; right:20px; bottom:24px; width:46px; height:46px; border-radius:50%; border:0;
+      background:#111827; color:#fff; font-size:1.3rem; line-height:1; cursor:pointer;
+      box-shadow:0 4px 14px rgba(0,0,0,.25); opacity:0; visibility:hidden;
+      transition:opacity .2s, transform .2s, visibility .2s; z-index:50; }
+    #backTop.show { opacity:.92; visibility:visible; }
+    #backTop:hover { transform:translateY(-2px); opacity:1; }
+
+    /* 底部導覽（回上頁 / 回到最上方） */
+    .bottom-nav { display:flex; gap:12px; margin:30px 0 8px; }
+    .bottom-nav a, .bottom-nav button { flex:1; text-align:center; border-radius:10px; padding:13px;
+      font-weight:600; font-size:1rem; cursor:pointer; font-family:inherit; }
+    .bottom-nav a { text-decoration:none; background:var(--card); border:1px solid var(--bd); color:var(--calc); }
+    .bottom-nav a:hover { border-color:#c7d2e0; background:#fbfcfd; }
+    .bottom-nav button { background:#111827; color:#fff; border:0; }
+    .bottom-nav button:active { transform:translateY(1px); }
   </style>
 </head>
 <body>
   <div class="wrap">{% block content %}{% endblock %}</div>
+  <button id="backTop" title="回到最上方" aria-label="回到最上方">↑</button>
+  <script>
+    (function () {
+      var b = document.getElementById('backTop');
+      window.addEventListener('scroll', function () {
+        if (window.scrollY > 320) b.classList.add('show'); else b.classList.remove('show');
+      }, { passive: true });
+      b.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    })();
+  </script>
 </body>
 </html>

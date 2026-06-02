@@ -6,6 +6,22 @@
   <div class="meta">歷史報告列表　•　共 {{ reports|length }} 篇　•　點擊任一篇查看完整內容</div>
 </header>
 
+{% if cost %}
+<div class="cost-banner">
+  <div class="cb-top">
+    <span class="cb-label">💰 本月 AI 花費（含每日報告＋問答）・{{ cost.month }}</span>
+    <span class="cb-amount">NT${{ '%.2f'|format(cost.month_total_twd or 0) }}<small> / NT${{ '%.0f'|format(cost.monthly_limit_twd or 0) }}</small></span>
+  </div>
+  <div class="cb-bar">
+    <div class="cb-fill" style="width:{{ [100, ((cost.month_total_twd or 0) / cost.monthly_limit_twd * 100) if cost.monthly_limit_twd else 0]|min }}%"></div>
+  </div>
+  <div class="cb-sub">
+    <span>今日累計 NT${{ '%.2f'|format(cost.day_total_twd or 0) }} / NT${{ '%.0f'|format(cost.daily_limit_twd or 0) }}</span>
+    <span>本月剩餘額度 NT${{ '%.2f'|format([0, (cost.monthly_limit_twd or 0) - (cost.month_total_twd or 0)]|max) }}</span>
+  </div>
+</div>
+{% endif %}
+
 {% if reports %}
 {% for r in reports %}
 <a class="hist" href="/report/{{ r.report_id }}">

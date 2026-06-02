@@ -21,5 +21,7 @@ def render_report_html(report: dict[str, Any]) -> str:
     return _env.get_template("report.html").render(report=report)
 
 
-def render_history_html(reports: list[dict[str, Any]]) -> str:
-    return _env.get_template("history.html").render(reports=reports)
+def render_history_html(
+    reports: list[dict[str, Any]], cost: dict[str, Any] | None = None
+) -> str:
+    return _env.get_template("history.html").render(reports=reports, cost=cost)

@@ -25,7 +25,9 @@ logger = logging.getLogger("ai-market-scheduler")
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8000").rstrip("/")
 SCHEDULE_TZ = os.environ.get("SCHEDULE_TZ", "Asia/Taipei")
-MORNING_REPORT_TIME = os.environ.get("MORNING_REPORT_TIME", "08:30")
+# 多時間點排程：REPORT_TIMES 為逗號分隔 HH:MM（如 "08:30,14:00,21:30"）。
+# 向後相容：未設 REPORT_TIMES 時沿用舊的 MORNING_REPORT_TIME（預設 08:30）。
+REPORT_TIMES = os.environ.get("REPORT_TIMES", os.environ.get("MORNING_REPORT_TIME", "08:30"))
 # 整條管線（刷新台股/美股/加密 + Gemini）可能跑數分鐘，給足 read timeout
 GENERATE_TIMEOUT = float(os.environ.get("BRIEF_GENERATE_TIMEOUT", "900"))
 
@@ -35,6 +37,20 @@ TZ = ZoneInfo(SCHEDULE_TZ)
 def _parse_hhmm(s: str) -> tuple[int, int]:
     h, m = s.strip().split(":")
     return int(h), int(m)
+
+
+def _parse_times(s: str) -> list[tuple[int, int]]:
+    """解析逗號分隔的 HH:MM 清單 → 已排序去重的 (h, m)。全空則回 [(8, 30)]。"""
+    out: list[tuple[int, int]] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(_parse_hhmm(part))
+        except ValueError:
+            logger.warning("忽略無法解析的排程時間: %r", part)
+    return sorted(set(out)) or [(8, 30)]
 
 
 def _is_trading_day() -> bool:
@@ -87,7 +103,8 @@ def catch_up() -> None:
         logger.warning("查 /brief/status 失敗，跳過 catch-up: %s", exc)
         return
 
-    h, m = _parse_hhmm(MORNING_REPORT_TIME)
+    # 以「最早的排程時間」當作今日是否該有報告的門檻
+    h, m = _parse_times(REPORT_TIMES)[0]
     now = datetime.now(TZ)
     scheduled_today = now.replace(hour=h, minute=m, second=0, microsecond=0)
     has_today = bool(st.get("has_today"))
@@ -96,30 +113,31 @@ def catch_up() -> None:
     if not is_trading:
         logger.info("catch-up：今日(%s)非台股交易日，不補產", st.get("schedule_date"))
     elif not has_today and now >= scheduled_today:
-        logger.info("catch-up：今日(%s)尚無報告且已過 %s，補產生",
-                    st.get("schedule_date"), MORNING_REPORT_TIME)
+        logger.info("catch-up：今日(%s)尚無報告且已過最早排程 %02d:%02d，補產生",
+                    st.get("schedule_date"), h, m)
         generate_brief(reason="catch-up")
     else:
-        logger.info("catch-up：無需補產（trading=%s, has_today=%s, 現在=%s, 排程=%s）",
-                    is_trading, has_today, now.strftime("%H:%M"), MORNING_REPORT_TIME)
+        logger.info("catch-up：無需補產（trading=%s, has_today=%s, 現在=%s, 最早排程=%02d:%02d）",
+                    is_trading, has_today, now.strftime("%H:%M"), h, m)
 
 
 def main() -> None:
-    h, m = _parse_hhmm(MORNING_REPORT_TIME)
-    logger.info("scheduler 啟動：每日 %02d:%02d %s 產生晨報，backend=%s",
-                h, m, SCHEDULE_TZ, BACKEND_URL)
+    times = _parse_times(REPORT_TIMES)
+    logger.info("scheduler 啟動：每日 %s（%s）產生報告，backend=%s",
+                ", ".join(f"{h:02d}:{m:02d}" for h, m in times), SCHEDULE_TZ, BACKEND_URL)
 
     catch_up()
 
     scheduler = BlockingScheduler(timezone=TZ)
-    scheduler.add_job(
-        generate_brief,
-        CronTrigger(hour=h, minute=m, timezone=TZ),
-        id="morning_brief",
-        misfire_grace_time=3600,  # 排程點剛好錯過（重啟）容忍 1 小時內補跑
-        coalesce=True,
-        max_instances=1,
-    )
+    for h, m in times:
+        scheduler.add_job(
+            generate_brief,
+            CronTrigger(hour=h, minute=m, timezone=TZ),
+            id=f"brief_{h:02d}{m:02d}",
+            misfire_grace_time=3600,  # 排程點剛好錯過（重啟）容忍 1 小時內補跑
+            coalesce=True,
+            max_instances=1,
+        )
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

@@ -29,8 +29,7 @@ services:
       - .env
     environment:
       - BACKEND_URL=http://backend:8000
-      - SCHEDULE_TZ=Asia/Taipei
-      - MORNING_REPORT_TIME=08:30
+      # 排程時區與時間點改由 .env 控制（SCHEDULE_TZ / REPORT_TIMES）
     depends_on:
       backend:
         condition: service_healthy
