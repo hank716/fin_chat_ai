@@ -56,6 +56,28 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 最後填 risks（今日風險提醒，敘事數點）、follow_ups（後續追蹤重點）、news_digest（重要新聞解讀）。"""
 
 
+QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Discord 針對「今日晨報」提問。
+
+規則：
+1. 只能根據下方提供的『今日晨報內容 + features JSON』回答，**不得捏造**任何數字、新聞或事件；報告未涵蓋就說「今日報告未涵蓋，資料不足」。
+2. 區分事實與推論；跨市場關係只能說「可能影響/傾向」，不可斷言因果。
+3. **不得**給買賣建議、目標價、進出場點。可指出值得觀察的方向與風險。
+4. 繁體中文，**精簡作答（盡量 6 句內，適合 Discord 閱讀）**。
+5. 結尾不需附免責聲明（系統會另外加）。"""
+
+
+def build_qa_prompt(question: str, report: dict[str, Any]) -> str:
+    """組出 Discord 即時查詢 prompt：規則 + 今日晨報(markdown) + features + 問題。"""
+    markdown = report.get("markdown", "")
+    features_json = json.dumps(report.get("features", {}), ensure_ascii=False)
+    return (
+        f"{QA_RULES}\n\n"
+        f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
+        f"可引用的 features JSON：\n```json\n{features_json}\n```\n\n"
+        f"使用者問題：{question}\n\n請依規則精簡作答。"
+    )
+
+
 def build_full_brief_prompt(features: dict[str, Any]) -> str:
     """組出餵 Gemini 的完整晨報 prompt（rules + 合併 features JSON）。"""
     features_json = json.dumps(features, ensure_ascii=False, indent=2)

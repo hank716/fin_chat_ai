@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 import redis.asyncio as redis
 from fastapi import FastAPI
 
+from api.ask import router as ask_router
 from api.brief import router as brief_router
 from api.features import router as features_router
 from api.health import router as health_router
@@ -37,6 +38,7 @@ app.include_router(health_router)
 app.include_router(storage_router)
 app.include_router(features_router)
 app.include_router(brief_router)
+app.include_router(ask_router)
 
 
 @app.get("/")

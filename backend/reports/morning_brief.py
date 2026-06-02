@@ -80,7 +80,7 @@ def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str
 
 
 def generate_morning_brief(
-    raw_query: str | None = None, *, refresh_tw: bool = True
+    raw_query: str | None = None, *, refresh_tw: bool = True, push_discord: bool = False
 ) -> dict[str, Any]:
     generated_at = datetime.now(ZoneInfo(settings.tz))
 
@@ -113,6 +113,11 @@ def generate_morning_brief(
     )
     (REPORTS_DIR / f"{report_id}.md").write_text(report["markdown"], encoding="utf-8")
     logger.info("morning brief %s 產生完成 (landed=%s)", report_id, landed)
+
+    if push_discord:
+        from notify.discord import send_daily_summary
+        send_daily_summary(report)
+
     return report
 
 

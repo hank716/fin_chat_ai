@@ -28,11 +28,14 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-flash-latest"
     daily_cost_limit_twd: int = 30
 
-    # ── Discord ──
+    # ── Discord（1 guild / 3 channels / 2 users）──
     discord_token: str = ""
     discord_guild_id: str = ""
-    discord_channel_id: str = ""
-    discord_allowed_user_ids: str = ""
+    discord_daily_report_channel_id: str = ""   # 每日晨報廣播（兩人都看）
+    discord_jay_chat_channel_id: str = ""        # Jay 專屬互動頻道
+    discord_hank_chat_channel_id: str = ""       # Hank 專屬互動頻道
+    discord_jay_user_id: str = ""
+    discord_hank_user_id: str = ""
 
     # ── 資料源 ──
     finmind_token: str = ""

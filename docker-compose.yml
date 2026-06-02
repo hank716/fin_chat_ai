@@ -36,6 +36,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  bot:
+    build: ./bot
+    container_name: ai-market-bot
+    env_file:
+      - .env
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
   redis:
     image: redis:7
     container_name: ai-market-redis

@@ -91,3 +91,40 @@ def analyze_full_brief(features: dict[str, Any]) -> BriefResult:
     prompt = build_full_brief_prompt(features)
     raw = _generate_json(prompt, GEMINI_BRIEF_SCHEMA)
     return BriefResult.model_validate(raw)
+
+
+@retry(
+    retry=retry_if_exception_type((httpx.RequestError, GeminiUnavailable)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=20),
+    reraise=True,
+)
+def generate_text(prompt: str) -> tuple[str, dict[str, int]]:
+    """純文字生成（Discord 互動 Q&A 用），回 (文字, token usage)。"""
+    if not settings.gemini_api_key.strip():
+        raise GeminiError("GEMINI_API_KEY 未設定")
+    url = f"{BASE_URL}/{settings.gemini_model}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4},
+    }
+    headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
+    resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
+    if resp.status_code == 503:
+        raise GeminiUnavailable(f"Gemini 503 overloaded: {resp.text[:160]}")
+    if resp.status_code == 429:
+        raise GeminiQuotaExceeded(f"Gemini 429 quota exceeded: {resp.text[:200]}")
+    if resp.status_code != 200:
+        raise GeminiError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
+    body = resp.json()
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise GeminiError(f"Gemini 無 candidates: {json.dumps(body)[:300]}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+    um = body.get("usageMetadata", {}) or {}
+    usage = {
+        "input_tokens": int(um.get("promptTokenCount", 0)),
+        "output_tokens": int(um.get("candidatesTokenCount", 0)),
+    }
+    return text, usage

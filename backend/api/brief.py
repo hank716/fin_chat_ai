@@ -12,9 +12,14 @@ router = APIRouter(tags=["brief"])
 
 
 @router.post("/brief/morning")
-async def post_morning(raw_query: str | None = Query(default=None)) -> dict:
+async def post_morning(
+    raw_query: str | None = Query(default=None),
+    push_discord: bool = Query(default=True),
+) -> dict:
     try:
-        report = morning_brief.generate_morning_brief(raw_query=raw_query)
+        report = morning_brief.generate_morning_brief(
+            raw_query=raw_query, push_discord=push_discord
+        )
     except GeminiQuotaExceeded as exc:
         raise HTTPException(
             status_code=503,
