@@ -48,6 +48,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # 反向代理：對齊既有 Cloudflare tunnel ingress（www.hank-finflow.com → http://caddy:80）
+  caddy:
+    image: caddy:2
+    container_name: ai-market-caddy
+    command: caddy reverse-proxy --from :80 --to backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ai-market-cloudflared
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      backend:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+    restart: unless-stopped
+
   redis:
     image: redis:7
     container_name: ai-market-redis
