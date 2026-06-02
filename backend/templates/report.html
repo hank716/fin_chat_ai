@@ -5,7 +5,7 @@
   <h1>AI 多市場研究報告</h1>
   <div class="meta">
     {{ report.report_type }}　•　產生時間 {{ report.generated_at }}　•　資料日期 {{ report.data_as_of }}
-    　•　引用欄位 {{ report.sources|length }}
+    　•　引用來源 {{ report.sources|length }}
   </div>
 </header>
 
@@ -13,22 +13,65 @@
 <div class="card"><strong>使用者問題</strong><br>{{ report.raw_query }}</div>
 {% endif %}
 
-<div class="card summary"><strong>簡短結論</strong><br>{{ report.summary }}</div>
+<div class="card summary"><strong>今日簡短結論</strong><br>{{ report.headline }}</div>
 
 {% for sec in report.sections %}
 <div class="card">
-  <h2>{{ sec.section }}</h2>
-  <ul class="claims">
-    {% for c in sec.claims %}
+  <h2>{{ sec.title }}</h2>
+  <p class="narrative">{{ sec.narrative }}</p>
+  {% if sec.evidence %}
+  <ul class="evidence">
+    {% for e in sec.evidence %}
+    <li>{{ e.label }}：<b>{{ e.value }}</b>{% if e.source_ref %} <span class="ref">{{ e.source_ref }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if report.tw_watchlist %}
+<div class="card">
+  <h2>候選觀察標的 <span class="badge">研究用途・非買賣建議</span></h2>
+  {% for w in report.tw_watchlist %}
+  <div class="watch">
+    <h3>{{ w.symbol }} {{ w.name }}{% if w.sector %} <span class="sector">〔{{ w.sector }}〕</span>{% endif %}</h3>
+    <div class="narrative">{{ w.thesis }}</div>
+    {% if w.signals %}<div class="signals">{% for s in w.signals %}<span>{{ s }}</span>{% endfor %}</div>{% endif %}
+    {% if w.uncertainty %}<div class="uncertain">⚠️ 待驗證：{{ w.uncertainty }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if report.risks %}
+<div class="card">
+  <h2>今日風險提醒</h2>
+  <ul class="risks">{% for r in report.risks %}<li>{{ r }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+{% if report.follow_ups %}
+<div class="card">
+  <h2>後續追蹤重點</h2>
+  <ul class="follows">{% for f in report.follow_ups %}<li>{{ f }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+{% if report.news_digest %}
+<div class="card">
+  <h2>重要新聞與事件</h2>
+  <ul class="news">
+    {% for n in report.news_digest %}
     <li>
-      <span class="tag {{ c.claim_type }}">{{ tag_label(c.claim_type) }}</span>
-      {{ c.text }}
-      {% if c.source_ref %}<span class="ref">（來源：{{ c.source_ref }}）</span>{% endif %}
+      <strong>{% if n.url %}<a href="{{ n.url }}" target="_blank" rel="noopener">{{ n.title }}</a>{% else %}{{ n.title }}{% endif %}</strong>
+      <span class="src">　{{ n.source }}・{{ n.date }}</span>
+      <div class="take">解讀：{{ n.takeaway }}</div>
+      {% if n.uncertainty %}<div class="uncertain">不確定性：{{ n.uncertainty }}</div>{% endif %}
     </li>
     {% endfor %}
   </ul>
 </div>
-{% endfor %}
+{% endif %}
 
 <div class="card copybox">
   <h2>給其他 AI 的分析包</h2>

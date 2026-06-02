@@ -1,7 +1,7 @@
-"""JSON report builder（M1 step 4）。
+"""JSON report builder（M2-report）。
 
-從 AnalysisResult + metadata 組出 JSON-safe dict，給 web / 下載 / guardrail（M5）用。
-保留每個 claim 的 type 與 source_ref，讓下游可驗證來源。
+從 BriefResult + metadata 組出 JSON-safe dict，給 web / 下載 / guardrail（M5）用。
+保留 evidence 的 source_ref 與新聞 url，讓下游可驗證來源。
 """
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from config import settings
-from ai.schemas import AnalysisResult
+from ai.schemas import BriefResult
 
 
 def build_report_dict(
-    result: AnalysisResult,
+    result: BriefResult,
     *,
     report_type: str = "每日跨市場晨報",
     raw_query: str | None = None,
@@ -33,5 +33,5 @@ def build_report_dict(
     return payload
 
 
-def build_report_json(result: AnalysisResult, **kwargs: Any) -> str:
+def build_report_json(result: BriefResult, **kwargs: Any) -> str:
     return json.dumps(build_report_dict(result, **kwargs), ensure_ascii=False, indent=2)

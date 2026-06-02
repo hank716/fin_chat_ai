@@ -1,7 +1,7 @@
-"""Markdown report builder（M1 step 4，對齊 design §19.2）。
+"""Markdown report builder（M2-report：敘事晨報，對齊 design §6.2）。
 
-從結構化 AnalysisResult render 人看的 md。M1 只有 intermarket section，
-故 section 動態跑 result.sections，不硬寫死技術/基本/籌碼/新聞。
+從 BriefResult render 人看的 md：簡短結論 → 各敘事 section（段落 + 可稽核數字）
+→ 候選觀察標的 → 風險提醒 → 後續追蹤 → 重要新聞 → 資料來源。
 """
 from __future__ import annotations
 
@@ -9,33 +9,25 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from config import settings
-from ai.schemas import AnalysisResult, Claim
-
-CLAIM_TAG = {
-    "fact": "事實",
-    "calculation": "計算",
-    "inference": "推論",
-    "limitation": "限制",
-}
+from ai.schemas import BriefResult, BriefSection
 
 
 def _now() -> datetime:
     return datetime.now(ZoneInfo(settings.tz))
 
 
-def _render_claims(claims: list[Claim]) -> str:
-    if not claims:
-        return "_（無）_"
-    lines = []
-    for c in claims:
-        tag = CLAIM_TAG.get(c.claim_type, c.claim_type)
-        ref = f"（來源：`{c.source_ref}`）" if c.source_ref else ""
-        lines.append(f"- **[{tag}]** {c.text}{ref}")
-    return "\n".join(lines)
+def _render_section(sec: BriefSection) -> str:
+    parts = [f"## {sec.title}", "", sec.narrative]
+    if sec.evidence:
+        parts.append("")
+        for e in sec.evidence:
+            ref = f" `（{e.source_ref}）`" if e.source_ref else ""
+            parts.append(f"- {e.label}：**{e.value}**{ref}")
+    return "\n".join(parts)
 
 
 def build_markdown(
-    result: AnalysisResult,
+    result: BriefResult,
     *,
     report_type: str = "每日跨市場晨報",
     raw_query: str | None = None,
@@ -49,21 +41,47 @@ def build_markdown(
     )
     if raw_query:
         parts.append(f"## 使用者問題\n\n{raw_query}")
-    parts.append(f"## 簡短結論\n\n{result.summary}")
-    parts.append(
-        "## 使用資料\n\n"
-        f"- 資料日期（Data As Of）：{result.data_as_of.isoformat()}\n"
-        f"- 引用 input 欄位數：{len(result.sources)}"
-    )
 
-    # 市場觀察：limitation 抽出到最後的「風險與限制」
-    risk_claims: list[Claim] = []
+    parts.append(f"## 今日簡短結論\n\n{result.headline}")
+
     for sec in result.sections:
-        non_limit = [c for c in sec.claims if c.claim_type != "limitation"]
-        risk_claims.extend(c for c in sec.claims if c.claim_type == "limitation")
-        parts.append(f"## {sec.section}\n\n{_render_claims(non_limit)}")
+        parts.append(_render_section(sec))
 
-    parts.append(f"## 風險與限制\n\n{_render_claims(risk_claims)}")
+    if result.tw_watchlist:
+        lines = ["## 候選觀察標的", "", "_觀察研究用途，非買賣建議。_", ""]
+        for w in result.tw_watchlist:
+            sector = f"〔{w.sector}〕" if w.sector else ""
+            lines.append(f"### {w.symbol} {w.name} {sector}")
+            lines.append(w.thesis)
+            if w.signals:
+                lines.append("")
+                lines.append("訊號：" + "、".join(w.signals))
+            if w.uncertainty:
+                lines.append(f"\n> ⚠️ 待驗證：{w.uncertainty}")
+            lines.append("")
+        parts.append("\n".join(lines).rstrip())
+
+    if result.risks:
+        parts.append("## 今日風險提醒\n\n" + "\n".join(f"- {r}" for r in result.risks))
+
+    if result.follow_ups:
+        parts.append("## 後續追蹤重點\n\n" + "\n".join(f"- {f}" for f in result.follow_ups))
+
+    if result.news_digest:
+        lines = ["## 重要新聞與事件", ""]
+        for n in result.news_digest:
+            title = f"[{n.title}]({n.url})" if n.url else n.title
+            lines.append(f"- **{title}**　_{n.source}・{n.date}_")
+            lines.append(f"  - 解讀：{n.takeaway}")
+            if n.uncertainty:
+                lines.append(f"  - 不確定性：{n.uncertainty}")
+        parts.append("\n".join(lines))
+
+    parts.append(
+        "## 資料來源\n\n"
+        f"- 資料日期（Data As Of）：{result.data_as_of.isoformat()}\n"
+        f"- 引用 features 欄位／來源數：{len(result.sources)}"
+    )
     parts.append(
         "---\n*本報告由系統自動產生，僅供家庭內部市場研究，不構成投資建議。*"
     )

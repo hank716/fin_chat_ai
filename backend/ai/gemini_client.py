@@ -16,13 +16,14 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from config import settings
 
-from .prompts import build_intermarket_prompt
-from .schemas import GEMINI_RESPONSE_SCHEMA, AnalysisResult
+from .prompts import build_full_brief_prompt, build_intermarket_prompt
+from .schemas import GEMINI_BRIEF_SCHEMA, GEMINI_RESPONSE_SCHEMA, AnalysisResult, BriefResult
 
 logger = logging.getLogger("ai-market-backend.gemini")
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+# 完整晨報 input/output 較大，模型回應可能 >60s；放寬 read timeout。
+TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 
 
 class GeminiError(RuntimeError):
@@ -79,7 +80,14 @@ def _generate_json(prompt: str, response_schema: dict) -> dict[str, Any]:
 
 
 def analyze_intermarket(features: dict[str, Any]) -> AnalysisResult:
-    """features JSON → 結構化 AnalysisResult（唯一系統內 LLM 呼叫點）。"""
+    """features JSON → 結構化 AnalysisResult（M1 intermarket，保留供相容）。"""
     prompt = build_intermarket_prompt(features)
     raw = _generate_json(prompt, GEMINI_RESPONSE_SCHEMA)
     return AnalysisResult.model_validate(raw)
+
+
+def analyze_full_brief(features: dict[str, Any]) -> BriefResult:
+    """合併 features（美股+加密+台股+籌碼+新聞）→ 完整敘事晨報 BriefResult。"""
+    prompt = build_full_brief_prompt(features)
+    raw = _generate_json(prompt, GEMINI_BRIEF_SCHEMA)
+    return BriefResult.model_validate(raw)

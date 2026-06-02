@@ -15,11 +15,14 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import universe
 from config import settings
 from ai.llm_client import get_llm_client
-from data_sources import yfinance_loader
+from data_sources import news_loader, yfinance_loader
+from data_sources.backfill_tw import backfill_watchlist
 from data_sources.ingest import _dq_filter
 from processor.intermarket_features import build_intermarket_features
+from processor.tw_features import build_tw_features
 from reports.copy_for_ai_builder import build_copy_for_ai
 from reports.json_builder import build_report_dict
 from reports.markdown_builder import build_markdown
@@ -31,20 +34,56 @@ REPORTS_DIR = Path(settings.local_storage_path) / "reports"
 REPORT_ID_RE = re.compile(r"^morning_\d{8}_\d{6}$")
 
 
-def generate_morning_brief(raw_query: str | None = None) -> dict[str, Any]:
-    generated_at = datetime.now(ZoneInfo(settings.tz))
+def _news_focus_symbols(tw_feats: dict[str, Any], cap: int = 12) -> list[str]:
+    """從 movers 挑出最值得看新聞的台股（漲跌幅 + 外資買賣超前段），去重。"""
+    out: list[str] = []
+    movers = tw_feats.get("movers", {})
+    for key in ("top_gainers_5d", "top_losers_5d", "top_foreign_buy_5d", "top_foreign_sell_5d"):
+        for item in movers.get(key, []):
+            sym = item.get("symbol")
+            if sym and sym not in out:
+                out.append(sym)
+    return out[:cap]
 
-    # 1) 抓美股指數 + BTC → DQ → parquet
+
+def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str, int]]:
+    """組出餵 Gemini 的合併 features：美股+加密 / 台股+籌碼 / 聚焦新聞 / 跨市場連動。"""
+    # 1) 美股指數 + BTC + 大盤 TWII → DQ → parquet
     landed: dict[str, int] = {}
     for market, rows in yfinance_loader.fetch_intermarket().items():
         res = local_store.write_prices(_dq_filter(rows), market)
         landed[market] = res["symbols"]
 
-    # 2) intermarket features
-    feats = build_intermarket_features()
+    # 2) 台股價格 + 籌碼（每日刷新近一週，含上市/上櫃）
+    if refresh_tw:
+        try:
+            backfill_watchlist(days=7)
+        except Exception as exc:  # noqa: BLE001 — 刷新失敗仍用既有落地資料產報告
+            logger.warning("台股每日刷新失敗，沿用既有資料: %s", exc)
 
-    # 3) Gemini 結構化分析
-    result = get_llm_client().analyze_intermarket(feats)
+    us_crypto = build_intermarket_features()
+    tw = build_tw_features()
+    news = news_loader.fetch_news(_news_focus_symbols(tw), days=3, per_symbol=3)
+
+    combined = {
+        "as_of": tw.get("as_of") or us_crypto.get("as_of"),
+        "us_crypto": us_crypto,
+        "tw": tw,
+        "news": news,
+        "linkage": universe.us_to_tw_linkage(),
+    }
+    return combined, landed
+
+
+def generate_morning_brief(
+    raw_query: str | None = None, *, refresh_tw: bool = True
+) -> dict[str, Any]:
+    generated_at = datetime.now(ZoneInfo(settings.tz))
+
+    feats, landed = _build_combined_features(refresh_tw)
+
+    # Gemini 完整敘事晨報
+    result = get_llm_client().analyze_full_brief(feats)
 
     # 4) builders
     report = build_report_dict(result, generated_at=generated_at, raw_query=raw_query)
