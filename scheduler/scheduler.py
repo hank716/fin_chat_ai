@@ -37,7 +37,20 @@ def _parse_hhmm(s: str) -> tuple[int, int]:
     return int(h), int(m)
 
 
+def _is_trading_day() -> bool:
+    """問 backend 今天是否台股交易日（非交易日不產報告）。查詢失敗時保守視為交易日。"""
+    try:
+        st = httpx.get(f"{BACKEND_URL}/brief/status", timeout=15).json()
+        return bool(st.get("is_trading_day", True))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("查交易日失敗，保守視為交易日: %s", exc)
+        return True
+
+
 def generate_brief(*, reason: str = "scheduled") -> None:
+    if reason == "scheduled" and not _is_trading_day():
+        logger.info("今日非台股交易日，略過晨報")
+        return
     logger.info("觸發晨報產生 (%s) → POST %s/brief/morning", reason, BACKEND_URL)
     try:
         resp = httpx.post(f"{BACKEND_URL}/brief/morning", timeout=GENERATE_TIMEOUT)
@@ -78,14 +91,17 @@ def catch_up() -> None:
     now = datetime.now(TZ)
     scheduled_today = now.replace(hour=h, minute=m, second=0, microsecond=0)
     has_today = bool(st.get("has_today"))
+    is_trading = bool(st.get("is_trading_day", True))
 
-    if not has_today and now >= scheduled_today:
+    if not is_trading:
+        logger.info("catch-up：今日(%s)非台股交易日，不補產", st.get("schedule_date"))
+    elif not has_today and now >= scheduled_today:
         logger.info("catch-up：今日(%s)尚無報告且已過 %s，補產生",
                     st.get("schedule_date"), MORNING_REPORT_TIME)
         generate_brief(reason="catch-up")
     else:
-        logger.info("catch-up：無需補產（has_today=%s, 現在=%s, 排程=%s）",
-                    has_today, now.strftime("%H:%M"), MORNING_REPORT_TIME)
+        logger.info("catch-up：無需補產（trading=%s, has_today=%s, 現在=%s, 排程=%s）",
+                    is_trading, has_today, now.strftime("%H:%M"), MORNING_REPORT_TIME)
 
 
 def main() -> None:

@@ -141,7 +141,12 @@ def generate_text(
         "generationConfig": {"temperature": 0.4},
     }
     if use_search:
-        payload["tools"] = [{"google_search": {}}]  # Gemini 2.x grounding
+        # Gemini 2.x 研究工具：搜尋公開網路 + 讀網頁內容 + 跑運算（API 需明確帶，非預設）
+        payload["tools"] = [
+            {"google_search": {}},
+            {"url_context": {}},
+            {"code_execution": {}},
+        ]
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
     resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
     if resp.status_code == 503:

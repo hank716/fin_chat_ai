@@ -50,9 +50,12 @@ async def status() -> dict:
 
     from config import settings
 
+    from trading_calendar import is_tw_trading_day
+
     today = datetime.now(ZoneInfo(settings.schedule_tz)).date()
     return {
         "schedule_date": today.isoformat(),
+        "is_trading_day": is_tw_trading_day(today),
         "has_today": morning_brief.report_date_exists(today),
         "latest_report_id": morning_brief.latest_report_id(),
     }
