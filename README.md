@@ -22,6 +22,7 @@
 - [x] M4 — Discord 互動 bot + 成本上限 ✅ (每日摘要推送 §6.3 + `/ask` grounded Q&A + per-user 成本上限 + 頻道/使用者權限；FinBot 已上線、每日摘要實測推送成功)
 - [x] M5 — Guardrail + 新聞分層 ✅ (六道 verification guard：source/metric/symbol/news-citation/advice/causality；新聞 authoritative/social 分層；報告顯示攔截狀態)
 - [x] M6 — Supabase publish + pCloud backup + Cloudflare Access ✅ (pCloud 報告備份 + Cloudflare tunnel/Access + Supabase report_index 發布 + 首頁歷史列表；report_index 實測寫入成功)
+- [x] M8 — 全台股 universe + 基本面 + 多 crypto ✅ (FinMind 全清單2728檔/57產業別族群；TWSE/TPEx 市場級回補；tw_features 全市場 movers/sectors(聚焦曝光給AI)；月營收 YoY/MoM on-demand；ETH/SOL)
 - [x] M7 — 檔案級保留/清理 + pCloud 回補 ✅ (retention：本機留最近90篇報告+清 adhoc parquet 快取；pCloud 冷儲存回補；晨報只在台股交易日產生；研究工具 google_search/url_context/code_execution)
 
 ## 本機啟動（M0）
