@@ -12,14 +12,18 @@ from .schemas import AnalysisResult, BriefResult
 
 class LLMClient(Protocol):
     def analyze_intermarket(self, features: dict[str, Any]) -> AnalysisResult: ...
-    def analyze_full_brief(self, features: dict[str, Any]) -> BriefResult: ...
+    def analyze_full_brief(
+        self, features: dict[str, Any]
+    ) -> tuple[BriefResult, dict[str, int]]: ...
 
 
 class GeminiClient:
     def analyze_intermarket(self, features: dict[str, Any]) -> AnalysisResult:
         return gemini_client.analyze_intermarket(features)
 
-    def analyze_full_brief(self, features: dict[str, Any]) -> BriefResult:
+    def analyze_full_brief(
+        self, features: dict[str, Any]
+    ) -> tuple[BriefResult, dict[str, int]]:
         return gemini_client.analyze_full_brief(features)
 
 

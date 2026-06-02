@@ -32,6 +32,7 @@ def build_markdown(
     report_type: str = "每日跨市場晨報",
     raw_query: str | None = None,
     generated_at: datetime | None = None,
+    cost: dict | None = None,
 ) -> str:
     ts = (generated_at or _now()).strftime("%Y-%m-%d %H:%M %Z")
     parts: list[str] = []
@@ -82,11 +83,16 @@ def build_markdown(
                 lines.append(f"  - 不確定性：{n.uncertainty}")
         parts.append("\n".join(lines))
 
-    parts.append(
-        "## 資料來源\n\n"
-        f"- 資料日期（Data As Of）：{result.data_as_of.isoformat()}\n"
-        f"- 引用 features 欄位／來源數：{len(result.sources)}"
-    )
+    source_lines = [
+        f"- 資料日期（Data As Of）：{result.data_as_of.isoformat()}",
+        f"- 引用 features 欄位／來源數：{len(result.sources)}",
+    ]
+    if cost:
+        source_lines.append(
+            f"- AI 花費：本篇 NT${cost.get('brief_twd', 0):.4f}"
+            f"，{cost.get('month', '')} 本月累計 NT${cost.get('month_total_twd', 0):.2f}"
+        )
+    parts.append("## 資料來源\n\n" + "\n".join(source_lines))
     parts.append(
         "---\n*本報告由系統自動產生，僅供家庭內部市場研究，不構成投資建議。*"
     )

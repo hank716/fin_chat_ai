@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import universe
 from config import settings
 from ai.llm_client import get_llm_client
+from cost import tracker
 from data_sources import news_loader, yfinance_loader
 from data_sources.backfill_tw import backfill_watchlist
 from data_sources.ingest import _dq_filter
@@ -86,8 +87,18 @@ def generate_morning_brief(
 
     feats, landed = _build_combined_features(refresh_tw)
 
-    # Gemini 完整敘事晨報
-    result = get_llm_client().analyze_full_brief(feats)
+    # Gemini 完整敘事晨報（含 token 計費）
+    result, usage = get_llm_client().analyze_full_brief(feats)
+    brief_cost = tracker.estimate_cost_twd(usage["input_tokens"], usage["output_tokens"])
+    tracker.record_cost(tracker.SYSTEM_USER, brief_cost)
+    cost_info = {
+        "brief_twd": brief_cost,
+        "tokens": usage,
+        "month": tracker.current_month(),
+        "month_total_twd": tracker.month_total(),  # 全系統本月累計（晨報+查詢）
+    }
+    logger.info("晨報 Gemini 花費 NT$%.4f（本月累計 NT$%.2f）",
+                brief_cost, cost_info["month_total_twd"])
 
     # guardrail：驗證未超出資料範圍、無捏造/禁語，清理後再 render
     result, guardrail = run_guardrails(result, feats)
@@ -97,11 +108,14 @@ def generate_morning_brief(
     # 4) builders
     report = build_report_dict(result, generated_at=generated_at, raw_query=raw_query)
     report["guardrail"] = guardrail
+    report["cost"] = cost_info
     report_id = f"morning_{generated_at:%Y%m%d_%H%M%S}"
     report["report_id"] = report_id
     report["features"] = feats
     report["landed_symbols"] = landed
-    report["markdown"] = build_markdown(result, generated_at=generated_at, raw_query=raw_query)
+    report["markdown"] = build_markdown(
+        result, generated_at=generated_at, raw_query=raw_query, cost=cost_info
+    )
     report["copy_for_ai"] = build_copy_for_ai(
         result, generated_at=generated_at, raw_query=raw_query
     )

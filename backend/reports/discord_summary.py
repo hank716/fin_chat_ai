@@ -89,6 +89,9 @@ def build_discord_summary(report: dict[str, Any]) -> str:
     if gr:
         status = "✅ 通過" if gr.get("passed") and not gr.get("warning_count") else f"⚠️ {gr.get('error_count',0)}攔/{gr.get('warning_count',0)}警"
         parts.append(f"🛡️ Guardrail：{status}")
+    cost = report.get("cost") or {}
+    if cost:
+        parts.append(f"💰 {cost.get('month','本月')} AI 花費累計：NT${cost.get('month_total_twd',0):.2f}")
     parts.append("\n_此結果僅供家庭內部市場研究使用，不構成投資建議。_")
 
     text = "\n\n".join(parts)

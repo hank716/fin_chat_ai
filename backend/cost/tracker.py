@@ -28,9 +28,24 @@ def estimate_cost_twd(input_tokens: int, output_tokens: int) -> float:
     return round(usd * _USD_TWD, 4)
 
 
+SYSTEM_USER = "system"  # 每日晨報等系統級 Gemini 花費歸戶
+
+
+def _now():
+    return datetime.now(ZoneInfo(settings.schedule_tz))
+
+
 def _key(user_id: str) -> str:
-    today = datetime.now(ZoneInfo(settings.schedule_tz)).strftime("%Y%m%d")
-    return f"cost:{today}:{user_id}"
+    return f"cost:{_now():%Y%m%d}:{user_id}"
+
+
+def _month_key(user_id: str | None = None) -> str:
+    suffix = user_id or "all"
+    return f"cost:m:{_now():%Y%m}:{suffix}"
+
+
+def current_month() -> str:
+    return _now().strftime("%Y-%m")
 
 
 def today_spent(user_id: str) -> float:
@@ -50,12 +65,28 @@ def check_budget(user_id: str) -> tuple[bool, float, float]:
 
 
 def record_cost(user_id: str, cost_twd: float) -> float:
-    """累加成本，回傳累計值。redis key 設 48h TTL（隔日自然失效）。"""
+    """累加成本到當日(per-user)與當月(per-user + all)桶，回傳當日該 user 累計。
+
+    當日桶 48h TTL（隔日失效）；當月桶 ~70 天 TTL（跨月自然汰換）。
+    """
     try:
-        k = _key(user_id)
-        total = redis_client.incrbyfloat(k, cost_twd)
-        redis_client.expire(k, 48 * 3600)
+        dk = _key(user_id)
+        total = redis_client.incrbyfloat(dk, cost_twd)
+        redis_client.expire(dk, 48 * 3600)
+        for mk in (_month_key(user_id), _month_key()):  # per-user + all
+            redis_client.incrbyfloat(mk, cost_twd)
+            redis_client.expire(mk, 70 * 24 * 3600)
         return round(float(total), 4)
     except Exception as exc:  # noqa: BLE001
         logger.warning("記錄成本失敗: %s", exc)
         return cost_twd
+
+
+def month_total(user_id: str | None = None) -> float:
+    """本月累計花費（user_id 省略=全系統含晨報與所有使用者查詢）。"""
+    try:
+        v = redis_client.get(_month_key(user_id))
+        return round(float(v), 2) if v else 0.0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("讀取本月成本失敗: %s", exc)
+        return 0.0

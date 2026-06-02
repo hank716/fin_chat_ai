@@ -44,7 +44,15 @@ class GeminiQuotaExceeded(GeminiError):
     wait=wait_exponential(multiplier=1, min=2, max=20),
     reraise=True,
 )
-def _generate_json(prompt: str, response_schema: dict) -> dict[str, Any]:
+def _usage_of(body: dict) -> dict[str, int]:
+    um = body.get("usageMetadata", {}) or {}
+    return {
+        "input_tokens": int(um.get("promptTokenCount", 0)),
+        "output_tokens": int(um.get("candidatesTokenCount", 0)),
+    }
+
+
+def _generate_json(prompt: str, response_schema: dict) -> tuple[dict[str, Any], dict[str, int]]:
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
     url = f"{BASE_URL}/{settings.gemini_model}:generateContent"
@@ -74,7 +82,7 @@ def _generate_json(prompt: str, response_schema: dict) -> dict[str, Any]:
     if not text:
         raise GeminiError("Gemini 回空內容")
     try:
-        return json.loads(text)
+        return json.loads(text), _usage_of(body)
     except json.JSONDecodeError as exc:
         raise GeminiError(f"Gemini 回的不是合法 JSON: {exc}; head={text[:200]}") from exc
 
@@ -82,15 +90,15 @@ def _generate_json(prompt: str, response_schema: dict) -> dict[str, Any]:
 def analyze_intermarket(features: dict[str, Any]) -> AnalysisResult:
     """features JSON → 結構化 AnalysisResult（M1 intermarket，保留供相容）。"""
     prompt = build_intermarket_prompt(features)
-    raw = _generate_json(prompt, GEMINI_RESPONSE_SCHEMA)
+    raw, _usage = _generate_json(prompt, GEMINI_RESPONSE_SCHEMA)
     return AnalysisResult.model_validate(raw)
 
 
-def analyze_full_brief(features: dict[str, Any]) -> BriefResult:
-    """合併 features（美股+加密+台股+籌碼+新聞）→ 完整敘事晨報 BriefResult。"""
+def analyze_full_brief(features: dict[str, Any]) -> tuple[BriefResult, dict[str, int]]:
+    """合併 features → 完整敘事晨報 BriefResult + Gemini token usage（供計費）。"""
     prompt = build_full_brief_prompt(features)
-    raw = _generate_json(prompt, GEMINI_BRIEF_SCHEMA)
-    return BriefResult.model_validate(raw)
+    raw, usage = _generate_json(prompt, GEMINI_BRIEF_SCHEMA)
+    return BriefResult.model_validate(raw), usage
 
 
 @retry(
