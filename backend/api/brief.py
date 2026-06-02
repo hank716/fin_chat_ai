@@ -52,6 +52,19 @@ async def post_morning(
     }
 
 
+@router.post("/brief/prefetch")
+async def post_prefetch(force: bool = Query(default=False)) -> dict:
+    """（可選）預抓 watchlist 基本面到磁碟快取，讓之後的晨報少打 FinMind。
+
+    循序跑、會被 finmind rate limiter 節流（可能數分鐘），故丟到 threadpool 不卡事件迴圈。
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from processor.prefetch_fundamentals import prefetch
+
+    return await run_in_threadpool(prefetch, force=force)
+
+
 @router.get("/brief/status")
 async def status() -> dict:
     """排程 catch-up 用：今日（schedule_tz）是否已產生報告。"""

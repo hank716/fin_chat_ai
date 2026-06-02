@@ -28,6 +28,9 @@ SCHEDULE_TZ = os.environ.get("SCHEDULE_TZ", "Asia/Taipei")
 # 多時間點排程：REPORT_TIMES 為逗號分隔 HH:MM（如 "08:30,14:00,21:30"）。
 # 向後相容：未設 REPORT_TIMES 時沿用舊的 MORNING_REPORT_TIME（預設 08:30）。
 REPORT_TIMES = os.environ.get("REPORT_TIMES", os.environ.get("MORNING_REPORT_TIME", "08:30"))
+# （可選）基本面預抓時間點：逗號分隔 HH:MM，留空＝關閉。設在 REPORT_TIMES 之前可讓晨報更快、
+# 分散 FinMind 用量。例：PREFETCH_TIMES=07:30（07:30 暖快取，08:30 產報告直接讀磁碟）。
+PREFETCH_TIMES = os.environ.get("PREFETCH_TIMES", "")
 # 整條管線（刷新台股/美股/加密 + Gemini）可能跑數分鐘，給足 read timeout
 GENERATE_TIMEOUT = float(os.environ.get("BRIEF_GENERATE_TIMEOUT", "900"))
 
@@ -78,6 +81,22 @@ def generate_brief(*, reason: str = "scheduled") -> None:
             logger.error("晨報產生失敗 HTTP %s: %s", resp.status_code, resp.text[:300])
     except Exception as exc:  # noqa: BLE001 — 排程不可因單次失敗而中止
         logger.error("晨報產生請求例外: %s", exc)
+
+
+def prefetch_fundamentals(*, reason: str = "scheduled") -> None:
+    """（可選）觸發 backend 預抓 watchlist 基本面到磁碟快取。僅交易日跑。"""
+    if reason == "scheduled" and not _is_trading_day():
+        logger.info("今日非台股交易日，略過基本面預抓")
+        return
+    logger.info("觸發基本面預抓 (%s) → POST %s/brief/prefetch", reason, BACKEND_URL)
+    try:
+        resp = httpx.post(f"{BACKEND_URL}/brief/prefetch", timeout=GENERATE_TIMEOUT)
+        if resp.status_code == 200:
+            logger.info("基本面預抓完成: %s", resp.json())
+        else:
+            logger.error("基本面預抓失敗 HTTP %s: %s", resp.status_code, resp.text[:300])
+    except Exception as exc:  # noqa: BLE001
+        logger.error("基本面預抓請求例外: %s", exc)
 
 
 def _wait_backend_ready(max_wait: float = 120.0) -> bool:
@@ -138,6 +157,20 @@ def main() -> None:
             coalesce=True,
             max_instances=1,
         )
+
+    prefetch_times = _parse_times(PREFETCH_TIMES) if PREFETCH_TIMES.strip() else []
+    for h, m in prefetch_times:
+        scheduler.add_job(
+            prefetch_fundamentals,
+            CronTrigger(hour=h, minute=m, timezone=TZ),
+            id=f"prefetch_{h:02d}{m:02d}",
+            misfire_grace_time=3600,
+            coalesce=True,
+            max_instances=1,
+        )
+    if prefetch_times:
+        logger.info("基本面預抓排程：每日 %s",
+                    ", ".join(f"{h:02d}:{m:02d}" for h, m in prefetch_times))
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

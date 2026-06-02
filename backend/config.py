@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     enable_finmind: bool = True
     enable_yahoo: bool = True
 
+    # ── 基本面磁碟快取 TTL（落地後晨報大多讀磁碟，只補過期→省 FinMind 額度）──
+    fundamentals_revenue_ttl_days: int = 7       # 月營收：月更，最多每週重抓
+    fundamentals_financials_ttl_days: int = 30   # 季財報：季更，最多每月重抓
+
     # ── 儲存（local parquet SSOT，無 Postgres）──
     local_storage_path: str = "/app/storage"
     local_storage_budget_gb: int = 10

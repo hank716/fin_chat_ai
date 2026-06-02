@@ -9,29 +9,89 @@ process 內 lru 快取（月營收月更、季報季更，當日重複查不重�
 """
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date
-from functools import lru_cache
-from typing import Any
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+from config import settings
 
 logger = logging.getLogger("ai-market-backend.fundamentals")
 
+# ── 磁碟快取：把慢變動的基本面落地，跨重啟保留，依 TTL 自然汰換 ──
+# 月營收（月更）與季財報（季更）各存一個 section；命中且未過期就不打 FinMind。
+_CACHE_DIR = Path(settings.local_storage_path) / "cache" / "fundamentals"
 
-@lru_cache(maxsize=2048)
-def build_fundamentals(symbol: str) -> dict[str, Any] | None:
-    """單檔基本面：月營收 YoY/MoM（億元）+ 季財報摘要。查無回 None。"""
+
+def _cache_path(symbol: str) -> Path:
+    return _CACHE_DIR / f"{symbol}.json"
+
+
+def _read_section(symbol: str, kind: str, ttl_days: float) -> tuple[bool, Any]:
+    """回 (命中且未過期, data)；data 可為 None（負快取，避免重抓查無的標的）。"""
+    p = _cache_path(symbol)
+    if not p.exists():
+        return False, None
+    try:
+        sec = json.loads(p.read_text(encoding="utf-8")).get(kind)
+        fetched = datetime.fromisoformat(sec["fetched_at"])
+    except Exception:  # noqa: BLE001 — 快取壞了就當 miss 重抓
+        return False, None
+    age_days = (datetime.now(timezone.utc) - fetched).total_seconds() / 86400
+    if age_days > ttl_days:
+        return False, None
+    return True, sec.get("data")
+
+
+def _write_section(symbol: str, kind: str, data: Any) -> None:
+    p = _cache_path(symbol)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        blob = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:  # noqa: BLE001
+        blob = {}
+    blob[kind] = {"fetched_at": datetime.now(timezone.utc).isoformat(), "data": data}
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(blob, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(p)  # 原子寫入，避免半寫壞檔
+
+
+def _cached(symbol: str, kind: str, ttl_days: float,
+            fetch_fn: Callable[[], Any], *, force: bool = False) -> Any:
+    """磁碟快取包裝：命中未過期就回快取，否則抓取後落地。force=True 強制重抓。"""
+    if not force:
+        hit, data = _read_section(symbol, kind, ttl_days)
+        if hit:
+            return data
+    data = fetch_fn()
+    _write_section(symbol, kind, data)
+    return data
+
+
+def build_fundamentals(symbol: str, *, force: bool = False) -> dict[str, Any] | None:
+    """單檔基本面：月營收 YoY/MoM（億元）+ 季財報摘要。查無回 None。
+
+    走磁碟快取（月營收月更、季財報季更），命中未過期就不打 FinMind；force=True 強制重抓。
+    """
     out: dict[str, Any] = {}
-    rev = _build_revenue(symbol)
+    rev = _build_revenue(symbol, force=force)
     if rev:
         out.update(rev)
-    fin = build_financials(symbol)
+    fin = build_financials(symbol, force=force)
     if fin:
         out.update(fin)
     return out or None
 
 
-def _build_revenue(symbol: str) -> dict[str, Any] | None:
-    """月營收 + YoY/MoM（億元）。"""
+def _build_revenue(symbol: str, *, force: bool = False) -> dict[str, Any] | None:
+    """月營收 + YoY/MoM（億元）；走磁碟快取（TTL=fundamentals_revenue_ttl_days）。"""
+    return _cached(symbol, "revenue", settings.fundamentals_revenue_ttl_days,
+                   lambda: _fetch_revenue(symbol), force=force)
+
+
+def _fetch_revenue(symbol: str) -> dict[str, Any] | None:
+    """實際打 FinMind 抓月營收（未過快取，由 _build_revenue 包裝）。"""
     from data_sources import finmind_loader
 
     try:
@@ -123,9 +183,14 @@ def _sum_last_n(by_date: dict[str, dict[str, float]], n: int, *candidates: str) 
     return sum(vals) if len(vals) == n else None
 
 
-@lru_cache(maxsize=2048)
-def build_financials(symbol: str) -> dict[str, Any] | None:
-    """單檔季財報摘要：EPS（最新季 + 近四季 TTM）、三率、負債比、營業/自由現金流、股利。
+def build_financials(symbol: str, *, force: bool = False) -> dict[str, Any] | None:
+    """單檔季財報摘要（走磁碟快取，TTL=fundamentals_financials_ttl_days）。"""
+    return _cached(symbol, "financials", settings.fundamentals_financials_ttl_days,
+                   lambda: _fetch_financials(symbol), force=force)
+
+
+def _fetch_financials(symbol: str) -> dict[str, Any] | None:
+    """實際打 FinMind 抓季財報：EPS（最新季 + 近四季 TTM）、三率、負債比、營業/自由現金流、股利。
 
     任一資料源失敗只略過該區塊，不影響其餘（每組 try/except 獨立）。全部查無回 None。
     """

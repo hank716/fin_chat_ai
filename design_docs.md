@@ -995,6 +995,12 @@ class StorageManager:
 
 ## 13.1 每日排程
 
+> ⚠️ **實作現況（與下方設計稿不同）**：下面這套 00:30–08:00 的分段管線是**原始設計稿**，
+> 目前**未實作**。實際只有一個排程點（`REPORT_TIMES`，預設 08:30）一次完成抓取＋分析＋產報告；
+> 慢變動的財報改以**磁碟快取＋TTL**（`storage/cache/fundamentals/`）分攤 FinMind 用量，
+> 並有可選的 `PREFETCH_TIMES` 預抓 job 暖快取（見 DEPLOY.md §8）。設計目的（分散 rate limit、
+> 減輕晨報壓力）以「快取而非半夜分時段」達成，因此**不需半夜開機**。
+
 Scheduler 必須支援每日 8:30 自動產生晨報。
 
 ```text

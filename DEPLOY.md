@@ -219,6 +219,28 @@ REPORT_TIMES=08:30,14:00,21:30
 存檔後 `docker compose up -d scheduler`。每篇報告 token 成本 ≈ NT$7.7、每月約 21 交易日，
 所以 1 次/日 ≈ NT$160、2 次 ≈ NT$320、3 次 ≈ NT$480/月——加時段時記得對照 `MONTHLY_COST_LIMIT_TWD`。
 
+### 基本面（財報）磁碟快取與預抓 `PREFETCH_TIMES`
+
+財報是慢變動資料（月營收月更、季財報季更），已**落地磁碟快取**（`storage/cache/fundamentals/`，
+月營收 TTL 7 天、季財報 30 天），所以晨報大多直接讀磁碟、只補過期的少數檔，FinMind 用量大降，
+**不需要為了抓財報在半夜開機**。TTL 可用 `FUNDAMENTALS_REVENUE_TTL_DAYS` /
+`FUNDAMENTALS_FINANCIALS_TTL_DAYS` 調整（通常不用）。
+
+要主動「暖快取」有兩種方式：
+
+```bash
+# 一次性手動預抓 watchlist（喚醒機器後跑；會被 FinMind 限速，約數分鐘）
+docker exec ai-market-backend python -m processor.prefetch_fundamentals          # 全 watchlist
+docker exec ai-market-backend python -m processor.prefetch_fundamentals --force  # 無視 TTL 全重抓
+curl -s -X POST "localhost:8000/brief/prefetch"                                  # 等同上面（HTTP 版）
+
+# 或排程自動預抓：.env 設在報告時間之前，存檔後 docker compose up -d scheduler
+#   PREFETCH_TIMES=07:30   （07:30 暖快取 → 08:30 產報告幾乎不打 FinMind）
+```
+
+> 若你都用「待機 + 遠端喚醒」、不想 24/7 開機，`PREFETCH_TIMES` 留空即可——財報快取會在每天
+> 第一篇晨報時自然累積，幾天後常用標的就都在磁碟上了。
+
 ### 校正 / 重設「本月 AI 花費」數字（首頁橫幅）
 
 首頁橫幅與每日上限是用 redis 累計的 token 估算，和 Google 後台的真實帳單會有落差。要對齊後台真實值：
