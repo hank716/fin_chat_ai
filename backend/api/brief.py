@@ -30,6 +30,22 @@ async def post_morning(raw_query: str | None = Query(default=None)) -> dict:
     }
 
 
+@router.get("/brief/status")
+async def status() -> dict:
+    """排程 catch-up 用：今日（schedule_tz）是否已產生報告。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from config import settings
+
+    today = datetime.now(ZoneInfo(settings.schedule_tz)).date()
+    return {
+        "schedule_date": today.isoformat(),
+        "has_today": morning_brief.report_date_exists(today),
+        "latest_report_id": morning_brief.latest_report_id(),
+    }
+
+
 @router.get("/brief/latest")
 async def latest() -> RedirectResponse:
     rid = morning_brief.latest_report_id()

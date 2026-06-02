@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -134,3 +134,10 @@ def latest_report_id() -> str | None:
         return None
     files = sorted(REPORTS_DIR.glob("morning_*.json"))
     return files[-1].stem if files else None
+
+
+def report_date_exists(d: date) -> bool:
+    """當日（report_id 前綴 morning_YYYYMMDD）是否已有報告。給 scheduler catch-up 用。"""
+    if not REPORTS_DIR.exists():
+        return False
+    return any(REPORTS_DIR.glob(f"morning_{d:%Y%m%d}_*.json"))

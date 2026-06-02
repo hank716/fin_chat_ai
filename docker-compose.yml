@@ -22,6 +22,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  scheduler:
+    build: ./scheduler
+    container_name: ai-market-scheduler
+    env_file:
+      - .env
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - SCHEDULE_TZ=Asia/Taipei
+      - MORNING_REPORT_TIME=08:30
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
   redis:
     image: redis:7
     container_name: ai-market-redis
