@@ -21,7 +21,7 @@ from ai import gemini_client
 from ai.llm_client import get_llm_client
 from cost import tracker
 from data_sources import news_loader, yfinance_loader
-from data_sources.backfill_tw import backfill_watchlist
+from data_sources.backfill_tw_market import backfill_market
 from data_sources.ingest import _dq_filter
 from guardrails.verify import run_guardrails
 from processor.intermarket_features import build_intermarket_features
@@ -57,10 +57,10 @@ def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str
         res = local_store.write_prices(_dq_filter(rows), market)
         landed[market] = res["symbols"]
 
-    # 2) 台股價格 + 籌碼（每日刷新近一週，含上市/上櫃）
+    # 2) 台股全市場刷新（近 3 交易日，TWSE/TPEx 單日端點，快）
     if refresh_tw:
         try:
-            backfill_watchlist(days=7)
+            backfill_market(days=3)
         except Exception as exc:  # noqa: BLE001 — 刷新失敗仍用既有落地資料產報告
             logger.warning("台股每日刷新失敗，沿用既有資料: %s", exc)
 

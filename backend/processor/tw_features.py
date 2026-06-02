@@ -14,17 +14,29 @@ import logging
 import math
 from datetime import date, timedelta
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 import universe
+from config import settings
 from storage import local_store
 
 logger = logging.getLogger("ai-market-backend.tw_features")
 
 TW_MARKET = "tw"
 INDEX_SYMBOL = "TWII"
+PRICE_DIR = Path(settings.local_storage_path) / "local_parquet" / "tw"
+# movers 流動性門檻：最新成交金額（元）。濾掉低量小型股的極端漲跌雜訊。
+MIN_AMOUNT_TWD = 50_000_000
+
+
+def _available_symbols() -> set[str]:
+    """storage 中實際有價格 parquet 的台股代號。"""
+    if not PRICE_DIR.exists():
+        return set()
+    return {p.stem for p in PRICE_DIR.glob("*.parquet")}
 
 
 def _clean(v: Any) -> Any:
@@ -92,6 +104,8 @@ def _price_block(df: pd.DataFrame) -> dict[str, Any] | None:
         "above_ma20": bool(last["close"] > ma20) if not pd.isna(ma20) else None,
         "above_ma60": bool(last["close"] > ma60) if not pd.isna(ma60) else None,
         "_ret20_raw": _cum_return_pct(close, 20),  # 供相對強弱/族群聚合
+        "_amount": _clean(float(last["amount"])) if "amount" in df.columns
+        and not pd.isna(last.get("amount")) else None,  # 最新成交金額(元)，供流動性過濾
     }
 
 
@@ -143,9 +157,12 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
         index_block.pop("_ret20_raw", None)
         index_block["name"] = universe.index_meta().get("name", "加權指數")
 
-    stocks: dict[str, Any] = {}
+    # 全市場計算（迭代實際有 parquet 的 universe 標的）
+    all_stocks: dict[str, Any] = {}
     as_of_dates: list[str] = []
-    for sym in sorted(universe.watchlist_symbols()):
+    for sym in _available_symbols():
+        if sym == INDEX_SYMBOL:
+            continue
         price = _price_block(local_store.read_prices(sym, TW_MARKET))
         if price is None:
             continue
@@ -154,7 +171,7 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
             round(ret20 - index_ret20, 2)
             if ret20 is not None and index_ret20 is not None else None
         )
-        entry = {
+        all_stocks[sym] = {
             "name": universe.display_name(sym),
             "sector": universe.sector_of(sym),
             **price,
@@ -162,22 +179,30 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
             **_chip_block(local_store.read_chip(sym, TW_MARKET)),
             **_margin_block(local_store.read_margin(sym, TW_MARKET)),
         }
-        stocks[sym] = entry
         if price.get("as_of"):
             as_of_dates.append(price["as_of"])
 
-    sectors = _aggregate_sectors(stocks)
-    movers = _movers(stocks)
+    sectors = _aggregate_sectors(all_stocks)
+    movers = _movers(all_stocks)
+    # 只把「movers 出現過的標的」的明細丟給 AI（全市場 2000+ 檔不能全塞進 prompt）
+    focus = {it["symbol"] for lst in movers.values() for it in lst}
+    # 丟給 AI 前移除內部用的底線欄位（_amount 等）
+    stocks = {
+        s: {k: v for k, v in all_stocks[s].items() if not k.startswith("_")}
+        for s in focus if s in all_stocks
+    }
+
     as_of = max(as_of_dates) if as_of_dates else (index_block or {}).get("as_of")
     return {
         "as_of": as_of,
         "window": window,
+        "universe_size": len(all_stocks),
         "index": index_block,
         "stocks": stocks,
         "sectors": sectors,
         "movers": movers,
-        "notes": "籌碼單位為張(=股/1000)；vs_index_20d_pct=個股20日報酬減大盤20日報酬(相對強弱)；"
-        "net_streak 正=連續買超天數、負=連續賣超天數。",
+        "notes": "stocks 僅含 movers 涉及之標的明細（全市場共 universe_size 檔，完整資料在系統內）；"
+        "籌碼單位張(=股/1000)；vs_index_20d_pct=個股20日報酬減大盤(相對強弱)；net_streak 正=連買天數負=連賣。",
     }
 
 
@@ -185,7 +210,7 @@ def _aggregate_sectors(stocks: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for sector, syms in universe.sectors().items():
         members = [(s, stocks[s]) for s in syms if s in stocks]
-        if not members:
+        if len(members) < 3:  # 太少成員的產業別不聚合（降雜訊）
             continue
         ret20s = [e["return_20d_pct"] for _, e in members if e.get("return_20d_pct") is not None]
         ret5s = [e["return_5d_pct"] for _, e in members if e.get("return_5d_pct") is not None]
@@ -193,8 +218,11 @@ def _aggregate_sectors(stocks: dict[str, Any]) -> dict[str, Any]:
             e["foreign_net_buy_5d_lots"] for _, e in members
             if e.get("foreign_net_buy_5d_lots") is not None
         ]
+        # 領漲股只從有流動性的成員挑
         leaders = sorted(
-            (m for m in members if m[1].get("return_20d_pct") is not None),
+            (m for m in members
+             if m[1].get("return_20d_pct") is not None
+             and (m[1].get("_amount") or 0) >= MIN_AMOUNT_TWD),
             key=lambda m: m[1]["return_20d_pct"], reverse=True,
         )[:3]
         out[sector] = {
@@ -210,9 +238,18 @@ def _aggregate_sectors(stocks: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _movers(stocks: dict[str, Any], top: int = 5) -> dict[str, Any]:
+_ETF_SECTORS = {"ETF", "上櫃指數股票型基金(ETF)", "受益證券"}
+
+
+def _movers(stocks: dict[str, Any], top: int = 8) -> dict[str, Any]:
+    # 只在「有流動性、且非 ETF」的個股中排行（ETF 法人申贖流量會蓋過選股訊號）
+    liquid = {
+        s: e for s, e in stocks.items()
+        if (e.get("_amount") or 0) >= MIN_AMOUNT_TWD and e.get("sector") not in _ETF_SECTORS
+    }
+
     def _rank(key: str, reverse: bool) -> list[dict[str, Any]]:
-        items = [(s, e) for s, e in stocks.items() if e.get(key) is not None]
+        items = [(s, e) for s, e in liquid.items() if e.get(key) is not None]
         items.sort(key=lambda x: x[1][key], reverse=reverse)
         return [
             {"symbol": s, "name": e["name"], "sector": e.get("sector"), key: e[key]}
