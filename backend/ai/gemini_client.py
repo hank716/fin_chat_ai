@@ -16,7 +16,12 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from config import settings
 
-from .prompts import build_full_brief_prompt, build_intermarket_prompt
+from .prompts import (
+    build_brief_research_prompt,
+    build_brief_structuring_prompt,
+    build_full_brief_prompt,
+    build_intermarket_prompt,
+)
 from .schemas import GEMINI_BRIEF_SCHEMA, GEMINI_RESPONSE_SCHEMA, AnalysisResult, BriefResult
 
 logger = logging.getLogger("ai-market-backend.gemini")
@@ -114,6 +119,26 @@ def analyze_full_brief(features: dict[str, Any]) -> tuple[BriefResult, dict[str,
     prompt = build_full_brief_prompt(features)
     raw, usage = _generate_json(prompt, GEMINI_BRIEF_SCHEMA, model=settings.gemini_model_brief)
     return BriefResult.model_validate(raw), usage
+
+
+def analyze_full_brief_grounded(
+    features: dict[str, Any],
+) -> tuple[BriefResult, dict[str, int], dict[str, int]]:
+    """兩段式即時連網晨報：①PRO+Google 搜尋 寫分析稿（主推理連網）→ ②Flash 純格式化成 BriefResult。
+
+    回 (result, 研究階段 usage, 格式化階段 usage)。突破 responseSchema 不能與 tool 並用的限制。
+    """
+    analysis, research_usage = generate_text(
+        build_brief_research_prompt(features),
+        model=settings.gemini_model_brief,
+        use_search=True,
+    )
+    raw, struct_usage = _generate_json(
+        build_brief_structuring_prompt(analysis, features),
+        GEMINI_BRIEF_SCHEMA,
+        model=settings.gemini_model_qa,
+    )
+    return BriefResult.model_validate(raw), research_usage, struct_usage
 
 
 @retry(

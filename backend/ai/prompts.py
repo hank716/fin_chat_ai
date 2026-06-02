@@ -109,6 +109,37 @@ def build_full_brief_prompt(features: dict[str, Any]) -> str:
     )
 
 
+def build_brief_research_prompt(features: dict[str, Any]) -> str:
+    """晨報主推理（即時連網）：用 Google 搜尋查證即時事實 + features 數據，輸出完整敘事分析稿。"""
+    features_json = json.dumps(features, ensure_ascii=False, indent=2)
+    return (
+        f"{FULL_BRIEF_RULES}\n\n"
+        f"【本次為『分析稿』階段】：請**主動用 Google 搜尋**查證今日最新事件、新聞、報價與總經/央行/"
+        f"地緣/產業/個股消息，把查到的事實（標來源與日期）和下方 features 數據結合做分析。\n"
+        f"市場數值（價格/報酬/籌碼/資券比/月營收）以 features 為準，不得捏造；即時事件用搜尋查證。\n"
+        f"輸出**完整繁體中文敘事分析**（不是 JSON）：涵蓋上述所有段落、候選標的（含目標價/止損與理由）、"
+        f"風險、後續追蹤、重要新聞（含來源/日期）。稍後系統會把它整理成結構化格式。\n\n"
+        f"features（數據事實來源）：\n```json\n{features_json}\n```"
+    )
+
+
+def build_brief_structuring_prompt(analysis: str, features: dict[str, Any]) -> str:
+    """把分析稿整理成 BriefResult JSON（純格式化，不新增事實）。"""
+    features_json = json.dumps(features, ensure_ascii=False)
+    return (
+        "把下面這份『今日市場分析稿』整理成符合 schema 的結構化晨報 JSON。\n"
+        "**只能忠實萃取分析稿與 features 的內容，不得新增任何事實、數字或新聞**。\n"
+        "- headline：分析稿的今日結論（3–5 句）。\n"
+        "- sections：照分析稿各段落（今日美股摘要/加密貨幣/跨市場連動/台股大盤/台股族群觀察/籌碼面/技術面/基本面），"
+        "narrative 用分析稿原文精簡；evidence 的 source_ref 指向 features 欄位路徑。\n"
+        "- tw_watchlist（偏多）/ tw_caution（偏空），帶 signals、target_price、stop_loss、uncertainty。\n"
+        "- risks / follow_ups / news_digest（保留來源/日期/url）/ sources。data_as_of 用 features.as_of。\n"
+        "- 禁誇大保證語。\n\n"
+        f"分析稿：\n```\n{analysis}\n```\n\n"
+        f"features：\n```json\n{features_json}\n```"
+    )
+
+
 def build_intermarket_prompt(features: dict[str, Any]) -> str:
     """組出餵 Gemini 的 prompt（rules + features JSON）。"""
     features_json = json.dumps(features, ensure_ascii=False, indent=2)

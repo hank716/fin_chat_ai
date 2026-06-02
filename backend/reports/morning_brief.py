@@ -89,23 +89,19 @@ def generate_morning_brief(
 
     feats, landed = _build_combined_features(refresh_tw)
 
-    # 強化事實基礎：用 Google 搜尋抓近兩日市場重大事件，注入 features（失敗不阻斷）
-    web_usage = {"input_tokens": 0, "output_tokens": 0}
-    try:
-        web_ctx, web_usage = gemini_client.fetch_web_context(generated_at.strftime("%Y-%m-%d"))
-        feats["web_context"] = web_ctx
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("web_context 取得失敗，略過: %s", exc)
-
-    # Gemini 完整敘事晨報（含 token 計費；晨報 PRO + 搜尋情境 Flash 一起計）
-    result, usage = get_llm_client().analyze_full_brief(feats)
-    brief_cost = (
-        tracker.estimate_cost_twd(usage["input_tokens"], usage["output_tokens"],
+    # 晨報主推理即時連網：兩段式 ①PRO+Google搜尋 寫分析稿 → ②Flash 純格式化成結構
+    result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(feats)
+    brief_cost = round(
+        tracker.estimate_cost_twd(research_usage["input_tokens"], research_usage["output_tokens"],
                                   model=settings.gemini_model_brief)
-        + tracker.estimate_cost_twd(web_usage["input_tokens"], web_usage["output_tokens"],
-                                    model=settings.gemini_model_qa)
+        + tracker.estimate_cost_twd(struct_usage["input_tokens"], struct_usage["output_tokens"],
+                                    model=settings.gemini_model_qa),
+        4,
     )
-    brief_cost = round(brief_cost, 4)
+    usage = {
+        "input_tokens": research_usage["input_tokens"] + struct_usage["input_tokens"],
+        "output_tokens": research_usage["output_tokens"] + struct_usage["output_tokens"],
+    }
     tracker.record_cost(brief_cost)
     cost_info = {
         "brief_twd": brief_cost,
