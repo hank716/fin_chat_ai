@@ -21,7 +21,7 @@
 - [x] M3 — Scheduler + catch-up ✅ (APScheduler 每日 08:30 + 啟動補產；`GET /brief/status`)
 - [x] M4 — Discord 互動 bot + 成本上限 ✅ (每日摘要推送 §6.3 + `/ask` grounded Q&A + per-user 成本上限 + 頻道/使用者權限；FinBot 已上線、每日摘要實測推送成功)
 - [x] M5 — Guardrail + 新聞分層 ✅ (六道 verification guard：source/metric/symbol/news-citation/advice/causality；新聞 authoritative/social 分層；報告顯示攔截狀態)
-- [~] M6 — Supabase publish + pCloud backup + Cloudflare Access ✅ pCloud 備份+Cloudflare tunnel(caddy 反代)+Supabase report_index 發布程式完成；**待補**：在 Supabase SQL Editor 跑 `sql/supabase_schema.sql` 建表、Cloudflare Access email 政策設定
+- [x] M6 — Supabase publish + pCloud backup + Cloudflare Access ✅ (pCloud 報告備份 + Cloudflare tunnel/Access + Supabase report_index 發布 + 首頁歷史列表；report_index 實測寫入成功)
 - [ ] M7 — 檔案級保留/清理 + pCloud 回補
 
 ## 本機啟動（M0）
