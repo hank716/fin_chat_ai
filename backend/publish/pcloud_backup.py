@@ -74,6 +74,39 @@ def _upload(folderid: int, path: Path) -> str | None:
     return None
 
 
+def _download(remote_path: str, dest: Path) -> bool:
+    """從 pCloud 下載單檔到 dest。"""
+    try:
+        r = httpx.get(
+            f"{_base()}/getfilelink",
+            params={"access_token": settings.pcloud_access_token, "path": remote_path},
+            timeout=TIMEOUT,
+        )
+        j = r.json()
+        if j.get("result") != 0 or not j.get("hosts"):
+            return False
+        link = f"https://{j['hosts'][0]}{j['path']}"
+        data = httpx.get(link, timeout=TIMEOUT).content
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pCloud 下載 %s 失敗: %s", remote_path, exc)
+        return False
+
+
+def restore_report(report_id: str) -> bool:
+    """從 pCloud 回補某報告的 json+md 到本機 storage/reports/（M7 冷儲存回補）。"""
+    if not settings.pcloud_access_token.strip():
+        return False
+    reports_dir = Path(settings.local_storage_path) / "reports"
+    ok_json = _download(f"{_remote_folder()}/{report_id}.json", reports_dir / f"{report_id}.json")
+    _download(f"{_remote_folder()}/{report_id}.md", reports_dir / f"{report_id}.md")
+    if ok_json:
+        logger.info("pCloud 回補報告 %s 成功", report_id)
+    return ok_json
+
+
 def backup_report(json_path: Path, md_path: Path) -> dict[str, Any]:
     """上傳 json + md 到 pCloud，回 {pcloud_json_path, pcloud_markdown_path}（失敗為 None）。"""
     if not settings.pcloud_access_token.strip():

@@ -160,6 +160,12 @@ def generate_morning_brief(
         supabase_publish.publish_report_index(
             report, pcloud_paths=pcloud_paths, discord_pushed=pushed
         )
+        # 8) 保留/清理：守本機容量預算（舊報告已備份 pCloud，可回補）
+        try:
+            from storage.retention import enforce_retention
+            enforce_retention()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("retention 失敗: %s", exc)
 
     return report
 
@@ -172,7 +178,16 @@ def _safe_path(report_id: str, suffix: str) -> Path | None:
 
 def load_report(report_id: str) -> dict[str, Any] | None:
     p = _safe_path(report_id, ".json")
-    if p is None or not p.exists():
+    if p is None:
+        return None
+    if not p.exists():
+        # 本機已清掉（retention 汰換）→ 從 pCloud 冷儲存回補
+        try:
+            from publish.pcloud_backup import restore_report
+            restore_report(report_id)
+        except Exception:  # noqa: BLE001
+            pass
+    if not p.exists():
         return None
     return json.loads(p.read_text(encoding="utf-8"))
 
