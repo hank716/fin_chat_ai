@@ -94,6 +94,77 @@ def fetch_stock_prices_normalized(
     return out
 
 
+def get_taiwan_stock_news(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔近期新聞（date / stock_id / link / source / title）。"""
+    return _request("TaiwanStockNews", {"data_id": stock_id, "start_date": start_date})
+
+
+def get_stock_chip(stock_id: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """單檔三大法人買賣超（per-investor 的 buy/sell raw 列，單位股）。"""
+    return _request(
+        "TaiwanStockInstitutionalInvestorsBuySell",
+        {"data_id": stock_id, "start_date": start_date, "end_date": end_date},
+    )
+
+
+# FinMind investor name → 我方三大法人分類
+_FOREIGN = {"Foreign_Investor", "Foreign_Dealer_Self"}
+_TRUST = {"Investment_Trust"}
+_DEALER = {"Dealer_self", "Dealer_Hedging"}
+
+
+def fetch_stock_chip_normalized(
+    stock_id: str, start_date: str, end_date: str
+) -> list[Any]:
+    """單檔三大法人買賣超 → 統一輸出 ChipRow（每個 trade_date 一列）。
+
+    FinMind 回 per-investor 的 buy/sell（單位股），這裡按日聚合成淨買賣超：
+      foreign = 外資 + 外資自營；trust = 投信；dealer = 自營自行 + 自營避險。
+    對齊 twse_loader.ChipRow（含外資自營、自營含自行+避險）。source='finmind'。
+    """
+    from datetime import datetime as _dt
+
+    from .twse_loader import ChipRow
+
+    raw = get_stock_chip(stock_id, start_date, end_date)
+    # date -> {'foreign': net, 'trust': net, 'dealer': net}
+    by_date: dict[str, dict[str, int]] = {}
+    for r in raw:
+        name = r.get("name")
+        try:
+            net = int(r.get("buy") or 0) - int(r.get("sell") or 0)
+        except (TypeError, ValueError):
+            continue
+        d = r.get("date")
+        if not d:
+            continue
+        bucket = by_date.setdefault(d, {"foreign": 0, "trust": 0, "dealer": 0})
+        if name in _FOREIGN:
+            bucket["foreign"] += net
+        elif name in _TRUST:
+            bucket["trust"] += net
+        elif name in _DEALER:
+            bucket["dealer"] += net
+
+    out: list[ChipRow] = []
+    for d, b in sorted(by_date.items()):
+        try:
+            td = _dt.strptime(d, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        out.append(
+            ChipRow(
+                symbol=stock_id,
+                trade_date=td,
+                foreign_net_buy=b["foreign"],
+                trust_net_buy=b["trust"],
+                dealer_net_buy=b["dealer"],
+                source="finmind",
+            )
+        )
+    return out
+
+
 def _to_decimal(v: Any) -> Any:
     from decimal import Decimal, InvalidOperation
 

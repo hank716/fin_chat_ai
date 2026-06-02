@@ -25,6 +25,7 @@ INTERMARKET_SYMBOLS: list[tuple[str, str, str]] = [
     ("^IXIC", "NASDAQ", "us"),    # Nasdaq Composite
     ("^DJI", "DJI", "us"),        # Dow Jones
     ("^SOX", "SOX", "us"),        # 費城半導體（與台股最相關）
+    ("^TWII", "TWII", "tw"),      # 台股加權指數（大盤）
     ("BTC-USD", "BTC", "crypto"),
 ]
 
@@ -70,7 +71,7 @@ def _is_nan(v: Any) -> bool:
         return False
 
 
-def fetch_intermarket(*, period: str = "1mo") -> dict[str, list[PriceRow]]:
+def fetch_intermarket(*, period: str = "3mo") -> dict[str, list[PriceRow]]:
     """抓全部 intermarket 標的，回 {market: [PriceRow,...]}（DQ 過濾交給 caller/sink）。"""
     by_market: dict[str, list[PriceRow]] = {}
     for yf_symbol, symbol, market in INTERMARKET_SYMBOLS:

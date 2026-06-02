@@ -92,3 +92,11 @@ def read_prices(symbol: str, market: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=PRICE_COLUMNS)
     return pd.read_parquet(path)
+
+
+def read_chip(symbol: str, market: str) -> pd.DataFrame:
+    """讀回單檔三大法人買賣超（不存在回空 DataFrame）。"""
+    path = PARQUET_ROOT / market / "_chip" / f"{symbol}.parquet"
+    if not path.exists():
+        return pd.DataFrame(columns=CHIP_COLUMNS)
+    return pd.read_parquet(path)
