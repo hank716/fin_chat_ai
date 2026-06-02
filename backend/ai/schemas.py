@@ -71,6 +71,7 @@ class NewsDigestItem(BaseModel):
     url: str | None = None
     takeaway: str  # AI 解讀（inference）
     uncertainty: str | None = None
+    tier: str | None = None  # guardrail 由 features.news 比對後填：authoritative / social
 
 
 class BriefResult(BaseModel):

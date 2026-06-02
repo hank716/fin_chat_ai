@@ -19,13 +19,26 @@ from . import finmind_loader
 
 logger = logging.getLogger("ai-market-backend.news")
 
+# 社群/論壇來源 → 只能當情緒訊號（design_docs §3：PTT/Dcard 強制標 inference 不可當事實）。
+# 其餘視為權威媒體（authoritative），可當 fact 引用。比對 source 或 title 子字串。
+_SOCIAL_MARKERS = (
+    "PTT", "ptt", "Dcard", "dcard", "爆料同學會", "Mobile01", "mobile01",
+    "巴哈", "論壇", "網友", "Reddit", "reddit", "推特", "X平台",
+)
+
+
+def classify_tier(source: str, title: str) -> str:
+    """authoritative（權威媒體，可當事實）/ social（社群論壇，只當情緒訊號）。"""
+    blob = f"{source} {title}"
+    return "social" if any(m in blob for m in _SOCIAL_MARKERS) else "authoritative"
+
 
 class NewsItem:
-    __slots__ = ("symbol", "name", "date", "title", "source", "url")
+    __slots__ = ("symbol", "name", "date", "title", "source", "url", "tier")
 
-    def __init__(self, symbol, name, date, title, source, url):  # noqa: A002
+    def __init__(self, symbol, name, date, title, source, url, tier):  # noqa: A002
         self.symbol, self.name, self.date = symbol, name, date
-        self.title, self.source, self.url = title, source, url
+        self.title, self.source, self.url, self.tier = title, source, url, tier
 
 
 def _fetch_symbol_news(symbol: str, days: list[str], per_symbol: int) -> list[NewsItem]:
@@ -40,14 +53,16 @@ def _fetch_symbol_news(symbol: str, days: list[str], per_symbol: int) -> list[Ne
             if not title or key in seen:
                 continue
             seen.add(key)
+            source = (r.get("source") or "").strip()
             items.append(
                 NewsItem(
                     symbol=symbol,
                     name=universe.display_name(symbol),
                     date=str(r.get("date") or "")[:10],
                     title=title,
-                    source=(r.get("source") or "").strip(),
+                    source=source,
                     url=url,
+                    tier=classify_tier(source, title),
                 )
             )
     items.sort(key=lambda x: x.date, reverse=True)
@@ -72,6 +87,6 @@ def fetch_news(
     out.sort(key=lambda x: x.date, reverse=True)
     return [
         {"symbol": n.symbol, "name": n.name, "date": n.date,
-         "title": n.title, "source": n.source, "url": n.url}
+         "title": n.title, "source": n.source, "url": n.url, "tier": n.tier}
         for n in out
     ]

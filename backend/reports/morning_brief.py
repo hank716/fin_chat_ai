@@ -21,6 +21,7 @@ from ai.llm_client import get_llm_client
 from data_sources import news_loader, yfinance_loader
 from data_sources.backfill_tw import backfill_watchlist
 from data_sources.ingest import _dq_filter
+from guardrails.verify import run_guardrails
 from processor.intermarket_features import build_intermarket_features
 from processor.tw_features import build_tw_features
 from reports.copy_for_ai_builder import build_copy_for_ai
@@ -88,8 +89,14 @@ def generate_morning_brief(
     # Gemini 完整敘事晨報
     result = get_llm_client().analyze_full_brief(feats)
 
+    # guardrail：驗證未超出資料範圍、無捏造/禁語，清理後再 render
+    result, guardrail = run_guardrails(result, feats)
+    logger.info("guardrail passed=%s errors=%s warnings=%s",
+                guardrail["passed"], guardrail["error_count"], guardrail["warning_count"])
+
     # 4) builders
     report = build_report_dict(result, generated_at=generated_at, raw_query=raw_query)
+    report["guardrail"] = guardrail
     report_id = f"morning_{generated_at:%Y%m%d_%H%M%S}"
     report["report_id"] = report_id
     report["features"] = feats

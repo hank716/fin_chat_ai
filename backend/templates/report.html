@@ -15,6 +15,18 @@
 
 <div class="card summary"><strong>今日簡短結論</strong><br>{{ report.headline }}</div>
 
+{% if report.guardrail %}
+{% set gr = report.guardrail %}
+<div class="gr {{ 'ok' if gr.passed and gr.warning_count == 0 else 'warn' }}">
+  {% if gr.passed and gr.warning_count == 0 %}
+    🛡️ Guardrail 通過：所有數字皆可回溯至資料來源，無捏造或買賣建議。
+  {% else %}
+    🛡️ Guardrail 攔截 {{ gr.error_count }} 項、警示 {{ gr.warning_count }} 項
+    <ul>{% for v in gr.violations %}<li>[{{ v.guard }}] {{ v.detail }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% endif %}
+
 {% for sec in report.sections %}
 <div class="card">
   <h2>{{ sec.title }}</h2>
@@ -74,6 +86,7 @@
     <li>
       <strong>{% if n.url %}<a href="{{ n.url }}" target="_blank" rel="noopener">{{ n.title }}</a>{% else %}{{ n.title }}{% endif %}</strong>
       <span class="src">　{{ n.source }}・{{ n.date }}</span>
+      {% if n.tier == 'social' %}<span class="tier social">情緒訊號·非事實</span>{% elif n.tier == 'authoritative' %}<span class="tier authoritative">權威來源</span>{% endif %}
       <div class="take">解讀：{{ n.takeaway }}</div>
       {% if n.uncertainty %}<div class="uncertain">不確定性：{{ n.uncertainty }}</div>{% endif %}
     </li>
