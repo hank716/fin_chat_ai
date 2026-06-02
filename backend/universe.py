@@ -1,13 +1,11 @@
-"""台股 watchlist / 族群設定載入（M2-report step A）。
+"""台股 universe / 族群（M8：全市場，動態由 FinMind 建）。
 
-讀 configs/universe/tw.json（掛載進容器 /app/configs），給回補、features、報告共用：
-  - watchlist_symbols(): 要回補/分析的台股代號集合（不含大盤指數）
-  - sector_of(symbol) / sectors(): 族群對應
-  - display_name(symbol): 中文名（報告顯示用）
-  - index_meta(): 大盤指數 (TWII / ^TWII) 設定
-  - us_to_tw_linkage(): 美股族群 → 台股族群的『可能影響』對應（跨市場敘事）
+改為涵蓋**全台股**（上市 twse + 上櫃 tpex，含 ETF；不含興櫃 emerging），
+來源 = FinMind TaiwanStockInfo（stock_id / stock_name / industry_category / type）。
+族群直接用 industry_category（57 類真實產業別）。
 
-純 stdlib json，零新依賴。檔案缺失或壞掉時回空集合（不阻斷管線）。
+快取到 configs/universe/tw_all.json（掛載目錄，跨重啟保留；缺檔自動重建）。
+跨市場 linkage（美股 → 台股產業）與大盤指數設定寫死於此。
 """
 from __future__ import annotations
 
@@ -19,56 +17,91 @@ from typing import Any
 
 logger = logging.getLogger("ai-market-backend.universe")
 
-# backend code 在 /app，configs 掛在 /app/configs
-CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "universe" / "tw.json"
+CONFIG_DIR = Path(__file__).resolve().parent / "configs" / "universe"
+CACHE_PATH = CONFIG_DIR / "tw_all.json"
+
+INDEX_META = {"symbol": "TWII", "yf": "^TWII", "name": "加權指數"}
+INCLUDE_TYPES = {"twse", "tpex"}  # 不含 emerging（興櫃，流動性低、無全市場日端點）
+
+# 美股/跨市場 → 台股產業別的「可能影響」對應（用 industry_category 名稱）
+US_TO_TW_LINKAGE = {
+    "SOX": ["半導體業", "電腦及週邊設備業", "電子零組件業", "光電業"],
+    "NASDAQ": ["半導體業", "電腦及週邊設備業", "通信網路業", "其他電子業"],
+    "SP500": ["金融保險業", "其他電子業"],
+    "BTC": ["風險情緒"],
+}
+
+
+def build_universe_cache() -> dict[str, Any]:
+    """從 FinMind 抓全清單並寫入快取檔。回傳 universe dict。"""
+    from data_sources import finmind_loader
+
+    info = finmind_loader.get_taiwan_stock_info()
+    symbols: dict[str, Any] = {}
+    for r in info:
+        sid, t = r.get("stock_id"), r.get("type")
+        if t not in INCLUDE_TYPES or not sid or sid in symbols:
+            continue
+        symbols[sid] = {
+            "name": r.get("stock_name") or sid,
+            "sector": r.get("industry_category") or "其他",
+            "market": t,
+        }
+    data = {"symbols": symbols, "index": INDEX_META, "linkage": US_TO_TW_LINKAGE}
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    logger.info("台股 universe 快取重建：%d 檔", len(symbols))
+    return data
 
 
 @lru_cache(maxsize=1)
 def _load() -> dict[str, Any]:
+    if CACHE_PATH.exists():
+        try:
+            return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("universe 快取讀取失敗，改重建: %s", exc)
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — 設定缺失不該炸掉整條管線
-        logger.warning("台股 universe 設定讀取失敗 (%s): %s", CONFIG_PATH, exc)
-        return {}
+        return build_universe_cache()
+    except Exception as exc:  # noqa: BLE001 — FinMind 不可用時不阻斷
+        logger.warning("universe 建立失敗: %s", exc)
+        return {"symbols": {}, "index": INDEX_META, "linkage": US_TO_TW_LINKAGE}
 
 
-def sectors() -> dict[str, list[str]]:
-    """{族群名: [代號,...]}。"""
-    return dict(_load().get("sectors", {}))
+def _symbols() -> dict[str, Any]:
+    return _load().get("symbols", {})
 
 
 @lru_cache(maxsize=1)
 def watchlist_symbols() -> frozenset[str]:
-    """所有要回補/分析的台股代號（攤平族群，去重，不含大盤指數）。"""
-    out: set[str] = set()
-    for syms in _load().get("sectors", {}).values():
-        out.update(syms)
-    return frozenset(out)
+    """全台股代號（上市+上櫃，含 ETF）。"""
+    return frozenset(_symbols().keys())
 
 
 @lru_cache(maxsize=1)
-def _symbol_to_sector() -> dict[str, str]:
-    m: dict[str, str] = {}
-    for sector, syms in _load().get("sectors", {}).items():
-        for s in syms:
-            m.setdefault(s, sector)
-    return m
+def sectors() -> dict[str, list[str]]:
+    """{產業別: [代號,...]}（由 industry_category 聚合）。"""
+    out: dict[str, list[str]] = {}
+    for sid, meta in _symbols().items():
+        out.setdefault(meta.get("sector") or "其他", []).append(sid)
+    return out
 
 
 def sector_of(symbol: str) -> str | None:
-    return _symbol_to_sector().get(symbol)
+    return (_symbols().get(symbol) or {}).get("sector")
 
 
 def display_name(symbol: str) -> str:
-    """中文名，找不到回代號本身。"""
-    return _load().get("names", {}).get(symbol, symbol)
+    return (_symbols().get(symbol) or {}).get("name", symbol)
+
+
+def market_of(symbol: str) -> str | None:
+    return (_symbols().get(symbol) or {}).get("market")
 
 
 def index_meta() -> dict[str, str]:
-    """大盤指數設定，預設 TWII / ^TWII。"""
-    return _load().get("index", {"symbol": "TWII", "yf": "^TWII", "name": "加權指數"})
+    return _load().get("index", INDEX_META)
 
 
 def us_to_tw_linkage() -> dict[str, list[str]]:
-    raw = _load().get("us_to_tw_linkage", {})
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
+    return _load().get("linkage", US_TO_TW_LINKAGE)
