@@ -16,8 +16,9 @@
 
 - [x] **M0** — repo 骨架 + docker-compose（backend + redis）+ FastAPI `/health`
 - [x] M1 — 黃金路徑垂直切片 ✅ (yfinance → intermarket features → Gemini 結構化 → md/json/copy-for-AI → Web SSR；`POST /brief/morning`、`GET /report/{id}`、`/brief/latest`)
-- [~] M2 — 移植 finflow 抓取層 ✅ (rate_limiter/twse/finmind + parquet sink + storage_monitor + `/storage`)；**待補**：US/crypto loader（finflow 無，全新）+ universe 過濾 + FinMind 歷史 backfill
-- [ ] M3 — Scheduler + catch-up
+- [x] M2 — 移植 finflow 抓取層 ✅ (rate_limiter/twse/finmind + parquet sink + storage_monitor + `/storage`) + US/crypto loader + universe 過濾 + FinMind 歷史 backfill
+- [x] **M2-report** — 完整台股晨報 ✅ (台股 universe/族群 + 價格/籌碼/融資券 backfill + tw_features + 新聞 fact 層 + 敘事報告 BriefResult：正向/負向候選、資券比、跨市場連動)
+- [x] M3 — Scheduler + catch-up ✅ (APScheduler 每日 08:30 + 啟動補產；`GET /brief/status`)
 - [ ] M4 — Discord 互動 bot + 成本上限
 - [ ] M5 — Guardrail + 新聞分層
 - [ ] M6 — Supabase publish + pCloud backup + Cloudflare Access
