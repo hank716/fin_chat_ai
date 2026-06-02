@@ -219,27 +219,40 @@ REPORT_TIMES=08:30,14:00,21:30
 存檔後 `docker compose up -d scheduler`。每篇報告 token 成本 ≈ NT$7.7、每月約 21 交易日，
 所以 1 次/日 ≈ NT$160、2 次 ≈ NT$320、3 次 ≈ NT$480/月——加時段時記得對照 `MONTHLY_COST_LIMIT_TWD`。
 
-### 基本面（財報）磁碟快取與預抓 `PREFETCH_TIMES`
+### 基本面（財報）磁碟快取、焦點預抓 `PREFETCH_TIMES`、全市場慢爬 `CRAWL_TIMES`
 
-財報是慢變動資料（月營收月更、季財報季更），已**落地磁碟快取**（`storage/cache/fundamentals/`，
+財報是**慢變動資料**（月營收月更、季財報季更），已**落地磁碟快取**（`storage/cache/fundamentals/`，
 月營收 TTL 7 天、季財報 30 天），所以晨報大多直接讀磁碟、只補過期的少數檔，FinMind 用量大降，
 **不需要為了抓財報在半夜開機**。TTL 可用 `FUNDAMENTALS_REVENUE_TTL_DAYS` /
 `FUNDAMENTALS_FINANCIALS_TTL_DAYS` 調整（通常不用）。
 
-要主動「暖快取」有兩種方式：
+> 資料分工：**財報＝慢資料，落地快取**；**法說會 / 新聞 / PTT 等即時快訊＝不快取，由 AI（Gemini
+> grounding 即時搜尋）在產報告/問答當下抓**。所以快取只負責季更的財務數字，不會讓快訊變舊。
+
+三種暖快取方式（由快到慢、由焦點到全市場）：
 
 ```bash
-# 一次性手動預抓 watchlist（喚醒機器後跑；會被 FinMind 限速，約數分鐘）
-docker exec ai-market-backend python -m processor.prefetch_fundamentals          # 全 watchlist
-docker exec ai-market-backend python -m processor.prefetch_fundamentals --force  # 無視 TTL 全重抓
-curl -s -X POST "localhost:8000/brief/prefetch"                                  # 等同上面（HTTP 版）
+# ① 焦點股預抓（快，數分鐘）：跟晨報同源，篩出當天 movers 才暖——08:30 前先暖好
+docker exec ai-market-backend python -m processor.prefetch_fundamentals
+#   排程版：.env 設 PREFETCH_TIMES=07:30 → 07:30 暖焦點、08:30 產報告幾乎不打 FinMind
 
-# 或排程自動預抓：.env 設在報告時間之前，存檔後 docker compose up -d scheduler
-#   PREFETCH_TIMES=07:30   （07:30 暖快取 → 08:30 產報告幾乎不打 FinMind）
+# ② 全市場「慢爬」（焦點優先，再慢慢掃全部 2700+；可數小時～23h）
+docker exec -d ai-market-backend python -m processor.prefetch_fundamentals --full         # 背景跑到完成/關機
+docker exec ai-market-backend python -m processor.prefetch_fundamentals --full --minutes 50  # 本次只跑 50 分鐘
+curl -s -X POST "localhost:8000/brief/prefetch?scope=full"                                # HTTP 版（背景、立刻回）
+#   排程版：.env 設 CRAWL_TIMES=09:00（機器長時間開著時用；待機/省電就留空，需要時再手動跑）
+
+# ③ 精選 watchlist / 強制重抓
+docker exec ai-market-backend python -m processor.prefetch_fundamentals --watchlist
+docker exec ai-market-backend python -m processor.prefetch_fundamentals --force
 ```
 
-> 若你都用「待機 + 遠端喚醒」、不想 24/7 開機，`PREFETCH_TIMES` 留空即可——財報快取會在每天
-> 第一篇晨報時自然累積，幾天後常用標的就都在磁碟上了。
+> **慢爬可重入/可續跑**：靠磁碟快取＋TTL，已抓且未過期的會被「秒跳過」，所以中途睡眠/關機都沒關係，
+> 下次再跑會自動跳過已抓的、接著抓還沒抓的。全市場跑完後，整季都讀磁碟、幾乎不再打 FinMind；
+> 過季後 TTL 到期再慢慢重爬。**同時只允許一個慢爬**（重複觸發會回 `already running`）。
+
+> 若你用「待機 + 遠端喚醒」省電：`PREFETCH_TIMES=07:30` 保證晨報前暖好焦點股就夠用；`CRAWL_TIMES`
+> 留空、想讓財報慢慢長滿全市場時，喚醒後手動跑一次 `--full`（背景續跑）即可。
 
 ### 校正 / 重設「本月 AI 花費」數字（首頁橫幅）
 

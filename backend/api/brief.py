@@ -1,6 +1,8 @@
 """晨報端點（M1 step 5；M1 驗收：POST /brief/morning → 瀏覽器看得到完整頁面）。"""
 from __future__ import annotations
 
+import threading
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
@@ -9,6 +11,9 @@ from reports import morning_brief
 from reports.web_renderer import render_history_html, render_report_html
 
 router = APIRouter(tags=["brief"])
+
+# 全市場財報慢爬的單例守門：同時只跑一個（可重入靠磁碟快取續跑）
+_crawl_state: dict[str, bool] = {"running": False}
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -53,16 +58,36 @@ async def post_morning(
 
 
 @router.post("/brief/prefetch")
-async def post_prefetch(force: bool = Query(default=False)) -> dict:
-    """（可選）預抓 watchlist 基本面到磁碟快取，讓之後的晨報少打 FinMind。
+async def post_prefetch(
+    scope: str = Query(default="focus"),       # focus=當天焦點股(快) / full=焦點優先再慢慢掃全市場
+    force: bool = Query(default=False),
+    max_seconds: float | None = Query(default=None),
+) -> dict:
+    """（可選）預抓基本面到磁碟快取，讓之後的晨報少打 FinMind。
 
-    循序跑、會被 finmind rate limiter 節流（可能數分鐘），故丟到 threadpool 不卡事件迴圈。
+    scope=focus：循序跑、被 finmind limiter 節流（數分鐘），丟 threadpool 等它完成回結果。
+    scope=full ：全市場慢爬可數小時～23h，改「背景 detached 執行」立刻回，避免 HTTP timeout；
+                 同一時間只允許一個爬蟲（可重入：靠磁碟快取續跑）。
     """
     from starlette.concurrency import run_in_threadpool
 
     from processor.prefetch_fundamentals import prefetch
 
-    return await run_in_threadpool(prefetch, force=force)
+    if scope == "full":
+        if _crawl_state["running"]:
+            return {"started": False, "reason": "full crawl already running"}
+
+        def _run() -> None:
+            _crawl_state["running"] = True
+            try:
+                prefetch(scope="full", force=force, max_seconds=max_seconds)
+            finally:
+                _crawl_state["running"] = False
+
+        threading.Thread(target=_run, name="fundamentals-crawl", daemon=True).start()
+        return {"started": True, "scope": "full", "background": True}
+
+    return await run_in_threadpool(prefetch, scope=scope, force=force, max_seconds=max_seconds)
 
 
 @router.get("/brief/status")
