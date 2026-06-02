@@ -43,12 +43,13 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 
 請涵蓋以下 sections（依序，標題請照用）：
 - 「今日美股摘要」：美股四大指數表現與風險情緒（features.us_crypto.assets）。
-- 「加密貨幣」：BTC 走勢與其風險情緒含義。
+- 「加密貨幣」：BTC/ETH/SOL 走勢與其對風險情緒的含義（features.us_crypto.assets 的 BTC/ETH/SOL）。
 - 「跨市場連動」：美股（尤其費半 SOX）與加密對「隔日台股」的可能影響；用 features.linkage 把費半/那斯達克對應到台股族群（半導體/AI伺服器/PCB…），只能說可能影響。
 - 「台股大盤」：加權指數技術面（features.tw.index）。
 - 「台股族群觀察」：哪些族群轉強/轉弱（features.tw.sectors 的平均報酬、外資合計買超、領漲股）。
 - 「籌碼面觀察」：三大法人動向、連續買超、外資買賣超排行（features.tw.stocks 的 *_net_streak / foreign_net_buy_5d_lots、features.tw.movers）；並點出**融資融券與資券比**的警訊（features.tw.stocks 的 margin_balance_lots / margin_chg_5d_lots / short_margin_ratio_pct、movers.top_short_margin_ratio），例如融資快速增加或資券比偏高代表追高/軋空風險。
 - 「技術面觀察」：相對大盤強弱（vs_index_20d_pct）、是否站上均線等。
+- 「基本面觀察」：focus 標的若有 fundamentals（月營收億元 + YoY/MoM%），點出營收成長/衰退與其與股價走勢是否一致（features.tw.stocks[].fundamentals）。沒有就略過。
 
 接著填兩份觀察清單（都不是買賣建議）：
 - **tw_watchlist（正向，5 檔）**：訊號偏多、值得關注者——族群轉強、法人連續買超、相對大盤強、站上均線。從 features.tw.movers.top_gainers_5d / top_foreign_buy_5d 與 sectors 強勢族群挑。
@@ -69,9 +70,10 @@ QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Disco
 
 
 def build_qa_prompt(
-    question: str, report: dict[str, Any], on_demand: dict[str, Any] | None = None
+    question: str, report: dict[str, Any], on_demand: dict[str, Any] | None = None,
+    fundamentals: dict[str, Any] | None = None,
 ) -> str:
-    """組出 Discord 即時查詢 prompt：規則 + 今日晨報 + features + 即時查詢標的 + 問題。"""
+    """組出 Discord 即時查詢 prompt：規則 + 今日晨報 + features + 即時標的 + 基本面 + 問題。"""
     markdown = report.get("markdown", "")
     features_json = json.dumps(report.get("features", {}), ensure_ascii=False)
     od_block = ""
@@ -81,11 +83,17 @@ def build_qa_prompt(
             f"即時查詢標的資料（清單外，現抓；籌碼單位張、資券比=融券/融資%）：\n"
             f"```json\n{od_json}\n```\n\n"
         )
+    fu_block = ""
+    if fundamentals:
+        fu_block = (
+            f"基本面（月營收，金額億元、YoY/MoM%）：\n"
+            f"```json\n{json.dumps(fundamentals, ensure_ascii=False)}\n```\n\n"
+        )
     return (
         f"{QA_RULES}\n\n"
         f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
         f"可引用的 features JSON：\n```json\n{features_json}\n```\n\n"
-        f"{od_block}"
+        f"{od_block}{fu_block}"
         f"使用者問題：{question}\n\n請依規則精簡作答。"
     )
 

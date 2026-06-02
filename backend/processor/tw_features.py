@@ -186,11 +186,17 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
     movers = _movers(all_stocks)
     # 只把「movers 出現過的標的」的明細丟給 AI（全市場 2000+ 檔不能全塞進 prompt）
     focus = {it["symbol"] for lst in movers.values() for it in lst}
-    # 丟給 AI 前移除內部用的底線欄位（_amount 等）
-    stocks = {
-        s: {k: v for k, v in all_stocks[s].items() if not k.startswith("_")}
-        for s in focus if s in all_stocks
-    }
+    # 丟給 AI 前移除內部用的底線欄位（_amount 等）；並補基本面（月營收 YoY/MoM）
+    from processor.fundamentals import build_fundamentals
+    stocks = {}
+    for s in focus:
+        if s not in all_stocks:
+            continue
+        entry = {k: v for k, v in all_stocks[s].items() if not k.startswith("_")}
+        fu = build_fundamentals(s)
+        if fu:
+            entry["fundamentals"] = fu
+        stocks[s] = entry
 
     as_of = max(as_of_dates) if as_of_dates else (index_block or {}).get("as_of")
     return {

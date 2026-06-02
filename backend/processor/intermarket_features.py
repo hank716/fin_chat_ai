@@ -23,9 +23,14 @@ ASSETS: list[tuple[str, str, str]] = [
     ("DJI", "us", "Dow Jones"),
     ("SOX", "us", "費城半導體"),
     ("BTC", "crypto", "Bitcoin"),
+    ("ETH", "crypto", "Ethereum"),
+    ("SOL", "crypto", "Solana"),
 ]
 
-CORR_PAIRS = [("BTC", "NASDAQ"), ("BTC", "SOX"), ("SOX", "NASDAQ"), ("SP500", "NASDAQ")]
+CORR_PAIRS = [
+    ("BTC", "NASDAQ"), ("BTC", "SOX"), ("SOX", "NASDAQ"), ("SP500", "NASDAQ"),
+    ("ETH", "BTC"), ("ETH", "NASDAQ"), ("SOL", "BTC"),
+]
 
 
 def _clean(v: Any) -> Any:

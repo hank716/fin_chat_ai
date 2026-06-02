@@ -27,6 +27,8 @@ INTERMARKET_SYMBOLS: list[tuple[str, str, str]] = [
     ("^SOX", "SOX", "us"),        # 費城半導體（與台股最相關）
     ("^TWII", "TWII", "tw"),      # 台股加權指數（大盤）
     ("BTC-USD", "BTC", "crypto"),
+    ("ETH-USD", "ETH", "crypto"),
+    ("SOL-USD", "SOL", "crypto"),
 ]
 
 

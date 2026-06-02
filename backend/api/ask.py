@@ -75,7 +75,14 @@ async def ask(req: AskRequest) -> AskResponse:
 
     known = set((report.get("features", {}).get("tw", {}) or {}).get("stocks", {}).keys())
     on_demand = _ondemand_symbols(req.question, known)
-    prompt = build_qa_prompt(req.question, report, on_demand=on_demand)
+    # 基本面（月營收 YoY/MoM）：對問題中的台股代號 on-demand 抓
+    from processor.fundamentals import build_fundamentals
+    fundamentals: dict = {}
+    for sym in _TW_CODE.findall(req.question)[:3]:
+        fu = build_fundamentals(sym)
+        if fu:
+            fundamentals[sym] = fu
+    prompt = build_qa_prompt(req.question, report, on_demand=on_demand, fundamentals=fundamentals)
     try:
         answer, usage = gemini_client.generate_text(prompt, use_search=True)
     except GeminiQuotaExceeded as exc:

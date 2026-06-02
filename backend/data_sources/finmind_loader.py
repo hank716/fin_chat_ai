@@ -94,6 +94,14 @@ def fetch_stock_prices_normalized(
     return out
 
 
+def get_month_revenue(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔月營收（revenue 元 / revenue_year / revenue_month）。"""
+    return _request(
+        "TaiwanStockMonthRevenue",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
 def get_taiwan_stock_news(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     """單檔近期新聞（date / stock_id / link / source / title）。"""
     return _request("TaiwanStockNews", {"data_id": stock_id, "start_date": start_date})
