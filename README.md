@@ -19,7 +19,7 @@
 - [x] M2 — 移植 finflow 抓取層 ✅ (rate_limiter/twse/finmind + parquet sink + storage_monitor + `/storage`) + US/crypto loader + universe 過濾 + FinMind 歷史 backfill
 - [x] **M2-report** — 完整台股晨報 ✅ (台股 universe/族群 + 價格/籌碼/融資券 backfill + tw_features + 新聞 fact 層 + 敘事報告 BriefResult：正向/負向候選、資券比、跨市場連動)
 - [x] M3 — Scheduler + catch-up ✅ (APScheduler 每日 08:30 + 啟動補產；`GET /brief/status`)
-- [~] M4 — Discord 互動 bot + 成本上限 ✅ 程式完成（每日摘要推送 §6.3 + `/ask` grounded Q&A + per-user 成本上限 + 頻道/使用者權限）；**待補**：.env 換正確 Bot Token（目前是 Client Secret）後 bot 即可上線
+- [x] M4 — Discord 互動 bot + 成本上限 ✅ (每日摘要推送 §6.3 + `/ask` grounded Q&A + per-user 成本上限 + 頻道/使用者權限；FinBot 已上線、每日摘要實測推送成功)
 - [x] M5 — Guardrail + 新聞分層 ✅ (六道 verification guard：source/metric/symbol/news-citation/advice/causality；新聞 authoritative/social 分層；報告顯示攔截狀態)
 - [ ] M6 — Supabase publish + pCloud backup + Cloudflare Access
 - [ ] M7 — 檔案級保留/清理 + pCloud 回補
