@@ -81,7 +81,8 @@ def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str
 
 
 def generate_morning_brief(
-    raw_query: str | None = None, *, refresh_tw: bool = True, push_discord: bool = False
+    raw_query: str | None = None, *, refresh_tw: bool = True,
+    push_discord: bool = False, publish: bool = False,
 ) -> dict[str, Any]:
     generated_at = datetime.now(ZoneInfo(settings.tz))
 
@@ -122,15 +123,25 @@ def generate_morning_brief(
 
     # 5) 存檔
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    (REPORTS_DIR / f"{report_id}.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (REPORTS_DIR / f"{report_id}.md").write_text(report["markdown"], encoding="utf-8")
+    json_path = REPORTS_DIR / f"{report_id}.json"
+    md_path = REPORTS_DIR / f"{report_id}.md"
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(report["markdown"], encoding="utf-8")
     logger.info("morning brief %s 產生完成 (landed=%s)", report_id, landed)
 
+    # 6) Discord 推送
+    pushed = False
     if push_discord:
         from notify.discord import send_daily_summary
-        send_daily_summary(report)
+        pushed = send_daily_summary(report)
+
+    # 7) 發布：pCloud 冷備份 + Supabase report_index 暖索引
+    if publish:
+        from publish import pcloud_backup, supabase_publish
+        pcloud_paths = pcloud_backup.backup_report(json_path, md_path)
+        supabase_publish.publish_report_index(
+            report, pcloud_paths=pcloud_paths, discord_pushed=pushed
+        )
 
     return report
 

@@ -15,10 +15,11 @@ router = APIRouter(tags=["brief"])
 async def post_morning(
     raw_query: str | None = Query(default=None),
     push_discord: bool = Query(default=True),
+    publish: bool = Query(default=True),
 ) -> dict:
     try:
         report = morning_brief.generate_morning_brief(
-            raw_query=raw_query, push_discord=push_discord
+            raw_query=raw_query, push_discord=push_discord, publish=publish
         )
     except GeminiQuotaExceeded as exc:
         raise HTTPException(
