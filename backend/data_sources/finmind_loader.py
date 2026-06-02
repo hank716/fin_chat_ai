@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config import settings
 from . import rate_limiter
@@ -21,8 +21,29 @@ class FinMindError(RuntimeError):
     pass
 
 
+class FinMindIPBanned(FinMindError):
+    """FinMind 因超量暫時封鎖本機 IP（HTTP 403 `ip banned`）。
+
+    `retry_after` 為 FinMind 回報的「還需等候秒數」，到期後自動解除。
+    刻意不在 `_request` 層做快速重試——封鎖通常長達數百~上千秒，
+    秒級重試只會持續打 API、無助於解除，交由呼叫端（backfill）決定等候/中止。
+    """
+
+    def __init__(self, retry_after: int, detail: str = "") -> None:
+        self.retry_after = retry_after
+        msg = f"FinMind IP banned, retry_after={retry_after}s"
+        super().__init__(f"{msg} {detail}".strip())
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """transient 錯誤（連線/逾時/一般 FinMindError）可重試；IP 封鎖不重試。"""
+    if isinstance(exc, FinMindIPBanned):
+        return False
+    return isinstance(exc, (httpx.RequestError, FinMindError))
+
+
 @retry(
-    retry=retry_if_exception_type((httpx.RequestError, FinMindError)),
+    retry=retry_if_exception(_should_retry),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True,
@@ -33,7 +54,16 @@ def _request(dataset: str, params: dict[str, Any] | None = None) -> list[dict[st
     with httpx.Client(timeout=TIMEOUT) as client:
         resp = client.get(BASE_URL, params=payload)
     if resp.status_code != 200:
-        raise FinMindError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        detail = resp.text[:200]
+        if resp.status_code == 403:
+            # FinMind 超量封鎖：{"msg":"ip banned","status":403,"retry_after":1653}
+            try:
+                j = resp.json()
+            except ValueError:
+                j = {}
+            if "ban" in str(j.get("msg", "")).lower():
+                raise FinMindIPBanned(int(j.get("retry_after") or 0), detail)
+        raise FinMindError(f"HTTP {resp.status_code}: {detail}")
     body = resp.json()
     if body.get("status") != 200:
         raise FinMindError(f"FinMind status={body.get('status')} msg={body.get('msg')}")

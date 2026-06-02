@@ -42,6 +42,11 @@ def build_universe_cache() -> dict[str, Any]:
         sid, t = r.get("stock_id"), r.get("type")
         if t not in INCLUDE_TYPES or not sid or sid in symbols:
             continue
+        # FinMind TaiwanStockInfo 會夾帶產業/指數別的「非個股」列（stock_id 是
+        # Semiconductor / TAIEX / TPEx 等英文字），台股真實代號一律數字開頭
+        # （含 ETF 0050/00878、含字尾 00679B），用此過濾掉那些髒列。
+        if not sid[:1].isdigit():
+            continue
         symbols[sid] = {
             "name": r.get("stock_name") or sid,
             "sector": r.get("industry_category") or "其他",

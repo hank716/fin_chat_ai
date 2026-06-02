@@ -25,7 +25,13 @@ class Quota:
 
 # 各 provider 的保守上限（FinMind 免費 600 req/h；TWSE/TPEx 不可暴力掃）
 QUOTAS: dict[str, Quota] = {
-    "finmind": Quota(rate_per_sec=0.5, burst=10),  # 600 req/h ~= 0.16/s, 取 0.5 留給多 worker 共用
+    # FinMind 0.5/s：給延遲敏感的互動路徑（一次冷快取晨報 ~225 calls，0.5/s 約 7~8 分、
+    # 單次仍 < 600/h）留速度。防「整點額度爆掉被封 IP」靠結構面而非壓死此速率：
+    #   1) 全市場初始化改用 backfill_tw_market（走 TWSE/TPEx，完全不打 FinMind）
+    #   2) 跨 process 節流已修正（_try_consume 用 wall clock，docker exec 與 backend 共享同桶）
+    #   3) 全市場財報慢爬 reentrant 且容忍 403（FinMindIPBanned 被逐檔 except 接住、可續跑）
+    # burst 30：讓熱快取晨報的 ~24 則新聞請求瞬間完成、不被逐筆節流。
+    "finmind": Quota(rate_per_sec=0.5, burst=30),
     "twse": Quota(rate_per_sec=1.0, burst=5),
     "tpex": Quota(rate_per_sec=1.0, burst=5),
     "yahoo": Quota(rate_per_sec=2.0, burst=10),
@@ -72,7 +78,10 @@ def _try_consume(cli: redis.Redis, provider: str, cost: int, quota: Quota) -> bo
     不用 Lua：簡單性。MVP 流量低, 不是熱路徑。
     """
     key = _key(provider)
-    now = time.monotonic()
+    # 用 wall clock (time.time) 而非 monotonic：last 時間戳存在「跨 process 共享」的
+    # Redis，monotonic 的原點每個 process／每次重啟都不同，跨容器讀回來的差值無意義
+    # → 等於沒在 throttle（多容器一起灌就爆額度）。wall clock 全機一致，可正確補 token。
+    now = time.time()
     with cli.pipeline() as pipe:
         for _ in range(3):  # 重試 race
             try:
@@ -80,8 +89,9 @@ def _try_consume(cli: redis.Redis, provider: str, cost: int, quota: Quota) -> bo
                 state = cli.hgetall(key)
                 tokens = float(state.get("tokens", quota.burst))
                 last = float(state.get("last", now))
-                # 補 token
-                tokens = min(quota.burst, tokens + (now - last) * quota.rate_per_sec)
+                # 補 token（max(0, ..) 防 NTP 校時/時鐘回退把 elapsed 算成負數而扣 token）
+                elapsed = max(0.0, now - last)
+                tokens = min(quota.burst, tokens + elapsed * quota.rate_per_sec)
                 if tokens < cost:
                     pipe.unwatch()
                     return False

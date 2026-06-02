@@ -118,14 +118,20 @@ docker logs ai-market-cloudflared 2>&1 | grep -i registered   # tunnel 已連線
 **A. 直接重新抓（推薦）**
 
 ```bash
-# 回補台股 watchlist 近 90 交易日 價/籌碼/融資券（約 1~2 分鐘，FinMind rate limit）
-docker exec ai-market-backend python -m data_sources.backfill_tw 90
+# 回補全台股近 90 交易日 價/籌碼/融資券（TWSE/TPEx 全市場單日端點，不走 FinMind、不會被 ban）
+# watchlist 自 M8 起為全台股 ~2700 檔，務必用 _market 版；勿用 backfill_tw（逐檔打 FinMind 會爆 600/hr 被封 IP）
+docker exec ai-market-backend python -m data_sources.backfill_tw_market 90
 
 # 立刻產一份晨報（會抓美股/加密/台股、跑 AI、存檔、推 Discord、備份 pCloud、寫 Supabase）
 curl -s -X POST "localhost:8000/brief/morning"
 
 # 瀏覽器開 https://www.hank-finflow.com/  （Cloudflare Access 登入後看歷史列表）
 ```
+
+> 少量指定標的或 on-demand 單檔才用 FinMind 逐檔版：
+> `docker exec ai-market-backend python -m data_sources.backfill_tw 90`
+> 遇 FinMind IP 封鎖（403 ip banned）時它會自動等 `retry_after` 後從中斷處續跑；
+> 加 `--no-wait` 則立即中止（退出碼 2），不自動等候。
 
 > 若不想初始化時就推 Discord / 發布，可加參數：
 > `curl -s -X POST "localhost:8000/brief/morning?push_discord=false&publish=false"`
