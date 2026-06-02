@@ -25,10 +25,11 @@ class Settings(BaseSettings):
 
     # ── LLM（Gemini-only）──
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-flash-latest"          # 泛用/相容用預設
-    gemini_model_brief: str = "gemini-3.1-pro-preview"  # 每日晨報用 PRO（品質優先）
-    gemini_model_qa: str = "gemini-3.5-flash"           # 平日問答用 Flash（快又省）
-    daily_cost_limit_twd: int = 30
+    gemini_model: str = "gemini-flash-latest"        # 泛用/相容用預設
+    gemini_model_brief: str = "gemini-pro-latest"     # 每日晨報用 PRO latest（品質優先）
+    gemini_model_qa: str = "gemini-flash-latest"      # 平日問答用 Flash latest（快又省）
+    daily_cost_limit_twd: int = 30                    # 每日全站總花費上限（晨報+問答）
+    monthly_cost_limit_twd: int = 600                 # 每月全站總花費上限（對齊後台預算）
 
     # ── Discord（1 guild / 3 channels / 2 users）──
     discord_token: str = ""

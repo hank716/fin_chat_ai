@@ -38,7 +38,8 @@ def build_discord_summary(report: dict[str, Any]) -> str:
     sectors = tw.get("sectors", {}) or {}
 
     parts: list[str] = []
-    parts.append(f"📊 每日市場晨報｜{report.get('data_as_of', '')} 08:30")
+    rdate = report.get("report_date") or report.get("data_as_of", "")
+    parts.append(f"📊 每日市場晨報｜{rdate} 08:30（資料日 {report.get('data_as_of','')}）")
     parts.append(f"\n**簡短結論**\n{report.get('headline', '')}")
 
     # 主要指數
@@ -91,7 +92,11 @@ def build_discord_summary(report: dict[str, Any]) -> str:
         parts.append(f"🛡️ Guardrail：{status}")
     cost = report.get("cost") or {}
     if cost:
-        parts.append(f"💰 {cost.get('month','本月')} AI 花費累計：NT${cost.get('month_total_twd',0):.2f}")
+        parts.append(
+            f"💰 {cost.get('month','本月')} AI 花費 NT${cost.get('month_total_twd',0):.2f}"
+            f" / NT${cost.get('monthly_limit_twd',0):.0f}"
+            f"（今日 NT${cost.get('day_total_twd',0):.2f}）"
+        )
     parts.append("\n_此結果僅供家庭內部市場研究使用，不構成投資建議。_")
 
     text = "\n\n".join(parts)

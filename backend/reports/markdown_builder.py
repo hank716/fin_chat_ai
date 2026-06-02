@@ -96,8 +96,10 @@ def build_markdown(
     ]
     if cost:
         source_lines.append(
-            f"- AI 花費：本篇 NT${cost.get('brief_twd', 0):.4f}"
-            f"，{cost.get('month', '')} 本月累計 NT${cost.get('month_total_twd', 0):.2f}"
+            f"- AI 花費（全站）：本篇 NT${cost.get('brief_twd', 0):.4f}"
+            f"・今日 NT${cost.get('day_total_twd', 0):.2f}"
+            f"・{cost.get('month', '')} 本月 NT${cost.get('month_total_twd', 0):.2f}"
+            f" / NT${cost.get('monthly_limit_twd', 0):.0f}"
         )
     parts.append("## 資料來源\n\n" + "\n".join(source_lines))
     parts.append(

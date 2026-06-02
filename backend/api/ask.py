@@ -60,10 +60,10 @@ class AskResponse(BaseModel):
 
 @router.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest) -> AskResponse:
-    ok, spent, limit = tracker.check_budget(req.user_id)
+    ok, reason, spent, limit = tracker.check_budget()
     if not ok:
         return AskResponse(
-            answer=f"今日 AI 查詢額度已用完（NT${spent:.1f} / NT${limit:.0f}），明天再試或調整上限。",
+            answer=f"{reason}。請明天再試或調整上限。",
             report_id="", cost_twd=0.0, today_spent=spent, daily_limit=limit,
             budget_exceeded=True,
         )
@@ -87,15 +87,16 @@ async def ask(req: AskRequest) -> AskResponse:
     cost = tracker.estimate_cost_twd(
         usage["input_tokens"], usage["output_tokens"], model=settings.gemini_model_qa
     )
-    total = tracker.record_cost(req.user_id, cost)
-    logger.info("ask user=%s tokens=%s cost=NT$%.4f total=NT$%.2f",
-                req.user_id, usage, cost, total)
+    tracker.record_cost(cost)
+    day_total = tracker.today_total()
+    logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",
+                req.user_id, usage, cost, day_total)
     answer = (answer or "（無回應）") + \
         "\n\n⚠️ 以上方向/目標價/止損為技術面輔助參考，非保證、請自行判斷風險。"
     return AskResponse(
         answer=answer,
         report_id=rid,
         cost_twd=cost,
-        today_spent=total,
+        today_spent=day_total,   # 全站今日累計（晨報+所有問答）
         daily_limit=limit,
     )

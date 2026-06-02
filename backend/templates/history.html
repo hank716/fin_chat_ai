@@ -9,9 +9,9 @@
 {% if reports %}
 {% for r in reports %}
 <a class="hist" href="/report/{{ r.report_id }}">
-  <div class="hist-date">{{ r.data_as_of or r.report_id }}</div>
+  <div class="hist-date">{{ r.report_date or r.data_as_of or r.report_id }}</div>
   <div class="hist-body">
-    <div class="hist-type">{{ r.report_type }}</div>
+    <div class="hist-type">{{ r.report_type }}{% if r.data_as_of %}・資料 {{ r.data_as_of }}{% endif %}</div>
     <div class="hist-head">{{ r.headline }}</div>
   </div>
   <div class="hist-go">›</div>

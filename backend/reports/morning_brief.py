@@ -93,12 +93,14 @@ def generate_morning_brief(
     brief_cost = tracker.estimate_cost_twd(
         usage["input_tokens"], usage["output_tokens"], model=settings.gemini_model_brief
     )
-    tracker.record_cost(tracker.SYSTEM_USER, brief_cost)
+    tracker.record_cost(brief_cost)
     cost_info = {
         "brief_twd": brief_cost,
         "tokens": usage,
         "month": tracker.current_month(),
-        "month_total_twd": tracker.month_total(),  # 全系統本月累計（晨報+查詢）
+        "month_total_twd": tracker.month_total(),       # 全站本月累計（晨報+所有問答）
+        "day_total_twd": tracker.today_total(),          # 全站今日累計
+        "monthly_limit_twd": float(settings.monthly_cost_limit_twd),
     }
     logger.info("晨報 Gemini 花費 NT$%.4f（本月累計 NT$%.2f）",
                 brief_cost, cost_info["month_total_twd"])
@@ -114,6 +116,7 @@ def generate_morning_brief(
     report["cost"] = cost_info
     report_id = f"morning_{generated_at:%Y%m%d_%H%M%S}"
     report["report_id"] = report_id
+    report["report_date"] = generated_at.date().isoformat()  # 晨報日期(今日)，有別於資料日期
     report["features"] = feats
     report["landed_symbols"] = landed
     report["markdown"] = build_markdown(
@@ -189,6 +192,7 @@ def list_reports(limit: int = 120) -> list[dict[str, Any]]:
         out.append({
             "report_id": d.get("report_id", f.stem),
             "report_type": d.get("report_type", "每日跨市場晨報"),
+            "report_date": d.get("report_date"),
             "data_as_of": d.get("data_as_of"),
             "generated_at": d.get("generated_at"),
             "headline": d.get("headline", ""),
