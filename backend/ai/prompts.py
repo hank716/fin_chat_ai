@@ -56,24 +56,35 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 最後填 risks（今日風險提醒，敘事數點）、follow_ups（後續追蹤重點）、news_digest（重要新聞解讀）。"""
 
 
-QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Discord 針對「今日晨報」提問。
+QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Discord 針對市場提問。
 
 規則：
-1. 只能根據下方提供的『今日晨報內容 + features JSON』回答，**不得捏造**任何數字、新聞或事件；報告未涵蓋就說「今日報告未涵蓋，資料不足」。
-2. 區分事實與推論；跨市場關係只能說「可能影響/傾向」，不可斷言因果。
-3. **不得**給買賣建議、目標價、進出場點。可指出值得觀察的方向與風險。
-4. 繁體中文，**精簡作答（盡量 6 句內，適合 Discord 閱讀）**。
-5. 結尾不需附免責聲明（系統會另外加）。"""
+1. 只能根據下方提供的『今日晨報 + features JSON + 即時查詢標的資料』回答，**不得捏造**任何數字、新聞或事件。若這些資料都查不到使用者問的標的，才說「資料不足」。
+2. 若有提供「即時查詢標的資料」（清單外個別標的），請優先用它回答該標的的近期走勢、相對大盤強弱、籌碼（三大法人/融資券/資券比）與風險特性。
+3. 區分事實與推論；跨市場關係只能說「可能影響/傾向」，不可斷言因果。
+4. **不得**給買賣建議、合理價、目標價、進出場點。被問到合理價/該不該買時，**婉拒並改提供可說的資訊**：近期漲跌、波動度、是否站上均線、籌碼動向、該標的類型與風險（例如槓桿/反向 ETF 有每日複利耗損、不適合長抱）。
+5. 繁體中文，**精簡作答（盡量 6 句內，適合 Discord 閱讀）**。
+6. 結尾不需附免責聲明（系統會另外加）。"""
 
 
-def build_qa_prompt(question: str, report: dict[str, Any]) -> str:
-    """組出 Discord 即時查詢 prompt：規則 + 今日晨報(markdown) + features + 問題。"""
+def build_qa_prompt(
+    question: str, report: dict[str, Any], on_demand: dict[str, Any] | None = None
+) -> str:
+    """組出 Discord 即時查詢 prompt：規則 + 今日晨報 + features + 即時查詢標的 + 問題。"""
     markdown = report.get("markdown", "")
     features_json = json.dumps(report.get("features", {}), ensure_ascii=False)
+    od_block = ""
+    if on_demand:
+        od_json = json.dumps(on_demand, ensure_ascii=False)
+        od_block = (
+            f"即時查詢標的資料（清單外，現抓；籌碼單位張、資券比=融券/融資%）：\n"
+            f"```json\n{od_json}\n```\n\n"
+        )
     return (
         f"{QA_RULES}\n\n"
         f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
         f"可引用的 features JSON：\n```json\n{features_json}\n```\n\n"
+        f"{od_block}"
         f"使用者問題：{question}\n\n請依規則精簡作答。"
     )
 

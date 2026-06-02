@@ -10,13 +10,18 @@
 """
 from __future__ import annotations
 
+import logging
 import math
+from datetime import date, timedelta
+from functools import lru_cache
 from typing import Any
 
 import pandas as pd
 
 import universe
 from storage import local_store
+
+logger = logging.getLogger("ai-market-backend.tw_features")
 
 TW_MARKET = "tw"
 INDEX_SYMBOL = "TWII"
@@ -221,4 +226,70 @@ def _movers(stocks: dict[str, Any], top: int = 5) -> dict[str, Any]:
         "top_foreign_sell_5d": _rank("foreign_net_buy_5d_lots", False),
         "top_short_margin_ratio": _rank("short_margin_ratio_pct", True),
         "top_below_index_20d": _rank("vs_index_20d_pct", False),
+    }
+
+
+# ── 即時查單一標的（清單外，給 Discord /ask 用）─────────────────────────
+
+@lru_cache(maxsize=1)
+def _finmind_names() -> dict[str, str]:
+    """{stock_id: stock_name} 快取（給清單外標的顯示中文名）。"""
+    try:
+        from data_sources import finmind_loader
+        return {r["stock_id"]: r["stock_name"] for r in finmind_loader.get_taiwan_stock_info()}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("FinMind 股名清單取得失敗: %s", exc)
+        return {}
+
+
+def _is_stale(df: pd.DataFrame, max_age_days: int = 4) -> bool:
+    if df.empty:
+        return True
+    last = pd.to_datetime(df["trade_date"]).max().date()
+    return (date.today() - last).days > max_age_days
+
+
+def _fetch_and_land(symbol: str) -> None:
+    """即時抓單檔近 120 日價/籌/資券並落 parquet（idempotent upsert，順便快取）。"""
+    from data_sources import finmind_loader
+    from data_sources.ingest import _dq_filter
+
+    end = date.today()
+    s, e = (end - timedelta(days=120)).isoformat(), end.isoformat()
+    for fetch, write in (
+        (finmind_loader.fetch_stock_prices_normalized, local_store.write_prices),
+        (finmind_loader.fetch_stock_chip_normalized, local_store.write_chip),
+        (finmind_loader.fetch_stock_margin_normalized, local_store.write_margin),
+    ):
+        try:
+            rows = _dq_filter(fetch(symbol, s, e))
+            if rows:
+                write(rows, TW_MARKET)
+        except Exception as exc:  # noqa: BLE001 — 單一資料類失敗不阻斷
+            logger.warning("即時抓 %s (%s) 失敗: %s", symbol, fetch.__name__, exc)
+
+
+def build_adhoc_symbol(symbol: str) -> dict[str, Any] | None:
+    """即時查清單外台股的技術面+籌碼+資券（不在每日 universe）。查無資料回 None。"""
+    df = local_store.read_prices(symbol, TW_MARKET)
+    if _is_stale(df):
+        _fetch_and_land(symbol)
+        df = local_store.read_prices(symbol, TW_MARKET)
+    price = _price_block(df)
+    if price is None:
+        return None
+    ret20 = price.pop("_ret20_raw", None)
+    index_block = _price_block(local_store.read_prices(INDEX_SYMBOL, TW_MARKET))
+    index_ret20 = index_block.get("_ret20_raw") if index_block else None
+    vs_index = (
+        round(ret20 - index_ret20, 2)
+        if ret20 is not None and index_ret20 is not None else None
+    )
+    return {
+        "name": _finmind_names().get(symbol, symbol),
+        "sector": "查詢標的（非每日追蹤清單）",
+        **price,
+        "vs_index_20d_pct": vs_index,
+        **_chip_block(local_store.read_chip(symbol, TW_MARKET)),
+        **_margin_block(local_store.read_margin(symbol, TW_MARKET)),
     }

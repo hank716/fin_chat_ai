@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -14,7 +15,29 @@ from ai import gemini_client
 from ai.gemini_client import GeminiError, GeminiQuotaExceeded
 from ai.prompts import build_qa_prompt
 from cost import tracker
+from processor import tw_features
 from reports import morning_brief
+
+# 台股代號：4–6 位數字 + 可選 1 個字母後綴（如 2330 / 0050 / 00685L / 00919）
+_TW_CODE = re.compile(r"(?<!\d)(\d{4,6}[A-Z]?)(?!\d)")
+
+
+def _ondemand_symbols(question: str, known: set[str], limit: int = 3) -> dict:
+    """抓問題中清單外的台股代號 → 即時查其資料（查無/失敗則略過）。"""
+    out: dict = {}
+    for sym in _TW_CODE.findall(question):
+        if sym in known or sym in out:
+            continue
+        try:
+            blk = tw_features.build_adhoc_symbol(sym)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("即時查 %s 失敗: %s", sym, exc)
+            blk = None
+        if blk:
+            out[sym] = blk
+        if len(out) >= limit:
+            break
+    return out
 
 logger = logging.getLogger("ai-market-backend.ask")
 
@@ -50,7 +73,9 @@ async def ask(req: AskRequest) -> AskResponse:
     if report is None:
         raise HTTPException(status_code=404, detail="尚無晨報可查詢，請先產生晨報")
 
-    prompt = build_qa_prompt(req.question, report)
+    known = set((report.get("features", {}).get("tw", {}) or {}).get("stocks", {}).keys())
+    on_demand = _ondemand_symbols(req.question, known)
+    prompt = build_qa_prompt(req.question, report, on_demand=on_demand)
     try:
         answer, usage = gemini_client.generate_text(prompt)
     except GeminiQuotaExceeded as exc:
