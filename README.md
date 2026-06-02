@@ -24,6 +24,46 @@
 - [x] M6 — Supabase publish + pCloud backup + Cloudflare Access ✅ (pCloud 報告備份 + Cloudflare tunnel/Access + Supabase report_index 發布 + 首頁歷史列表；report_index 實測寫入成功)
 - [x] M8 — 全台股 universe + 基本面 + 多 crypto ✅ (FinMind 全清單2728檔/57產業別族群；TWSE/TPEx 市場級回補；tw_features 全市場 movers/sectors(聚焦曝光給AI)；月營收 YoY/MoM on-demand；ETH/SOL)
 - [x] M7 — 檔案級保留/清理 + pCloud 回補 ✅ (retention：本機留最近90篇報告+清 adhoc parquet 快取；pCloud 冷儲存回補；晨報只在台股交易日產生；研究工具 google_search/url_context/code_execution)
+- [ ] **M9 — 完整財報（季報 / 損益表 / 資產負債表 / 現金流）** 🚧 規劃中（見下方）
+
+## M9 — 完整財報（規劃中）
+
+**現況**：M8 只做了**月營收 YoY/MoM**（on-demand，`backend/processor/fundamentals.py`），
+財報層 `EPS/季報留後續`（見該檔註解）。AI 晨報目前仍標註「尚未納入完整財報資料」。
+
+**目標**：對焦點標的（movers / watchlist / 問答標的）on-demand 抓取**完整財報**，
+讓 AI 推理能引用真實財報數字（仍受 guardrail metric/source 驗證）。
+
+**範圍（FinMind dataset）**：
+
+| 資料 | FinMind dataset | 用途 |
+|------|-----------------|------|
+| 損益表（季） | `TaiwanStockFinancialStatements` | 營收/毛利/營業利益/稅後淨利、毛利率/營益率/淨利率 |
+| 資產負債表 | `TaiwanStockBalanceSheet` | 負債比、流動比、權益 |
+| 現金流量表 | `TaiwanStockCashFlowsStatement` | 營業/投資/籌資現金流、自由現金流 |
+| EPS / 每股 | 由損益表 + 股本推算 / `TaiwanStockFinancialStatements` | 季 EPS、近四季累計 EPS、本益比 |
+| 股利政策 | `TaiwanStockDividend` | 現金/股票股利、殖利率 |
+
+**實作要點**：
+
+1. `finmind_loader` 新增 `get_financial_statements / get_balance_sheet / get_cashflow / get_dividend`（單檔、走 rate_limiter，FinMind 免費 600 req/hr）。
+2. `processor/fundamentals.py` 擴充 `build_fundamentals()`：月營收 + 近四季 EPS/毛利率/營益率 + 負債比 + 現金流摘要，沿用 `lru` 季度快取（季報季更，當日不重抓）。
+3. `morning_brief` / `ask`：把財報摘要餵進 grounded 研究稿，並更新「尚未納入完整財報」字樣為實際數字。
+4. **guardrail**：財報數字一律掛 `source=FinMind + 期別`，過 metric/source 驗證；推算值（如本益比）標示為衍生指標。
+5. 全市場 2000+ 檔不全抓 → 維持 on-demand + 焦點標的策略（對齊 design §5.2）。
+
+**驗收**：晨報焦點標的可顯示近四季 EPS / 毛利率 / 負債比 / 自由現金流，且 guardrail 0 error。
+
+## 成本 / 預算現況
+
+全站總花費（晨報 + 所有人問答）以 token × 模型費率估算（`backend/cost/tracker.py`），上限在 `.env` 可調（`backend/config.py`）：
+
+- **每日上限** `DAILY_COST_LIMIT_TWD = 30`
+- **每月上限** `MONTHLY_COST_LIMIT_TWD = 600`
+- **本月實際累計（後台）：約 NT$66.76 / NT$600.00**（約 11%，餘裕充足）
+
+> 晨報主推理改連網兩段式（PRO 研究 + Flash 格式化）後，單篇約 NT$8；以月用量推估遠在預算內。
+> M9 完整財報為 on-demand 抓取（FinMind，無 LLM 成本），主要增量在 token（財報摘要餵入研究稿），仍受每日/每月上限保護。
 
 ## 本機啟動（M0）
 
