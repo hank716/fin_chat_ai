@@ -20,7 +20,7 @@
 - [x] **M2-report** — 完整台股晨報 ✅ (台股 universe/族群 + 價格/籌碼/融資券 backfill + tw_features + 新聞 fact 層 + 敘事報告 BriefResult：正向/負向候選、資券比、跨市場連動)
 - [x] M3 — Scheduler + catch-up ✅ (APScheduler 每日 08:30 + 啟動補產；`GET /brief/status`)
 - [ ] M4 — Discord 互動 bot + 成本上限
-- [ ] M5 — Guardrail + 新聞分層
+- [x] M5 — Guardrail + 新聞分層 ✅ (六道 verification guard：source/metric/symbol/news-citation/advice/causality；新聞 authoritative/social 分層；報告顯示攔截狀態)
 - [ ] M6 — Supabase publish + pCloud backup + Cloudflare Access
 - [ ] M7 — 檔案級保留/清理 + pCloud 回補
 
