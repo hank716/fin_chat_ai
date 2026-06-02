@@ -49,7 +49,7 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 - 「台股族群觀察」：哪些族群轉強/轉弱（features.tw.sectors 的平均報酬、外資合計買超、領漲股）。
 - 「籌碼面觀察」：三大法人動向、連續買超、外資買賣超排行（features.tw.stocks 的 *_net_streak / foreign_net_buy_5d_lots、features.tw.movers）；並點出**融資融券與資券比**的警訊（features.tw.stocks 的 margin_balance_lots / margin_chg_5d_lots / short_margin_ratio_pct、movers.top_short_margin_ratio），例如融資快速增加或資券比偏高代表追高/軋空風險。
 - 「技術面觀察」：相對大盤強弱（vs_index_20d_pct）、是否站上均線等。
-- 「基本面觀察」：focus 標的若有 fundamentals（月營收億元 + YoY/MoM%），點出營收成長/衰退與其與股價走勢是否一致（features.tw.stocks[].fundamentals）。沒有就略過。
+- 「基本面觀察」：focus 標的若有 fundamentals 就帶入（features.tw.stocks[].fundamentals）。月營收（revenue_100m 億元 + YoY/MoM%）點出成長/衰退與股價是否一致；季財報（fiscal_quarter）若有則點出 EPS（eps_quarter 當季、eps_ttm 近四季）、三率（gross_margin_pct 毛利率 / operating_margin_pct 營益率 / net_margin_pct 淨利率）、debt_ratio_pct 負債比、現金流（op_cashflow_ttm_100m 營業 / free_cashflow_ttm_100m 自由，億元）、dividend 股利。三率/負債比/EPS_TTM/自由現金流屬**衍生指標**（由原始財報推算），敘述時據實引用數字、不得外推捏造，缺值就略過該項。沒有 fundamentals 就略過整段。
 
 接著填兩份觀察清單（都不是買賣建議）：
 - **tw_watchlist（正向，5 檔）**：訊號偏多、值得關注者——族群轉強、法人連續買超、相對大盤強、站上均線。從 features.tw.movers.top_gainers_5d / top_foreign_buy_5d 與 sectors 強勢族群挑。
@@ -86,7 +86,8 @@ def build_qa_prompt(
     fu_block = ""
     if fundamentals:
         fu_block = (
-            f"基本面（月營收，金額億元、YoY/MoM%）：\n"
+            f"基本面（月營收億元+YoY/MoM%；季財報：EPS 當季/近四季、三率%、負債比%、"
+            f"營業/自由現金流億元、股利元；衍生指標據實引用勿外推）：\n"
             f"```json\n{json.dumps(fundamentals, ensure_ascii=False)}\n```\n\n"
         )
     return (

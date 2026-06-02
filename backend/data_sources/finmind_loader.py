@@ -102,6 +102,51 @@ def get_month_revenue(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     )
 
 
+def get_financial_statements(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔綜合損益表（季）。長格式：每列 date/stock_id/type/value/origin_name。
+
+    type 常見：Revenue（營收）/ CostOfGoodsSold / GrossProfit（毛利）/
+    OperatingExpenses / OperatingIncome（營業利益）/ PreTaxIncome /
+    IncomeAfterTaxes（稅後淨利）/ EPS（每股盈餘）。
+    """
+    return _request(
+        "TaiwanStockFinancialStatements",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
+def get_balance_sheet(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔資產負債表（季）。長格式：每列 date/stock_id/type/value/origin_name。
+
+    type 常見：TotalAssets（總資產）/ Liabilities（總負債）/ Equity（權益）。
+    """
+    return _request(
+        "TaiwanStockBalanceSheet",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
+def get_cash_flows(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔現金流量表（季）。長格式：每列 date/stock_id/type/value/origin_name。
+
+    type 常見：CashFlowsFromOperatingActivities（營業現金流）/
+    PropertyAndPlantAndEquipment（資本支出，現金流出為負）/
+    CashFlowsFromInvestingActivities / CashFlowsProvidedFromFinancingActivities。
+    """
+    return _request(
+        "TaiwanStockCashFlowsStatement",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
+def get_dividend(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔股利政策（年）。含現金/股票股利欄位（CashEarningsDistribution 等）。"""
+    return _request(
+        "TaiwanStockDividend",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
 def get_taiwan_stock_news(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     """單檔近期新聞（date / stock_id / link / source / title）。"""
     return _request("TaiwanStockNews", {"data_id": stock_id, "start_date": start_date})

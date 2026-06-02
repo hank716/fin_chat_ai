@@ -24,35 +24,31 @@
 - [x] M6 — Supabase publish + pCloud backup + Cloudflare Access ✅ (pCloud 報告備份 + Cloudflare tunnel/Access + Supabase report_index 發布 + 首頁歷史列表；report_index 實測寫入成功)
 - [x] M8 — 全台股 universe + 基本面 + 多 crypto ✅ (FinMind 全清單2728檔/57產業別族群；TWSE/TPEx 市場級回補；tw_features 全市場 movers/sectors(聚焦曝光給AI)；月營收 YoY/MoM on-demand；ETH/SOL)
 - [x] M7 — 檔案級保留/清理 + pCloud 回補 ✅ (retention：本機留最近90篇報告+清 adhoc parquet 快取；pCloud 冷儲存回補；晨報只在台股交易日產生；研究工具 google_search/url_context/code_execution)
-- [ ] **M9 — 完整財報（季報 / 損益表 / 資產負債表 / 現金流）** 🚧 規劃中（見下方）
+- [x] **M9 — 完整財報（季報 / 損益表 / 資產負債表 / 現金流 / 股利）** ✅（on-demand，焦點標的）
 
-## M9 — 完整財報（規劃中）
+## M9 — 完整財報 ✅
 
-**現況**：M8 只做了**月營收 YoY/MoM**（on-demand，`backend/processor/fundamentals.py`），
-財報層 `EPS/季報留後續`（見該檔註解）。AI 晨報目前仍標註「尚未納入完整財報資料」。
+M8 只做了**月營收 YoY/MoM**；M9 補上**季財報**，對焦點標的（movers / watchlist / 問答標的）
+on-demand 抓取並算衍生指標，餵進 grounded 研究稿，仍受 guardrail metric/source 驗證。
 
-**目標**：對焦點標的（movers / watchlist / 問答標的）on-demand 抓取**完整財報**，
-讓 AI 推理能引用真實財報數字（仍受 guardrail metric/source 驗證）。
+**資料來源（FinMind dataset）**：
 
-**範圍（FinMind dataset）**：
-
-| 資料 | FinMind dataset | 用途 |
+| 資料 | FinMind dataset | 產出欄位（`fundamentals.*`） |
 |------|-----------------|------|
-| 損益表（季） | `TaiwanStockFinancialStatements` | 營收/毛利/營業利益/稅後淨利、毛利率/營益率/淨利率 |
-| 資產負債表 | `TaiwanStockBalanceSheet` | 負債比、流動比、權益 |
-| 現金流量表 | `TaiwanStockCashFlowsStatement` | 營業/投資/籌資現金流、自由現金流 |
-| EPS / 每股 | 由損益表 + 股本推算 / `TaiwanStockFinancialStatements` | 季 EPS、近四季累計 EPS、本益比 |
-| 股利政策 | `TaiwanStockDividend` | 現金/股票股利、殖利率 |
+| 損益表（季） | `TaiwanStockFinancialStatements` | `eps_quarter`、`eps_ttm`（近四季）、`gross_margin_pct` / `operating_margin_pct` / `net_margin_pct`、`fiscal_quarter` |
+| 資產負債表 | `TaiwanStockBalanceSheet` | `debt_ratio_pct`（總負債/總資產） |
+| 現金流量表 | `TaiwanStockCashFlowsStatement` | `op_cashflow_ttm_100m`、`free_cashflow_ttm_100m`（營業現金流 − 資本支出） |
+| 股利政策 | `TaiwanStockDividend` | `dividend.{year, cash_per_share, stock_per_share}` |
 
-**實作要點**：
+**實作**：
 
-1. `finmind_loader` 新增 `get_financial_statements / get_balance_sheet / get_cashflow / get_dividend`（單檔、走 rate_limiter，FinMind 免費 600 req/hr）。
-2. `processor/fundamentals.py` 擴充 `build_fundamentals()`：月營收 + 近四季 EPS/毛利率/營益率 + 負債比 + 現金流摘要，沿用 `lru` 季度快取（季報季更，當日不重抓）。
-3. `morning_brief` / `ask`：把財報摘要餵進 grounded 研究稿，並更新「尚未納入完整財報」字樣為實際數字。
-4. **guardrail**：財報數字一律掛 `source=FinMind + 期別`，過 metric/source 驗證；推算值（如本益比）標示為衍生指標。
+1. `finmind_loader` 新增 `get_financial_statements / get_balance_sheet / get_cash_flows / get_dividend`（單檔、走 rate_limiter，FinMind 免費 600 req/hr）。
+2. `processor/fundamentals.py` 拆 `_build_revenue` + 新增 `build_financials()`（`lru_cache`，季報季更當日不重抓）；長格式 `type/value` 寬鬆比對（精確→子字串 fallback），任一資料源失敗只略過該區塊。
+3. `morning_brief`（經 `tw_features`）與 `ask` 自動帶入；prompt「基本面觀察」段更新，明列三率/負債比/EPS_TTM/自由現金流為**衍生指標**、據實引用勿外推。
+4. **guardrail**：財報數字皆掛在 `features.tw.stocks[].fundamentals.*` 路徑，AI 引用時走既有 metric/source path 驗證（不存在的欄位會被攔除）。
 5. 全市場 2000+ 檔不全抓 → 維持 on-demand + 焦點標的策略（對齊 design §5.2）。
 
-**驗收**：晨報焦點標的可顯示近四季 EPS / 毛利率 / 負債比 / 自由現金流，且 guardrail 0 error。
+**驗收**：焦點標的可顯示近四季 EPS / 三率 / 負債比 / 自由現金流 / 股利；衍生指標離線單元驗證數值正確。
 
 ## 成本 / 預算現況
 
