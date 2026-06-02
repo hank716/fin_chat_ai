@@ -90,7 +90,9 @@ def generate_morning_brief(
 
     # Gemini 完整敘事晨報（含 token 計費）
     result, usage = get_llm_client().analyze_full_brief(feats)
-    brief_cost = tracker.estimate_cost_twd(usage["input_tokens"], usage["output_tokens"])
+    brief_cost = tracker.estimate_cost_twd(
+        usage["input_tokens"], usage["output_tokens"], model=settings.gemini_model_brief
+    )
     tracker.record_cost(tracker.SYSTEM_USER, brief_cost)
     cost_info = {
         "brief_twd": brief_cost,

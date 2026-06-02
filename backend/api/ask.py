@@ -83,12 +83,17 @@ async def ask(req: AskRequest) -> AskResponse:
     except GeminiError as exc:
         raise HTTPException(status_code=503, detail=f"Gemini 暫時無法使用：{exc}") from exc
 
-    cost = tracker.estimate_cost_twd(usage["input_tokens"], usage["output_tokens"])
+    from config import settings
+    cost = tracker.estimate_cost_twd(
+        usage["input_tokens"], usage["output_tokens"], model=settings.gemini_model_qa
+    )
     total = tracker.record_cost(req.user_id, cost)
     logger.info("ask user=%s tokens=%s cost=NT$%.4f total=NT$%.2f",
                 req.user_id, usage, cost, total)
+    answer = (answer or "（無回應）") + \
+        "\n\n⚠️ 以上方向/目標價/止損為技術面輔助參考，非保證、請自行判斷風險。"
     return AskResponse(
-        answer=answer or "（無回應）",
+        answer=answer,
         report_id=rid,
         cost_twd=cost,
         today_spent=total,

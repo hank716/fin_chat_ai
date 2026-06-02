@@ -17,14 +17,17 @@ from redis_client import redis_client
 
 logger = logging.getLogger("ai-market-backend.cost")
 
-# gemini-flash 粗估費率（USD/百萬 token）→ TWD。家用估算用，寧可高估。
-_USD_PER_M_INPUT = 0.30
-_USD_PER_M_OUTPUT = 2.50
+# 粗估費率（USD/百萬 token）→ TWD。家用估算用，寧可高估。PRO 比 Flash 貴。
+_RATES = {
+    "pro": (1.25, 10.0),    # gemini-*-pro：(input, output) USD/M
+    "flash": (0.30, 2.50),  # gemini-*-flash
+}
 _USD_TWD = 32.0
 
 
-def estimate_cost_twd(input_tokens: int, output_tokens: int) -> float:
-    usd = (input_tokens / 1e6) * _USD_PER_M_INPUT + (output_tokens / 1e6) * _USD_PER_M_OUTPUT
+def estimate_cost_twd(input_tokens: int, output_tokens: int, model: str = "") -> float:
+    rate_in, rate_out = _RATES["pro"] if "pro" in model.lower() else _RATES["flash"]
+    usd = (input_tokens / 1e6) * rate_in + (output_tokens / 1e6) * rate_out
     return round(usd * _USD_TWD, 4)
 
 

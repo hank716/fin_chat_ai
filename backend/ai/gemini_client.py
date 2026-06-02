@@ -52,10 +52,12 @@ def _usage_of(body: dict) -> dict[str, int]:
     }
 
 
-def _generate_json(prompt: str, response_schema: dict) -> tuple[dict[str, Any], dict[str, int]]:
+def _generate_json(
+    prompt: str, response_schema: dict, model: str | None = None
+) -> tuple[dict[str, Any], dict[str, int]]:
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
-    url = f"{BASE_URL}/{settings.gemini_model}:generateContent"
+    url = f"{BASE_URL}/{model or settings.gemini_model}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -95,9 +97,9 @@ def analyze_intermarket(features: dict[str, Any]) -> AnalysisResult:
 
 
 def analyze_full_brief(features: dict[str, Any]) -> tuple[BriefResult, dict[str, int]]:
-    """合併 features → 完整敘事晨報 BriefResult + Gemini token usage（供計費）。"""
+    """合併 features → 完整敘事晨報 BriefResult + Gemini token usage（晨報用 PRO 模型）。"""
     prompt = build_full_brief_prompt(features)
-    raw, usage = _generate_json(prompt, GEMINI_BRIEF_SCHEMA)
+    raw, usage = _generate_json(prompt, GEMINI_BRIEF_SCHEMA, model=settings.gemini_model_brief)
     return BriefResult.model_validate(raw), usage
 
 
@@ -107,11 +109,11 @@ def analyze_full_brief(features: dict[str, Any]) -> tuple[BriefResult, dict[str,
     wait=wait_exponential(multiplier=1, min=2, max=20),
     reraise=True,
 )
-def generate_text(prompt: str) -> tuple[str, dict[str, int]]:
-    """純文字生成（Discord 互動 Q&A 用），回 (文字, token usage)。"""
+def generate_text(prompt: str, model: str | None = None) -> tuple[str, dict[str, int]]:
+    """純文字生成（Discord 互動 Q&A 用，預設 Flash），回 (文字, token usage)。"""
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
-    url = f"{BASE_URL}/{settings.gemini_model}:generateContent"
+    url = f"{BASE_URL}/{model or settings.gemini_model_qa}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4},

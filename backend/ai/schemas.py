@@ -59,8 +59,10 @@ class WatchItem(BaseModel):
     symbol: str
     name: str
     sector: str | None = None
-    thesis: str  # 為何值得觀察（敘事）
+    thesis: str  # 看法與理由（敘事）
     signals: list[str] = Field(default_factory=list)  # 訊號標籤，如「投信連買4日」
+    target_price: str | None = None  # 技術面目標價（參考，非保證）
+    stop_loss: str | None = None  # 技術面止損價（參考，非保證）
     uncertainty: str | None = None  # 不確定性 / 需隔日驗證之處
 
 
@@ -109,6 +111,8 @@ _WATCHITEM_SCHEMA = {
             "sector": {"type": "string", "nullable": True},
             "thesis": {"type": "string"},
             "signals": {"type": "array", "items": {"type": "string"}},
+            "target_price": {"type": "string", "nullable": True},
+            "stop_loss": {"type": "string", "nullable": True},
             "uncertainty": {"type": "string", "nullable": True},
         },
         "required": ["symbol", "name", "thesis"],

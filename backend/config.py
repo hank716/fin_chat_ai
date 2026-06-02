@@ -25,7 +25,9 @@ class Settings(BaseSettings):
 
     # ── LLM（Gemini-only）──
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-flash-latest"
+    gemini_model: str = "gemini-flash-latest"          # 泛用/相容用預設
+    gemini_model_brief: str = "gemini-3.1-pro-preview"  # 每日晨報用 PRO（品質優先）
+    gemini_model_qa: str = "gemini-3.5-flash"           # 平日問答用 Flash（快又省）
     daily_cost_limit_twd: int = 30
 
     # ── Discord（1 guild / 3 channels / 2 users）──

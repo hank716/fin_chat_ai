@@ -57,15 +57,22 @@ def build_markdown(
             if w.signals:
                 lines.append("")
                 lines.append("訊號：" + "、".join(w.signals))
+            if w.target_price or w.stop_loss:
+                bits = []
+                if w.target_price:
+                    bits.append(f"🎯 目標價 **{w.target_price}**")
+                if w.stop_loss:
+                    bits.append(f"🛑 止損價 **{w.stop_loss}**")
+                lines.append("\n" + "　".join(bits) + "（技術面參考，非保證）")
             if w.uncertainty:
                 lines.append(f"\n> ⚠️ 待驗證：{w.uncertainty}")
             lines.append("")
         return "\n".join(lines).rstrip()
 
     if result.tw_watchlist:
-        parts.append(_watch_block("候選觀察標的（正向）", "訊號偏多、值得關注；觀察研究用途，非買賣建議。", result.tw_watchlist))
+        parts.append(_watch_block("偏多觀察標的（含目標價/止損）", "技術面偏多；目標價/止損為技術參考，非保證，請自行判斷。", result.tw_watchlist))
     if result.tw_caution:
-        parts.append(_watch_block("要注意標的（負向）", "訊號偏空或有追高/籌碼風險；觀察研究用途，非買賣建議。", result.tw_caution))
+        parts.append(_watch_block("偏空/要注意標的", "技術面偏空或有追高/籌碼風險；目標價/止損為技術參考，非保證。", result.tw_caution))
 
     if result.risks:
         parts.append("## 今日風險提醒\n\n" + "\n".join(f"- {r}" for r in result.risks))
@@ -94,6 +101,7 @@ def build_markdown(
         )
     parts.append("## 資料來源\n\n" + "\n".join(source_lines))
     parts.append(
-        "---\n*本報告由系統自動產生，僅供家庭內部市場研究，不構成投資建議。*"
+        "---\n*⚠️ 本報告之方向看法、目標價與止損價皆為技術面輔助參考，非保證獲利或準確，"
+        "亦不保證成交；請自行評估風險後決策。系統自動產生，僅供家庭內部研究。*"
     )
     return "\n\n".join(parts)

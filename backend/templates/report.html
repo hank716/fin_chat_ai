@@ -47,20 +47,27 @@
   <h3>{{ w.symbol }} {{ w.name }}{% if w.sector %} <span class="sector">〔{{ w.sector }}〕</span>{% endif %}</h3>
   <div class="narrative">{{ w.thesis }}</div>
   {% if w.signals %}<div class="signals">{% for s in w.signals %}<span>{{ s }}</span>{% endfor %}</div>{% endif %}
+  {% if w.target_price or w.stop_loss %}
+  <div class="levels">
+    {% if w.target_price %}🎯 目標價 <b>{{ w.target_price }}</b>{% endif %}
+    {% if w.stop_loss %}　🛑 止損價 <b>{{ w.stop_loss }}</b>{% endif %}
+    <span class="ref">（技術面參考，非保證）</span>
+  </div>
+  {% endif %}
   {% if w.uncertainty %}<div class="uncertain">⚠️ 待驗證：{{ w.uncertainty }}</div>{% endif %}
 </div>
 {% endmacro %}
 
 {% if report.tw_watchlist %}
 <div class="card">
-  <h2>候選觀察標的（正向） <span class="badge">研究用途・非買賣建議</span></h2>
+  <h2>偏多觀察標的 <span class="badge">含目標價/止損・技術參考非保證</span></h2>
   {% for w in report.tw_watchlist %}{{ watch_item(w, '') }}{% endfor %}
 </div>
 {% endif %}
 
 {% if report.tw_caution %}
 <div class="card">
-  <h2>要注意標的（負向） <span class="badge">追高/籌碼風險・非買賣建議</span></h2>
+  <h2>偏空/要注意標的 <span class="badge">追高/籌碼風險・技術參考非保證</span></h2>
   {% for w in report.tw_caution %}{{ watch_item(w, 'caution') }}{% endfor %}
 </div>
 {% endif %}
@@ -107,7 +114,7 @@
   </p>
 </div>
 
-<p class="disclaimer">本報告由系統自動產生，僅供家庭內部市場研究，不構成投資建議。</p>
+<p class="disclaimer">⚠️ 本報告之方向看法、目標價與止損價皆為技術面輔助參考，非保證獲利或準確，亦不保證成交；請自行評估風險後決策。系統自動產生，僅供家庭內部研究。</p>
 
 <script>
 function copyPack() {
