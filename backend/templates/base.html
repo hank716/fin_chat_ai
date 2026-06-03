@@ -76,6 +76,18 @@
     .cost-banner .cb-fill { height:100%; background:#fff; border-radius:99px; transition:width .4s; }
     .cost-banner .cb-sub { font-size:.8rem; opacity:.92; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
 
+    /* 待機建議面板（每小時活動熱度 + 建議待機窗） */
+    .standby { background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:14px 18px 16px; margin:0 0 22px; }
+    .standby .sb-title { font-size:1rem; margin:0 0 2px; }
+    .standby .sb-meta { color:#6b7280; font-size:.8rem; margin-bottom:12px; }
+    .sb-heat { display:flex; align-items:flex-end; gap:2px; height:48px; }
+    .sb-heat .sb-bar { flex:1; height:100%; background:#eef2f7; border-radius:3px 3px 0 0; display:flex; align-items:flex-end; }
+    .sb-heat .sb-fill { width:100%; background:linear-gradient(180deg,#1f6feb,#0ea5e9); border-radius:3px 3px 0 0; min-height:2px; }
+    .sb-axis { display:flex; justify-content:space-between; color:#9099a3; font-size:.7rem; margin-top:4px; }
+    .sb-windows { margin:12px 0 0; display:flex; flex-wrap:wrap; gap:8px; }
+    .sb-windows .sb-win { background:#ecfdf3; border:1px solid #b9e6c9; color:#1b8a5a; border-radius:8px; padding:4px 10px; font-size:.82rem; }
+    .sb-note { color:#6b7280; font-size:.82rem; margin-top:10px; }
+
     /* 回到最上方 浮動按鈕 */
     #backTop { position:fixed; right:20px; bottom:24px; width:46px; height:46px; border-radius:50%; border:0;
       background:#111827; color:#fff; font-size:1.3rem; line-height:1; cursor:pointer;

@@ -19,7 +19,8 @@ _crawl_state: dict[str, bool] = {"running": False}
 
 @router.get("/", response_class=HTMLResponse)
 async def home() -> str:
-    """首頁＝歷史報告列表（登入後落地頁）＋本月全站 AI 花費（即時、含晨報＋問答）。"""
+    """首頁＝歷史報告列表（登入後落地頁）＋本月全站 AI 花費 + 待機時段建議（皆即時）。"""
+    from activity import monitor
     from config import settings
     from cost import tracker
 
@@ -30,7 +31,16 @@ async def home() -> str:
         "monthly_limit_twd": float(settings.monthly_cost_limit_twd),
         "daily_limit_twd": float(settings.daily_cost_limit_twd),
     }
-    return render_history_html(morning_brief.list_reports(), cost=cost)
+    activity = monitor.idle_report()
+    return render_history_html(morning_brief.list_reports(), cost=cost, activity=activity)
+
+
+@router.get("/activity")
+async def activity_report(days: int = Query(default=14, ge=1, le=35)) -> dict:
+    """待機時段建議的原始資料（每小時活動熱度 + 建議待機窗 + 已累積天數）。"""
+    from activity import monitor
+
+    return monitor.idle_report(days=days)
 
 
 @router.post("/brief/morning")

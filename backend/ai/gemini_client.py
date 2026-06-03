@@ -14,15 +14,23 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from activity import monitor
 from config import settings
 
 from .prompts import (
     build_brief_research_prompt,
     build_brief_structuring_prompt,
     build_full_brief_prompt,
+    build_intent_prompt,
     build_intermarket_prompt,
 )
-from .schemas import GEMINI_BRIEF_SCHEMA, GEMINI_RESPONSE_SCHEMA, AnalysisResult, BriefResult
+from .schemas import (
+    GEMINI_BRIEF_SCHEMA,
+    GEMINI_INTENT_SCHEMA,
+    GEMINI_RESPONSE_SCHEMA,
+    AnalysisResult,
+    BriefResult,
+)
 
 logger = logging.getLogger("ai-market-backend.gemini")
 
@@ -41,6 +49,10 @@ class GeminiUnavailable(GeminiError):
 
 class GeminiQuotaExceeded(GeminiError):
     """配額用盡（429）→ 短時間內不會恢復，fail-fast 不 retry。"""
+
+
+class GeminiBadRequest(GeminiError):
+    """請求被拒（400）→ 不 retry。明確快取與 tools 不相容等情況會回 400，呼叫端據此降級。"""
 
 
 @retry(
@@ -79,12 +91,13 @@ def _grounding_sources(candidate: dict) -> list[tuple[str, str]]:
 
 
 def _generate_json(
-    prompt: str, response_schema: dict, model: str | None = None
+    prompt: str, response_schema: dict, model: str | None = None,
+    *, cached_content: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
     url = f"{BASE_URL}/{model or settings.gemini_model}:generateContent"
-    payload = {
+    payload: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -92,13 +105,20 @@ def _generate_json(
             "temperature": 0.4,
         },
     }
+    if cached_content:
+        # 靜態前綴已存進明確快取；contents 只放變動部分，頂層帶 cachedContent 名稱。
+        payload["cachedContent"] = cached_content
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
     resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
+    monitor.mark("ai")  # 記一次對外 AI 流量（待機偵測用）
     if resp.status_code == 503:
         raise GeminiUnavailable(f"Gemini 503 overloaded: {resp.text[:160]}")
     if resp.status_code == 429:
         # 每日/每分鐘配額；retry 4 次只會白等，直接 fail-fast 讓上層回清楚訊息
         raise GeminiQuotaExceeded(f"Gemini 429 quota exceeded: {resp.text[:200]}")
+    if resp.status_code == 400:
+        # 通常是請求本身有問題（如 cachedContent 與 tools/schema 不相容）；不 retry，讓上層降級。
+        raise GeminiBadRequest(f"Gemini 400 bad request: {resp.text[:300]}")
     if resp.status_code != 200:
         raise GeminiError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
     body = resp.json()
@@ -113,6 +133,25 @@ def _generate_json(
         return json.loads(text), _usage_of(body)
     except json.JSONDecodeError as exc:
         raise GeminiError(f"Gemini 回的不是合法 JSON: {exc}; head={text[:200]}") from exc
+
+
+def classify_finance_intent(question: str) -> tuple[bool, dict[str, int]]:
+    """用最便宜的模型判斷問題是否與財務市場相關，回 (is_financial, token usage)。
+
+    極小 prompt（只含問題）＋極小 schema、不開搜尋；用來在問答前過濾掉閒聊，省下大 prompt 與
+    grounding。**fail-open**：任何錯誤（HTTP 失敗、解析失敗、配額）一律回 True，讓問答照常進行，
+    分類器絕不能成為問答的單點故障。
+    """
+    try:
+        raw, usage = _generate_json(
+            build_intent_prompt(question),
+            GEMINI_INTENT_SCHEMA,
+            model=settings.gemini_model_classifier,
+        )
+        return bool(raw.get("is_financial", True)), usage
+    except GeminiError as exc:
+        logger.warning("意圖分類失敗，fail-open 視為財務相關: %s", exc)
+        return True, {}
 
 
 def analyze_intermarket(features: dict[str, Any]) -> AnalysisResult:
@@ -162,10 +201,12 @@ def analyze_full_brief_grounded(
     reraise=True,
 )
 def generate_text(
-    prompt: str, model: str | None = None, *, use_search: bool = False
+    prompt: str, model: str | None = None, *, use_search: bool = False,
+    cached_content: str | None = None,
 ) -> tuple[str, dict[str, int]]:
     """純文字生成（Discord Q&A / 市場情境）。use_search=True 啟用 Google 搜尋 grounding，
-    並把來源附在文末。回 (文字, token usage)。503 會重試、429 fail-fast。"""
+    並把來源附在文末。cached_content 非 None 時帶明確快取（contents 只放變動部分）。
+    回 (文字, token usage)。503 會重試、429/400 fail-fast。"""
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
     url = f"{BASE_URL}/{model or settings.gemini_model_qa}:generateContent"
@@ -173,6 +214,8 @@ def generate_text(
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4},
     }
+    if cached_content:
+        payload["cachedContent"] = cached_content
     if use_search:
         # Gemini 2.x 研究工具：搜尋公開網路 + 讀網頁內容 + 跑運算（API 需明確帶，非預設）
         payload["tools"] = [
@@ -182,10 +225,13 @@ def generate_text(
         ]
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
     resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
+    monitor.mark("ai")  # 記一次對外 AI 流量（待機偵測用）
     if resp.status_code == 503:
         raise GeminiUnavailable(f"Gemini 503 overloaded: {resp.text[:160]}")
     if resp.status_code == 429:
         raise GeminiQuotaExceeded(f"Gemini 429 quota exceeded: {resp.text[:200]}")
+    if resp.status_code == 400:
+        raise GeminiBadRequest(f"Gemini 400 bad request: {resp.text[:300]}")
     if resp.status_code != 200:
         raise GeminiError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
     body = resp.json()

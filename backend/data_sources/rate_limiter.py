@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import redis
 
+from activity import monitor
 from config import settings
 from redis_client import redis_client
 
@@ -112,6 +113,7 @@ def acquire(provider: str, *, cost: int = 1, max_wait_sec: float = 30.0,
     waited = 0.0
     while True:
         if _try_consume(cli, provider, cost, quota):
+            monitor.mark("data")  # 記一次本系統對外資料抓取（待機偵測用；同分鐘去重）
             return waited
         if time.monotonic() >= deadline:
             raise RateLimitTimeout(f"{provider} rate limit timeout (waited {waited:.1f}s)")

@@ -69,28 +69,46 @@ QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Disco
 6. 結尾不需附免責聲明（系統會另外加）。"""
 
 
-def build_qa_prompt(
-    question: str, report: dict[str, Any], on_demand: dict[str, Any] | None = None,
-    fundamentals: dict[str, Any] | None = None,
-    history: list[dict[str, str]] | None = None,
-) -> str:
-    """組出 Discord 即時查詢 prompt：規則 + 今日晨報 + features + 即時標的 + 基本面 + 對話歷史 + 問題。
+INTENT_RULES = """判斷下面這則使用者訊息是否與『金融市場、股票、ETF、加密貨幣、期貨/外匯、總體經濟、\
+財報/籌碼、投資理財』相關。
 
-    history（僅 Discord 討論串內提供）：[{"q":使用者問,"a":助理答}, ...] 由舊到新，給代名詞/追問的脈絡。
+判定原則：
+- 使用者正處於『財經問答』情境；**模糊、簡短或無法判斷時一律視為相關**（is_financial=true）。
+- 含代名詞的追問（如「那它呢？」「這檔可以買嗎？」「再多講一點」）視為相關（true）。
+- 只有**明顯**與財經無關（純閒聊、生活雜事、天氣、感情、寫程式/技術支援、翻譯等）才回 false。
+只輸出 {"is_financial": true/false}。"""
+
+
+def build_intent_prompt(question: str) -> str:
+    """組出意圖分類 prompt（極小，不帶 features/不開搜尋）：判斷問題是否與財務市場相關。"""
+    return f"{INTENT_RULES}\n\n使用者訊息：{question}"
+
+
+def build_qa_static_block(report: dict[str, Any]) -> str:
+    """組出 QA prompt 的『當日穩定前綴』：規則 + 今日晨報 + features JSON。
+
+    對同一份報告（report_id）此區塊**逐字不變**，故可被 Gemini 隱式快取（相同前綴）命中，
+    也可整塊放進明確快取（cachedContents）；每題變動的內容一律放到 build_qa_variable_block。
     """
     markdown = report.get("markdown", "")
     features_json = json.dumps(report.get("features", {}), ensure_ascii=False)
-    hist_block = ""
-    if history:
-        turns = "\n".join(
-            f"{i}. 使用者：{h.get('q','')}\n   助理：{h.get('a','')}"
-            for i, h in enumerate(history, 1)
-        )
-        hist_block = (
-            "本討論串先前對話（由舊到新，僅供理解『它/這檔/剛剛那個』等代名詞與追問脈絡；"
-            "數據仍以下方 features／即時資料為準，勿憑記憶捏造）：\n"
-            f"{turns}\n\n"
-        )
+    return (
+        f"{QA_RULES}\n\n"
+        f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
+        f"可引用的 features JSON：\n```json\n{features_json}\n```\n\n"
+    )
+
+
+def build_qa_variable_block(
+    question: str,
+    on_demand: dict[str, Any] | None = None,
+    fundamentals: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    """組出 QA prompt 的『每題變動尾段』：即時標的 + 基本面 + 對話歷史 + 問題。
+
+    放在靜態前綴之後，確保前綴 byte 一致（命中隱式快取）；明確快取時這段即 generateContent 的 contents。
+    """
     od_block = ""
     if on_demand:
         od_json = json.dumps(on_demand, ensure_ascii=False)
@@ -105,12 +123,34 @@ def build_qa_prompt(
             f"營業/自由現金流億元、股利元；衍生指標據實引用勿外推）：\n"
             f"```json\n{json.dumps(fundamentals, ensure_ascii=False)}\n```\n\n"
         )
+    hist_block = ""
+    if history:
+        turns = "\n".join(
+            f"{i}. 使用者：{h.get('q','')}\n   助理：{h.get('a','')}"
+            for i, h in enumerate(history, 1)
+        )
+        hist_block = (
+            "本討論串先前對話（由舊到新，僅供理解『它/這檔/剛剛那個』等代名詞與追問脈絡；"
+            "數據仍以下方 features／即時資料為準，勿憑記憶捏造）：\n"
+            f"{turns}\n\n"
+        )
     return (
-        f"{QA_RULES}\n\n"
-        f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
-        f"可引用的 features JSON：\n```json\n{features_json}\n```\n\n"
         f"{od_block}{fu_block}{hist_block}"
         f"使用者問題：{question}\n\n請依規則精簡作答。"
+    )
+
+
+def build_qa_prompt(
+    question: str, report: dict[str, Any], on_demand: dict[str, Any] | None = None,
+    fundamentals: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    """組出 Discord 即時查詢 prompt：穩定前綴（規則+晨報+features）+ 每題變動尾段（標的+基本面+歷史+問題）。
+
+    history（僅 Discord 討論串內提供）：[{"q":使用者問,"a":助理答}, ...] 由舊到新，給代名詞/追問的脈絡。
+    """
+    return build_qa_static_block(report) + build_qa_variable_block(
+        question, on_demand=on_demand, fundamentals=fundamentals, history=history
     )
 
 

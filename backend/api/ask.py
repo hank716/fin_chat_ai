@@ -12,9 +12,9 @@ import secrets
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from ai import gemini_client
-from ai.gemini_client import GeminiError, GeminiQuotaExceeded
-from ai.prompts import build_qa_prompt
+from ai import gemini_cache, gemini_client
+from ai.gemini_client import GeminiBadRequest, GeminiError, GeminiQuotaExceeded
+from ai.prompts import build_qa_static_block, build_qa_variable_block
 from cost import tracker
 from processor import tw_features
 from reports import morning_brief
@@ -88,6 +88,29 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     if not ok and bypass:
         logger.info("預算已達上限，但帶管理權杖放行測試（花費仍計入）：%s", reason)
 
+    from config import settings
+
+    # 意圖分類（最便宜模型）：先過濾掉與財務無關的閒聊，省下大 prompt 與 Google 搜尋 grounding。
+    # 花費仍計入（分類也是一次 Gemini 呼叫，但 token 極少）；fail-open＝分類器出錯一律當財務題續走。
+    intent_cost = 0.0
+    if settings.enable_intent_filter:
+        is_financial, intent_usage = gemini_client.classify_finance_intent(req.question)
+        if intent_usage:
+            intent_cost = tracker.cost_of_usage(
+                intent_usage, settings.gemini_model_classifier, grounded=False
+            )
+            tracker.record_cost(intent_cost)
+        if not is_financial:
+            logger.info("ask user=%s 意圖非財務 → 婉拒（省 token）分類成本=NT$%.4f",
+                        req.user_id, intent_cost)
+            return AskResponse(
+                answer="我只回答市場／個股／總經等財經相關的問題，這題恐怕幫不上忙 🙏",
+                report_id=morning_brief.latest_report_id() or "",
+                cost_twd=intent_cost,
+                today_spent=tracker.today_total(),
+                daily_limit=limit,
+            )
+
     rid = morning_brief.latest_report_id()
     report = morning_brief.load_report(rid) if rid else None
     if report is None:
@@ -111,17 +134,35 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     # 討論串記憶（一般頻道 conversation_id=None → 無記憶）
     from chat import history
     hist = history.load(req.conversation_id) if req.conversation_id else None
-    prompt = build_qa_prompt(
-        req.question, report, on_demand=on_demand, fundamentals=fundamentals, history=hist
+    # 穩定前綴（規則+晨報+features，對同一 report 逐字不變）+ 每題變動尾段。前綴可吃隱式快取，
+    # 並可整塊放進明確快取（cachedContents）讓同日多題重用、命中部分以較低 cache 價計。
+    static_block = build_qa_static_block(report)
+    variable_block = build_qa_variable_block(
+        req.question, on_demand=on_demand, fundamentals=fundamentals, history=hist
     )
+    cache_name = gemini_cache.get_or_create_qa_cache(rid, static_block, settings.gemini_model_qa)
     try:
-        answer, usage = gemini_client.generate_text(prompt, use_search=True)
+        if cache_name:
+            try:
+                # 明確快取命中：contents 只送變動尾段，靜態前綴已在快取內。
+                answer, usage = gemini_client.generate_text(
+                    variable_block, use_search=True, cached_content=cache_name
+                )
+            except GeminiBadRequest as exc:
+                # 明確快取與本次請求（如 google_search tools）不相容 → 降級為完整 prompt（仍吃隱式快取）。
+                logger.warning("明確快取不相容，降級為完整 prompt：%s", exc)
+                answer, usage = gemini_client.generate_text(
+                    static_block + variable_block, use_search=True
+                )
+        else:
+            answer, usage = gemini_client.generate_text(
+                static_block + variable_block, use_search=True
+            )
     except GeminiQuotaExceeded as exc:
         raise HTTPException(status_code=503, detail=f"Gemini 配額用盡：{exc}") from exc
     except GeminiError as exc:
         raise HTTPException(status_code=503, detail=f"Gemini 暫時無法使用：{exc}") from exc
 
-    from config import settings
     # grounded=True：問答用 Google 搜尋，含 cache 折扣與 grounding 邊際費用
     cost = tracker.cost_of_usage(usage, settings.gemini_model_qa, grounded=True)
     tracker.record_cost(cost)
@@ -136,7 +177,7 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     return AskResponse(
         answer=answer,
         report_id=rid,
-        cost_twd=cost,
+        cost_twd=round(cost + intent_cost, 6),  # 本次總花費＝問答 + 意圖分類
         today_spent=day_total,   # 全站今日累計（晨報+所有問答）
         daily_limit=limit,
     )

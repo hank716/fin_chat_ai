@@ -22,6 +22,38 @@
 </div>
 {% endif %}
 
+{% if activity %}
+<div class="standby">
+  <h2 class="sb-title">🔌 待機建議（電腦何時可休眠省電）</h2>
+  <div class="sb-meta">
+    依本系統「對外工作」（資料抓取＋AI 呼叫）統計・時區 {{ activity.tz }}・已累積 {{ activity.observed_days }} 天資料
+  </div>
+  <div class="sb-heat">
+    {% for h in activity.hourly %}
+    <div class="sb-bar" title="{{ '%02d'|format(loop.index0) }}:00 活動強度 {{ '%.0f'|format(h * 100) }}%">
+      <div class="sb-fill" style="height:{{ [4, (h * 100)|round]|max }}%"></div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="sb-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+  {% if activity.enough_data %}
+    {% if activity.idle_windows %}
+    <div class="sb-windows">
+      {% for w in activity.idle_windows %}
+      <span class="sb-win">😴 {{ w.start }}–{{ w.end }}
+        （{% if w.minutes >= 60 %}{{ w.minutes // 60 }} 小時{% if w.minutes % 60 %} {{ w.minutes % 60 }} 分{% endif %}{% else %}{{ w.minutes }} 分{% endif %}）</span>
+      {% endfor %}
+    </div>
+    <div class="sb-note">上列時段長期幾乎無背景流量，適合讓電腦待機／休眠省電。</div>
+    {% else %}
+    <div class="sb-note">目前找不到夠長的固定閒置時段——背景工作分布較分散，暫不建議排程待機。</div>
+    {% endif %}
+  {% else %}
+    <div class="sb-note">資料累積中：已 {{ activity.observed_days }} / {{ activity.min_observed_days }} 天，達標後即會給出建議待機時段。</div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if reports %}
 {% for r in reports %}
 <a class="hist" href="/report/{{ r.report_id }}">

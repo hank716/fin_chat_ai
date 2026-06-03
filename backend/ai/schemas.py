@@ -163,6 +163,14 @@ GEMINI_BRIEF_SCHEMA: dict = {
 }
 
 
+# 意圖分類 schema（極小；只要模型判斷問題是否與財務市場相關）
+GEMINI_INTENT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"is_financial": {"type": "boolean"}},
+    "required": ["is_financial"],
+}
+
+
 # Gemini responseSchema（OpenAPI 子集；強制模型回符合 AnalysisResult 的 JSON）
 GEMINI_RESPONSE_SCHEMA: dict = {
     "type": "object",

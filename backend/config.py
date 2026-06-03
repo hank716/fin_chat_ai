@@ -28,8 +28,15 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-flash-latest"        # 泛用/相容用預設
     gemini_model_brief: str = "gemini-pro-latest"     # 每日晨報用 PRO latest（品質優先）
     gemini_model_qa: str = "gemini-flash-latest"      # 平日問答用 Flash latest（快又省）
+    # 意圖分類用最便宜檔：問答前先用它過濾掉「與財務無關」的閒聊，省下大 prompt 與 grounding。
+    gemini_model_classifier: str = "gemini-flash-lite-latest"
+    enable_intent_filter: bool = True                 # 啟用意圖分類器（非財務問題直接婉拒）
     daily_cost_limit_twd: int = 30                    # 每日全站總花費上限（晨報+問答）
     monthly_cost_limit_twd: int = 600                 # 每月全站總花費上限（對齊後台預算）
+
+    # ── Gemini 明確快取（cachedContents API；同日問答重用當日靜態 context 省 input token）──
+    enable_gemini_explicit_cache: bool = True
+    gemini_cache_ttl_seconds: int = 7200              # 明確快取 TTL（秒）；對齊「當日一份晨報」生命週期
 
     # ── 管理端點權杖（/admin/*；空＝停用管理端點，fail-closed）──
     admin_token: str = ""

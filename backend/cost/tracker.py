@@ -38,6 +38,13 @@ _PRICING = {
         "small": (1.50, 9.00, 0.15),    # 3.5 Flash 不分級距
         "large": (1.50, 9.00, 0.15),
     },
+    # Flash-Lite（意圖分類用）：對應 flash-lite-latest →Gemini 3.1 Flash-Lite（與 pro/flash 同屬 3.x
+    # 別名世代）。官方定價（標準層、text）input $0.25 / output $1.50 / cache $0.025，不分級距
+    # （https://ai.google.dev/gemini-api/docs/pricing，2026-06-03 核對）。
+    "flash-lite": {
+        "small": (0.25, 1.50, 0.025),
+        "large": (0.25, 1.50, 0.025),
+    },
 }
 _TIER_THRESHOLD = 200_000               # prompt tokens 超過此值套用 large 級距
 # Google 搜尋 grounding：每月前 5,000 次免費（Gemini 3 共用），之後 $14 / 1,000 次（每請求計價）。
@@ -47,7 +54,14 @@ _USD_TWD = 32.0                         # 固定估算匯率；TWD 大幅波動�
 
 
 def _rates(model: str, prompt_tokens: int) -> tuple[float, float, float]:
-    fam = "pro" if "pro" in model.lower() else "flash"
+    m = model.lower()
+    # 先判 lite（"flash-lite" 也含 "flash"，順序不可顛倒），再判 pro，最後才 flash。
+    if "lite" in m:
+        fam = "flash-lite"
+    elif "pro" in m:
+        fam = "pro"
+    else:
+        fam = "flash"
     tier = "large" if prompt_tokens > _TIER_THRESHOLD else "small"
     return _PRICING[fam][tier]
 
