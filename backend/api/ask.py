@@ -91,9 +91,8 @@ async def ask(req: AskRequest) -> AskResponse:
         raise HTTPException(status_code=503, detail=f"Gemini 暫時無法使用：{exc}") from exc
 
     from config import settings
-    cost = tracker.estimate_cost_twd(
-        usage["input_tokens"], usage["output_tokens"], model=settings.gemini_model_qa
-    )
+    # grounded=True：問答用 Google 搜尋，含 cache 折扣與 grounding 邊際費用
+    cost = tracker.cost_of_usage(usage, settings.gemini_model_qa, grounded=True)
     tracker.record_cost(cost)
     day_total = tracker.today_total()
     logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",

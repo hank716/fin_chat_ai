@@ -50,12 +50,20 @@ class GeminiQuotaExceeded(GeminiError):
     reraise=True,
 )
 def _usage_of(body: dict) -> dict[str, int]:
+    """整理 usageMetadata 成計費所需欄位（對齊 cost.tracker.cost_of_usage）。
+
+    - input_tokens＝promptTokenCount（Google 後台口徑，**已含** cached_tokens）
+    - cached_tokens＝命中快取部分（以較低 cache 價計，避免高估）
+    - output_tokens＝candidatesTokenCount + thoughtsTokenCount（計費含 thinking，否則嚴重低估）
+    - tool_tokens＝toolUsePromptTokenCount（與 promptTokenCount 分開，按 input 價計）
+    """
     um = body.get("usageMetadata", {}) or {}
-    # output 計費含 thinking tokens（thoughtsTokenCount），否則會嚴重低估 PRO/思考模型成本
     output = int(um.get("candidatesTokenCount", 0)) + int(um.get("thoughtsTokenCount", 0))
     return {
         "input_tokens": int(um.get("promptTokenCount", 0)),
+        "cached_tokens": int(um.get("cachedContentTokenCount", 0)),
         "output_tokens": output,
+        "tool_tokens": int(um.get("toolUsePromptTokenCount", 0)),
     }
 
 

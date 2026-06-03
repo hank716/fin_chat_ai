@@ -92,10 +92,9 @@ def generate_morning_brief(
     # 晨報主推理即時連網：兩段式 ①PRO+Google搜尋 寫分析稿 → ②Flash 純格式化成結構
     result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(feats)
     brief_cost = round(
-        tracker.estimate_cost_twd(research_usage["input_tokens"], research_usage["output_tokens"],
-                                  model=settings.gemini_model_brief)
-        + tracker.estimate_cost_twd(struct_usage["input_tokens"], struct_usage["output_tokens"],
-                                    model=settings.gemini_model_qa),
+        # ①研究階段 grounded（PRO+Google 搜尋）②格式化階段純文字（Flash，不連網）
+        tracker.cost_of_usage(research_usage, settings.gemini_model_brief, grounded=True)
+        + tracker.cost_of_usage(struct_usage, settings.gemini_model_qa),
         4,
     )
     usage = {
