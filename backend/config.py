@@ -51,8 +51,14 @@ class Settings(BaseSettings):
     enable_yahoo: bool = True
 
     # ── 基本面磁碟快取 TTL（落地後晨報大多讀磁碟，只補過期→省 FinMind 額度）──
-    fundamentals_revenue_ttl_days: int = 7       # 月營收：月更，最多每週重抓
-    fundamentals_financials_ttl_days: int = 30   # 季財報：季更，最多每月重抓
+    # 註：季報/月營收改走「日曆感知略過」（依申報截止日判斷有無新一期），下列 TTL 僅
+    # 在快取缺少期別資訊時當保險退路用。
+    fundamentals_revenue_ttl_days: int = 7       # 月營收 fallback：無月份資訊時最多每週重抓
+    fundamentals_financials_ttl_days: int = 30   # 季財報 fallback：無季別資訊時最多每月重抓
+    # 日曆感知略過：申報截止日後再加幾天緩衝才視為「該期已全到齊」（避免晚報公司被永久跳過）
+    fundamentals_filing_buffer_days: int = 5
+    # 負快取（查無財報的標的，多為 ETF/權證）長 TTL：不必每輪重探，約季度重探一次
+    fundamentals_negcache_ttl_days: int = 80
 
     # ── 儲存（local parquet SSOT，無 Postgres）──
     local_storage_path: str = "/app/storage"

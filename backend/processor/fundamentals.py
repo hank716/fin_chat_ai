@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,8 +28,77 @@ def _cache_path(symbol: str) -> Path:
     return _CACHE_DIR / f"{symbol}.json"
 
 
+# ── 日曆感知略過：依台股法定申報期限判斷「目前理應已公布的最新一期」──
+# 季報截止：Q1→5/15、Q2(半年報)→8/14、Q3→11/14、Q4(年報)→隔年 3/31。
+# 月營收截止：每月營收須於次月 10 日前公布。
+# 只要快取已是「應公布的最新期別」就不重抓（無視 TTL）；唯有新一期理應公布卻還沒抓到才打 FinMind。
+
+def _quarter_deadlines(year: int) -> list[tuple[str, date]]:
+    """某年度各季報的（季別標籤, 申報截止日）。Q4 以年報截止日（隔年 3/31）計。"""
+    return [
+        (f"{year - 1}Q4", date(year, 3, 31)),
+        (f"{year}Q1", date(year, 5, 15)),
+        (f"{year}Q2", date(year, 8, 14)),
+        (f"{year}Q3", date(year, 11, 14)),
+    ]
+
+
+def _latest_expected_quarter(today: date, buffer_days: int) -> str | None:
+    """依今日日期回「(截止日+緩衝) 已到」的最新季別標籤（如 '2026Q1'）；都還沒到回 None。"""
+    cands = (_quarter_deadlines(today.year - 1)
+             + _quarter_deadlines(today.year)
+             + _quarter_deadlines(today.year + 1))
+    avail = [(lbl, dl) for lbl, dl in cands if dl + timedelta(days=buffer_days) <= today]
+    return max(avail, key=lambda x: x[1])[0] if avail else None
+
+
+def _rev_deadline(ry: int, rm: int) -> date:
+    """某年月營收的申報截止日（次月 10 日）。"""
+    ny, nm = (ry + 1, 1) if rm == 12 else (ry, rm + 1)
+    return date(ny, nm, 10)
+
+
+def _latest_expected_rev_month(today: date, buffer_days: int) -> str | None:
+    """依今日日期回「(截止日+緩衝) 已到」的最新營收月標籤（如 '2026-04'）；都還沒到回 None。"""
+    y, m = today.year, today.month
+    cands: list[tuple[int, int]] = []
+    for _ in range(6):  # 往回看半年足夠涵蓋公布落差
+        cands.append((y, m))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    avail = [(ry, rm) for ry, rm in cands
+             if _rev_deadline(ry, rm) + timedelta(days=buffer_days) <= today]
+    if not avail:
+        return None
+    ry, rm = max(avail)
+    return f"{ry}-{rm:02d}"
+
+
+def _section_fresh(kind: str, data: Any, age_days: float, ttl_days: float) -> bool:
+    """是否仍可沿用快取（不重抓）。
+
+    財報/月營收走日曆感知：快取期別 ≥ 「理應已公布的最新期別」就視為最新、不重抓；
+    缺期別資訊時退回時間 TTL。負快取（查無資料的標的）給長 TTL，不必每輪重探。
+    """
+    if data is None:
+        return age_days <= settings.fundamentals_negcache_ttl_days
+
+    today = date.today()
+    buf = settings.fundamentals_filing_buffer_days
+    if kind == "financials":
+        have, target = data.get("fiscal_quarter"), _latest_expected_quarter(today, buf)
+        if not have or not target:
+            return age_days <= ttl_days
+        return have >= target  # 期別字串等寬，字典序比較即時序比較
+    if kind == "revenue":
+        have, target = data.get("revenue_month"), _latest_expected_rev_month(today, buf)
+        if not have or not target:
+            return age_days <= ttl_days
+        return have >= target
+    return age_days <= ttl_days
+
+
 def _read_section(symbol: str, kind: str, ttl_days: float) -> tuple[bool, Any]:
-    """回 (命中且未過期, data)；data 可為 None（負快取，避免重抓查無的標的）。"""
+    """回 (命中且仍最新, data)；data 可為 None（負快取，避免重抓查無的標的）。"""
     p = _cache_path(symbol)
     if not p.exists():
         return False, None
@@ -38,10 +107,11 @@ def _read_section(symbol: str, kind: str, ttl_days: float) -> tuple[bool, Any]:
         fetched = datetime.fromisoformat(sec["fetched_at"])
     except Exception:  # noqa: BLE001 — 快取壞了就當 miss 重抓
         return False, None
+    data = sec.get("data")
     age_days = (datetime.now(timezone.utc) - fetched).total_seconds() / 86400
-    if age_days > ttl_days:
-        return False, None
-    return True, sec.get("data")
+    if _section_fresh(kind, data, age_days, ttl_days):
+        return True, data
+    return False, None
 
 
 def _write_section(symbol: str, kind: str, data: Any) -> None:
