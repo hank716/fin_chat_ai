@@ -43,15 +43,20 @@
 </div>
 {% endfor %}
 
-{% macro watch_item(w, cls) %}
+{% macro watch_item(w, cls, bearish=False) %}
 <div class="watch {{ cls }}">
   <h3>{{ w.symbol }} {{ w.name }}{% if w.sector %} <span class="sector">〔{{ w.sector }}〕</span>{% endif %}</h3>
   <div class="narrative">{{ w.thesis }}</div>
   {% if w.signals %}<div class="signals">{% for s in w.signals %}<span>{{ s }}</span>{% endfor %}</div>{% endif %}
   {% if w.target_price or w.stop_loss %}
   <div class="levels">
+    {% if bearish %}
+    {% if w.stop_loss %}🛑 停損出場 <b>{{ w.stop_loss }}</b>（跌破支撐）{% endif %}
+    {% if w.target_price %}　🎯 反彈減碼 <b>{{ w.target_price }}</b>（壓力）{% endif %}
+    {% else %}
     {% if w.target_price %}🎯 目標價 <b>{{ w.target_price }}</b>{% endif %}
     {% if w.stop_loss %}　🛑 止損價 <b>{{ w.stop_loss }}</b>{% endif %}
+    {% endif %}
     <span class="ref">（技術面參考，非保證）</span>
   </div>
   {% endif %}
@@ -68,8 +73,9 @@
 
 {% if report.tw_caution %}
 <div class="card">
-  <h2>偏空/要注意標的 <span class="badge">追高/籌碼風險・技術參考非保證</span></h2>
-  {% for w in report.tw_caution %}{{ watch_item(w, 'caution') }}{% endfor %}
+  <h2>偏空/要注意標的 <span class="badge">持股出場參考・技術參考非保證</span></h2>
+  <p class="ref">以持股出場視角：跌破停損價（下方支撐）宜出場、反彈到減碼價（上方壓力）可考慮減碼。</p>
+  {% for w in report.tw_caution %}{{ watch_item(w, 'caution', bearish=True) }}{% endfor %}
 </div>
 {% endif %}
 

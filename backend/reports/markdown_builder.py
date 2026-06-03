@@ -48,7 +48,7 @@ def build_markdown(
     for sec in result.sections:
         parts.append(_render_section(sec))
 
-    def _watch_block(title: str, note: str, items: list) -> str:
+    def _watch_block(title: str, note: str, items: list, *, bearish: bool = False) -> str:
         lines = [f"## {title}", "", f"_{note}_", ""]
         for w in items:
             sector = f"〔{w.sector}〕" if w.sector else ""
@@ -58,11 +58,19 @@ def build_markdown(
                 lines.append("")
                 lines.append("訊號：" + "、".join(w.signals))
             if w.target_price or w.stop_loss:
+                # 偏空＝持股出場視角：先列「停損出場」(下方支撐)，再列「反彈減碼」(上方壓力)。
+                # 偏多＝進場視角：上檔目標價 + 下方停損。兩者 stop_loss 都在現價下方。
                 bits = []
-                if w.target_price:
-                    bits.append(f"🎯 目標價 **{w.target_price}**")
-                if w.stop_loss:
-                    bits.append(f"🛑 止損價 **{w.stop_loss}**")
+                if bearish:
+                    if w.stop_loss:
+                        bits.append(f"🛑 停損出場 **{w.stop_loss}**（跌破支撐）")
+                    if w.target_price:
+                        bits.append(f"🎯 反彈減碼 **{w.target_price}**（壓力）")
+                else:
+                    if w.target_price:
+                        bits.append(f"🎯 目標價 **{w.target_price}**")
+                    if w.stop_loss:
+                        bits.append(f"🛑 止損價 **{w.stop_loss}**")
                 lines.append("\n" + "　".join(bits) + "（技術面參考，非保證）")
             if w.uncertainty:
                 lines.append(f"\n> ⚠️ 待驗證：{w.uncertainty}")
@@ -72,7 +80,11 @@ def build_markdown(
     if result.tw_watchlist:
         parts.append(_watch_block("偏多觀察標的（含目標價/止損）", "技術面偏多；目標價/止損為技術參考，非保證，請自行判斷。", result.tw_watchlist))
     if result.tw_caution:
-        parts.append(_watch_block("偏空/要注意標的", "技術面偏空或有追高/籌碼風險；目標價/止損為技術參考，非保證。", result.tw_caution))
+        parts.append(_watch_block(
+            "偏空/要注意標的（持股出場參考）",
+            "技術面偏空或有追高/籌碼風險。以持股出場視角：跌破停損價（下方支撐）宜出場、"
+            "反彈到減碼價（上方壓力）可考慮減碼；皆為技術參考，非保證，請自行判斷。",
+            result.tw_caution, bearish=True))
 
     if result.risks:
         parts.append("## 今日風險提醒\n\n" + "\n".join(f"- {r}" for r in result.risks))

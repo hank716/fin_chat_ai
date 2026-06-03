@@ -47,6 +47,8 @@ router = APIRouter(tags=["ask"])
 class AskRequest(BaseModel):
     user_id: str
     question: str
+    # 僅 Discord 討論串會帶：有值＝該串內帶短期對話記憶；無值（一般頻道）＝維持無狀態
+    conversation_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -82,7 +84,12 @@ async def ask(req: AskRequest) -> AskResponse:
         fu = build_fundamentals(sym)
         if fu:
             fundamentals[sym] = fu
-    prompt = build_qa_prompt(req.question, report, on_demand=on_demand, fundamentals=fundamentals)
+    # 討論串記憶（一般頻道 conversation_id=None → 無記憶）
+    from chat import history
+    hist = history.load(req.conversation_id) if req.conversation_id else None
+    prompt = build_qa_prompt(
+        req.question, report, on_demand=on_demand, fundamentals=fundamentals, history=hist
+    )
     try:
         answer, usage = gemini_client.generate_text(prompt, use_search=True)
     except GeminiQuotaExceeded as exc:
@@ -97,7 +104,10 @@ async def ask(req: AskRequest) -> AskResponse:
     day_total = tracker.today_total()
     logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",
                 req.user_id, usage, cost, day_total)
-    answer = (answer or "（無回應）") + \
+    core_answer = answer or "（無回應）"
+    if req.conversation_id:           # 討論串才寫記憶；存乾淨答案（不含免責句）
+        history.append(req.conversation_id, req.question, core_answer)
+    answer = core_answer + \
         "\n\n⚠️ 以上方向/目標價/止損為技術面輔助參考，非保證、請自行判斷風險。"
     return AskResponse(
         answer=answer,

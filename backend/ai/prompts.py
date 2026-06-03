@@ -36,8 +36,11 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 嚴格規則：
 1. 數字（價格/報酬/籌碼/資券比）只能引用 features JSON，**不得捏造**。features.web_context 是用 Google 搜尋查證的近兩日市場重大事件（已附來源），可作為總經/政策/地緣/產業事件的事實依據，用於「跨市場連動」「風險」「重要新聞」等段落；features.news 為個股新聞。除這些來源外不得自行杜撰事件。
 2. 跨市場關係一律用「**可能影響 / 傾向 / 連動 / 值得觀察**」，不可斷言因果或預測漲跌。
-3. 這是輔助決策工具（非下單系統），**可以**給方向看法（偏多/偏空/中性）與**技術面目標價、止損價**，由使用者自行判斷。tw_watchlist（偏多）/ tw_caution（偏空或風險）每檔要有：thesis（看法與理由）、signals（具體訊號帶數值，如「投信連買4日」「外資5日買超115526張」「站上MA20」「資券比42%偏高」）、**target_price（目標價）與 stop_loss（止損價）**——以支撐/壓力/均線/近期區間為依據、用收盤價同單位的數字字串，並在 thesis 說明依據。uncertainty 寫需驗證之處。
-   但**仍不得**使用誇大保證語（「保證獲利/穩賺/無風險/一定會漲/一定會跌」），也不得捏造數據。目標價/止損是技術面參考，非保證。
+3. 這是輔助決策工具（非下單系統），**可以**給方向看法（偏多/偏空/中性）與**技術面 target_price / stop_loss**，由使用者自行判斷。tw_watchlist（偏多）/ tw_caution（偏空或風險）每檔要有：thesis（看法與理由）、signals（具體訊號帶數值，如「投信連買4日」「外資5日買超115526張」「站上MA20」「資券比42%偏高」）、target_price 與 stop_loss、uncertainty。以支撐/壓力/均線/近期區間為依據、用收盤價同單位的數字字串，並在 thesis 說明依據。
+   **target_price / stop_loss 的方向慣例（務必遵守，兩份清單相反）**：
+   - tw_watchlist（偏多／進場視角）：stop_loss = **低於現價**的支撐／停損價（跌破代表偏多看法失效）；target_price = **高於現價**的壓力／上檔目標。即 `stop_loss < 現價 < target_price`。
+   - tw_caution（偏空／**持股出場視角**）：stop_loss = **低於現價**的支撐／停損出場價（**跌破支撐就該停損出場**）；target_price = **高於現價**的反彈壓力／減碼出場價（反彈到此可考慮減碼）。即 `stop_loss < 現價 < target_price`。**注意：偏空清單不是叫你做空，是「手上有的弱勢股何時出場」的參考。**
+   但**仍不得**使用誇大保證語（「保證獲利/穩賺/無風險/一定會漲/一定會跌」），也不得捏造數據。target_price/stop_loss 是技術面參考，非保證。
 4. news_digest 只能用 features.news 內的新聞，**保留原始 source/date/url**，takeaway 是你的解讀（屬推論、需保守），並標 uncertainty。沒有相關新聞就回空陣列。features.news 的 `tier=social`（PTT/Dcard/論壇/爆料同學會）只能當**情緒訊號**、不可當事實，takeaway 要明說「為市場情緒、未經證實」。
 5. sources 放你引用到的 features 欄位路徑（或新聞 url）清單。data_as_of 用 features.as_of。
 
@@ -72,10 +75,25 @@ QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Disco
 def build_qa_prompt(
     question: str, report: dict[str, Any], on_demand: dict[str, Any] | None = None,
     fundamentals: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> str:
-    """組出 Discord 即時查詢 prompt：規則 + 今日晨報 + features + 即時標的 + 基本面 + 問題。"""
+    """組出 Discord 即時查詢 prompt：規則 + 今日晨報 + features + 即時標的 + 基本面 + 對話歷史 + 問題。
+
+    history（僅 Discord 討論串內提供）：[{"q":使用者問,"a":助理答}, ...] 由舊到新，給代名詞/追問的脈絡。
+    """
     markdown = report.get("markdown", "")
     features_json = json.dumps(report.get("features", {}), ensure_ascii=False)
+    hist_block = ""
+    if history:
+        turns = "\n".join(
+            f"{i}. 使用者：{h.get('q','')}\n   助理：{h.get('a','')}"
+            for i, h in enumerate(history, 1)
+        )
+        hist_block = (
+            "本討論串先前對話（由舊到新，僅供理解『它/這檔/剛剛那個』等代名詞與追問脈絡；"
+            "數據仍以下方 features／即時資料為準，勿憑記憶捏造）：\n"
+            f"{turns}\n\n"
+        )
     od_block = ""
     if on_demand:
         od_json = json.dumps(on_demand, ensure_ascii=False)
@@ -94,7 +112,7 @@ def build_qa_prompt(
         f"{QA_RULES}\n\n"
         f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
         f"可引用的 features JSON：\n```json\n{features_json}\n```\n\n"
-        f"{od_block}{fu_block}"
+        f"{od_block}{fu_block}{hist_block}"
         f"使用者問題：{question}\n\n請依規則精簡作答。"
     )
 
@@ -134,6 +152,10 @@ def build_brief_structuring_prompt(analysis: str, features: dict[str, Any]) -> s
         "- sections：照分析稿各段落（今日美股摘要/加密貨幣/跨市場連動/台股大盤/台股族群觀察/籌碼面/技術面/基本面），"
         "narrative 用分析稿原文精簡；evidence 的 source_ref 指向 features 欄位路徑。\n"
         "- tw_watchlist（偏多）/ tw_caution（偏空），帶 signals、target_price、stop_loss、uncertainty。\n"
+        "  target_price/stop_loss 方向慣例（兩份相反，務必遵守）：兩份的 stop_loss 都在**現價下方**、"
+        "target_price 都在**現價上方**（即 stop_loss < 現價 < target_price）。偏多 = 進場視角"
+        "（跌破停損出場、上檔目標獲利）；偏空 = **持股出場視角**（跌破支撐停損出場、反彈到壓力減碼出場），"
+        "偏空不是做空。\n"
         "  **tw_caution 不可為空**：分析稿若沒明列偏空標的，就從 features.tw.movers 的 "
         "top_losers_5d / top_short_margin_ratio / top_below_index_20d / top_foreign_sell_5d 補滿（盡量 5 檔），"
         "signals 帶該標的在 features.tw.stocks 內的實際數值（跌幅／資券比／相對大盤強弱／外資賣超）。\n"
