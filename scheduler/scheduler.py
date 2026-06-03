@@ -115,6 +115,29 @@ def crawl_fundamentals(*, reason: str = "scheduled") -> None:
         logger.error("全市場財報慢爬觸發例外: %s", exc)
 
 
+def crawl_catch_up() -> None:
+    """啟動補跑全市場財報慢爬：服務晚於 CRAWL_TIMES 啟動時，scheduler 的 cron job 會
+    misfire（超過 grace 直接跳過），慢爬本身又沒有自身 catch-up，當天就靜默漏掉。
+
+    對齊使用者理想「服務一啟動就自己慢慢爬」：只要設了 CRAWL_TIMES 且現在已過當日最早
+    慢爬時間，就立即補觸發一次。慢爬靠後端互斥（同時只一個）+ 磁碟快取 TTL（命中即跳過），
+    重入安全；季更慢資料即使在非交易日跑也多為快取命中，成本極低，故不做交易日限制。
+    """
+    if not CRAWL_TIMES.strip():
+        return
+    if not _wait_backend_ready():
+        logger.warning("backend 未就緒，跳過慢爬 catch-up（等今日排程觸發）")
+        return
+    h, m = _parse_times(CRAWL_TIMES)[0]
+    now = datetime.now(TZ)
+    scheduled_today = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now >= scheduled_today:
+        logger.info("catch-up：已過今日最早慢爬時間 %02d:%02d，立即補觸發全市場財報慢爬", h, m)
+        crawl_fundamentals(reason="catch-up")
+    else:
+        logger.info("catch-up：未到今日慢爬時間 %02d:%02d，交由排程觸發", h, m)
+
+
 def _wait_backend_ready(max_wait: float = 120.0) -> bool:
     deadline = time.monotonic() + max_wait
     while time.monotonic() < deadline:
@@ -162,6 +185,7 @@ def main() -> None:
                 ", ".join(f"{h:02d}:{m:02d}" for h, m in times), SCHEDULE_TZ, BACKEND_URL)
 
     catch_up()
+    crawl_catch_up()
 
     scheduler = BlockingScheduler(timezone=TZ)
     for h, m in times:
