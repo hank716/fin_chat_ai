@@ -285,6 +285,16 @@ curl -s -X POST "localhost:8000/admin/cost/calibrate?month_total_twd=121.15" \
 > 未設 `ADMIN_TOKEN` → 端點回 503（fail-closed）；token 不符 → 401。對外網域走 Cloudflare
 > Access 已擋一層，這個 token 再多擋一層，避免有人改你的成本計數。
 
+**測試時不被每日上限擋（但花費仍計入）**：壓測/驗證問答時，`/ask` 帶同一個 `X-Admin-Token`
+就會跳過 `DAILY_COST_LIMIT_TWD` 上限，但**成本照常累加進 redis**（不會少算）。一般 Discord
+問答不帶此標頭，仍受每日上限保護。
+
+```bash
+curl -s -X POST "localhost:8000/ask" -H "Content-Type: application/json" \
+  -H "X-Admin-Token: <你的 ADMIN_TOKEN>" \
+  -d '{"user_id":"test","question":"台積電2330走勢?"}'
+```
+
 **B. 直接寫 redis（不經 backend；不會回傳校準前後值）**
 
 ```bash

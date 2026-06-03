@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from ai import gemini_client
@@ -60,15 +61,27 @@ class AskResponse(BaseModel):
     budget_exceeded: bool = False
 
 
+def _admin_ok(token: str | None) -> bool:
+    """帶有效 ADMIN_TOKEN（X-Admin-Token 標頭）→ 測試放行。未設定 ADMIN_TOKEN 一律不放行。"""
+    from config import settings
+
+    expected = settings.admin_token.strip()
+    return bool(expected) and bool(token) and secrets.compare_digest(token, expected)
+
+
 @router.post("/ask", response_model=AskResponse)
-async def ask(req: AskRequest) -> AskResponse:
+async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None)) -> AskResponse:
     ok, reason, spent, limit = tracker.check_budget()
-    if not ok:
+    # 測試放行：帶有效 X-Admin-Token 時跳過上限，但**花費照常計入**（buckets 仍累加）。
+    bypass = _admin_ok(x_admin_token)
+    if not ok and not bypass:
         return AskResponse(
             answer=f"{reason}。請明天再試或調整上限。",
             report_id="", cost_twd=0.0, today_spent=spent, daily_limit=limit,
             budget_exceeded=True,
         )
+    if not ok and bypass:
+        logger.info("預算已達上限，但帶管理權杖放行測試（花費仍計入）：%s", reason)
 
     rid = morning_brief.latest_report_id()
     report = morning_brief.load_report(rid) if rid else None
