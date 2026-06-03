@@ -187,13 +187,20 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
     # 只把「movers 出現過的標的」的明細丟給 AI（全市場 2000+ 檔不能全塞進 prompt）
     focus = {it["symbol"] for lst in movers.values() for it in lst}
     # 丟給 AI 前移除內部用的底線欄位（_amount 等）；並補基本面（月營收 YoY/MoM）
+    from data_sources.finmind_loader import FinMindBackoff
     from processor.fundamentals import build_fundamentals
     stocks = {}
     for s in focus:
         if s not in all_stocks:
             continue
         entry = {k: v for k, v in all_stocks[s].items() if not k.startswith("_")}
-        fu = build_fundamentals(s)
+        try:
+            fu = build_fundamentals(s)
+        except FinMindBackoff as exc:
+            # FinMind 額度耗盡/封鎖：晨報照出，只是這批 focus 缺基本面，不為此中斷整份報告。
+            logger.warning("基本面抓取因 FinMind 退避中止，本批 focus 略過基本面: %s", exc)
+            stocks[s] = entry
+            break
         if fu:
             entry["fundamentals"] = fu
         stocks[s] = entry

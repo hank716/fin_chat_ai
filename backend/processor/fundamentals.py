@@ -167,6 +167,8 @@ def _fetch_revenue(symbol: str) -> dict[str, Any] | None:
     try:
         start = (date.today().replace(year=date.today().year - 2)).isoformat()
         rows = finmind_loader.get_month_revenue(symbol, start)
+    except finmind_loader.FinMindBackoff:
+        raise  # 退避訊號往上拋：不寫負快取、讓慢爬中止本輪
     except Exception as exc:  # noqa: BLE001
         logger.warning("月營收抓取 %s 失敗: %s", symbol, exc)
         return None
@@ -293,6 +295,8 @@ def _fetch_financials(symbol: str) -> dict[str, Any] | None:
                     out["operating_margin_pct"] = round(op / rev * 100, 1)
                 if net is not None:
                     out["net_margin_pct"] = round(net / rev * 100, 1)
+    except finmind_loader.FinMindBackoff:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("損益表抓取 %s 失敗: %s", symbol, exc)
 
@@ -305,6 +309,8 @@ def _fetch_financials(symbol: str) -> dict[str, Any] | None:
             liab = _pick(latest, "Liabilities", "TotalLiabilities")
             if assets and liab is not None:
                 out["debt_ratio_pct"] = round(liab / assets * 100, 1)
+    except finmind_loader.FinMindBackoff:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("資產負債表抓取 %s 失敗: %s", symbol, exc)
 
@@ -318,6 +324,8 @@ def _fetch_financials(symbol: str) -> dict[str, Any] | None:
             if capex is not None:
                 # FCF = 營業現金流 − 資本支出；capex 符號隨版本不一，取 abs 保守
                 out["free_cashflow_ttm_100m"] = round((ocf - abs(capex)) / 1e8, 1)
+    except finmind_loader.FinMindBackoff:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("現金流量表抓取 %s 失敗: %s", symbol, exc)
 
@@ -345,6 +353,8 @@ def _fetch_financials(symbol: str) -> dict[str, Any] | None:
                     "cash_per_share": round(cash, 2),
                     "stock_per_share": round(stock, 2),
                 }
+    except finmind_loader.FinMindBackoff:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("股利抓取 %s 失敗: %s", symbol, exc)
 

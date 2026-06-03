@@ -21,7 +21,14 @@ class FinMindError(RuntimeError):
     pass
 
 
-class FinMindIPBanned(FinMindError):
+class FinMindBackoff(FinMindError):
+    """需要「退避而非重試」的訊號：再打也只是繼續失敗，呼叫端應停手等回補。
+
+    兩種：IP 封鎖（403，等 retry_after）與每小時額度耗盡（402，約整點回補）。
+    """
+
+
+class FinMindIPBanned(FinMindBackoff):
     """FinMind 因超量暫時封鎖本機 IP（HTTP 403 `ip banned`）。
 
     `retry_after` 為 FinMind 回報的「還需等候秒數」，到期後自動解除。
@@ -35,9 +42,20 @@ class FinMindIPBanned(FinMindError):
         super().__init__(f"{msg} {detail}".strip())
 
 
+class FinMindQuotaExceeded(FinMindBackoff):
+    """FinMind 每小時請求數達上限（HTTP 402 `Requests reach the upper limit`，免費版 600/h）。
+
+    額度約整點回補。刻意不重試（10s 級 backoff 無助於回補，只會把失敗請求加倍），
+    交由呼叫端（慢爬）退避——慢爬靠磁碟快取可重入，下輪自動續跑。
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__(f"FinMind hourly request quota exceeded (HTTP 402) {detail}".strip())
+
+
 def _should_retry(exc: BaseException) -> bool:
-    """transient 錯誤（連線/逾時/一般 FinMindError）可重試；IP 封鎖不重試。"""
-    if isinstance(exc, FinMindIPBanned):
+    """transient 錯誤（連線/逾時/一般 FinMindError）可重試；需退避者（IP 封鎖/額度耗盡）不重試。"""
+    if isinstance(exc, FinMindBackoff):
         return False
     return isinstance(exc, (httpx.RequestError, FinMindError))
 
@@ -49,12 +67,19 @@ def _should_retry(exc: BaseException) -> bool:
     reraise=True,
 )
 def _request(dataset: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    rate_limiter.acquire("finmind")
+    try:
+        rate_limiter.acquire("finmind")
+    except rate_limiter.RateLimitExhausted as exc:
+        # 本機端就先擋下：當小時額度已用罄，等同 402，免得真的打出去再被算一筆失敗請求。
+        raise FinMindQuotaExceeded(str(exc)) from exc
     payload = {"dataset": dataset, "token": settings.finmind_token, **(params or {})}
     with httpx.Client(timeout=TIMEOUT) as client:
         resp = client.get(BASE_URL, params=payload)
     if resp.status_code != 200:
         detail = resp.text[:200]
+        if resp.status_code == 402:
+            # 每小時請求數達上限：{"msg":"Requests reach the upper limit.","status":402}
+            raise FinMindQuotaExceeded(detail)
         if resp.status_code == 403:
             # FinMind 超量封鎖：{"msg":"ip banned","status":403,"retry_after":1653}
             try:
@@ -65,6 +90,9 @@ def _request(dataset: str, params: dict[str, Any] | None = None) -> list[dict[st
                 raise FinMindIPBanned(int(j.get("retry_after") or 0), detail)
         raise FinMindError(f"HTTP {resp.status_code}: {detail}")
     body = resp.json()
+    if body.get("status") == 402:
+        # 部分情況以 HTTP 200 包 status=402 回傳，同樣視為額度耗盡。
+        raise FinMindQuotaExceeded(str(body.get("msg", "")))
     if body.get("status") != 200:
         raise FinMindError(f"FinMind status={body.get('status')} msg={body.get('msg')}")
     return body.get("data") or []

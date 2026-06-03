@@ -13,14 +13,20 @@ from dataclasses import dataclass
 
 import redis
 
+from config import settings
 from redis_client import redis_client
 
 
 @dataclass(frozen=True)
 class Quota:
-    """每秒可用 token 上限 + bucket 容量上限。"""
+    """每秒可用 token 上限 + bucket 容量上限 + 每小時硬上限（0＝不限）。
+
+    rate_per_sec/burst 管「瞬時平滑度」，hourly_budget 管「整點額度」。兩者互補：
+    前者防瞬間打爆，後者防一小時內累計超過 provider 的 per-hour 配額（FinMind 600/h）。
+    """
     rate_per_sec: float
     burst: int
+    hourly_budget: int = 0
 
 
 # 各 provider 的保守上限（FinMind 免費 600 req/h；TWSE/TPEx 不可暴力掃）
@@ -31,7 +37,7 @@ QUOTAS: dict[str, Quota] = {
     #   2) 跨 process 節流已修正（_try_consume 用 wall clock，docker exec 與 backend 共享同桶）
     #   3) 全市場財報慢爬 reentrant 且容忍 403（FinMindIPBanned 被逐檔 except 接住、可續跑）
     # burst 30：讓熱快取晨報的 ~24 則新聞請求瞬間完成、不被逐筆節流。
-    "finmind": Quota(rate_per_sec=0.5, burst=30),
+    "finmind": Quota(rate_per_sec=0.5, burst=30, hourly_budget=settings.finmind_hourly_budget),
     "twse": Quota(rate_per_sec=1.0, burst=5),
     "tpex": Quota(rate_per_sec=1.0, burst=5),
     "yahoo": Quota(rate_per_sec=2.0, burst=10),
@@ -42,15 +48,55 @@ class RateLimitTimeout(RuntimeError):
     pass
 
 
+class RateLimitExhausted(RuntimeError):
+    """provider 當小時硬上限已用罄（非瞬時節流，而是整點配額）。
+
+    與 RateLimitTimeout 不同：等下去也沒用（要等到下個整點才回補），呼叫端應退避而非重試。
+    """
+
+    def __init__(self, provider: str, budget: int) -> None:
+        self.provider = provider
+        self.budget = budget
+        super().__init__(f"{provider} hourly budget {budget} exhausted")
+
+
 def _key(provider: str) -> str:
     return f"finchat:ratelimit:{provider}"
+
+
+def _hourly_key(provider: str) -> str:
+    # 以 epoch 整點分桶；跨 process 共享同一桶，TTL 自然汰換。
+    return f"finchat:ratelimit:{provider}:h{int(time.time() // 3600)}"
+
+
+def _check_hourly_budget(cli: redis.Redis, provider: str, quota: Quota, cost: int) -> None:
+    """整點配額檢查：超過 hourly_budget 抛 RateLimitExhausted。
+
+    用 INCRBY 計數（跨 process 一致）；若超量就把這次的增量退回，避免永久灌大計數。
+    Redis 故障時放行（寧可少擋，也不要因為快取層掛掉而擋住所有對外請求）。
+    """
+    if quota.hourly_budget <= 0:
+        return
+    key = _hourly_key(provider)
+    try:
+        used = cli.incrby(key, cost)
+        if used == cost:  # 本小時第一次，設定過期（留 2h 容跨桶讀取）
+            cli.expire(key, 7200)
+    except redis.RedisError:
+        return
+    if used > quota.hourly_budget:
+        try:
+            cli.decrby(key, cost)
+        except redis.RedisError:
+            pass
+        raise RateLimitExhausted(provider, quota.hourly_budget)
 
 
 def acquire(provider: str, *, cost: int = 1, max_wait_sec: float = 30.0,
             client: redis.Redis | None = None) -> float:
     """阻塞直到拿到 token, 回傳實際 wait 秒數。
 
-    超過 max_wait_sec 抛 RateLimitTimeout。
+    超過 max_wait_sec 抛 RateLimitTimeout；當小時硬上限用罄抛 RateLimitExhausted。
     cost: 一次操作消耗幾個 token (例如批次抓 100 檔可給 cost=10)。
     """
     cli = client or redis_client
@@ -58,6 +104,9 @@ def acquire(provider: str, *, cost: int = 1, max_wait_sec: float = 30.0,
     if not quota:
         # 未知 provider 不 throttle, 讓上游決定
         return 0.0
+
+    # 先檢查整點配額（便宜、不睡）：用罄就直接抛，免得白等 token 後仍失敗。
+    _check_hourly_budget(cli, provider, quota, cost)
 
     deadline = time.monotonic() + max_wait_sec
     waited = 0.0

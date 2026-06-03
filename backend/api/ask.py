@@ -96,10 +96,16 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     known = set((report.get("features", {}).get("tw", {}) or {}).get("stocks", {}).keys())
     on_demand = _ondemand_symbols(req.question, known)
     # 基本面（月營收 YoY/MoM）：對問題中的台股代號 on-demand 抓
+    from data_sources.finmind_loader import FinMindBackoff
     from processor.fundamentals import build_fundamentals
     fundamentals: dict = {}
     for sym in _TW_CODE.findall(req.question)[:3]:
-        fu = build_fundamentals(sym)
+        try:
+            fu = build_fundamentals(sym)
+        except FinMindBackoff as exc:
+            # FinMind 額度耗盡/封鎖：照常回答，只是缺基本面，不讓問答整個失敗。
+            logger.warning("問答基本面抓取因 FinMind 退避中止: %s", exc)
+            break
         if fu:
             fundamentals[sym] = fu
     # 討論串記憶（一般頻道 conversation_id=None → 無記憶）

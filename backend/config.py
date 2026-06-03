@@ -45,6 +45,9 @@ class Settings(BaseSettings):
 
     # ── 資料源 ──
     finmind_token: str = ""
+    # FinMind 免費版每小時請求上限 600；留安全邊際設 550，rate_limiter 跨 process 用
+    # Redis 計數，超過就讓慢爬退避（互動晨報在靜默窗外、獨享當小時額度，不會撞上）。0＝關閉。
+    finmind_hourly_budget: int = 550
     enable_twse: bool = True
     enable_tpex: bool = True
     enable_finmind: bool = True
@@ -59,6 +62,15 @@ class Settings(BaseSettings):
     fundamentals_filing_buffer_days: int = 5
     # 負快取（查無財報的標的，多為 ETF/權證）長 TTL：不必每輪重探，約季度重探一次
     fundamentals_negcache_ttl_days: int = 80
+    # 全市場財報慢爬「靜默窗」：此區間慢爬暫停，把 FinMind 每小時額度完整讓給晨報。
+    # 預設「連動」晨報排程自動推算（見 prefetch_fundamentals._crawl_blackout_window）：
+    #   start = 最早晨報活動(prefetch/report) − crawl_blackout_lead_min（FinMind 額度按小時回補，
+    #           晨報前 1 小時停抓即可讓那小時額度全歸晨報）
+    #   end   = 最晚晨報活動 + crawl_blackout_tail_min（容報告產製時間）
+    # 只有想手動釘死時才填 fundamentals_crawl_blackout="HH:MM-HH:MM"（非空＝覆寫自動推算）。
+    fundamentals_crawl_blackout: str = ""
+    crawl_blackout_lead_min: int = 60
+    crawl_blackout_tail_min: int = 40
 
     # ── 儲存（local parquet SSOT，無 Postgres）──
     local_storage_path: str = "/app/storage"
@@ -85,6 +97,9 @@ class Settings(BaseSettings):
     # ── 排程 ──
     schedule_tz: str = "Asia/Taipei"
     morning_report_time: str = "08:30"
+    # 與 scheduler 同源讀 env（逗號分隔 HH:MM）：供 backend 推算慢爬靜默窗，避免兩處時間失聯。
+    prefetch_times: str = ""   # PREFETCH_TIMES
+    report_times: str = ""     # REPORT_TIMES
 
 
 settings = Settings()

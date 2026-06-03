@@ -31,7 +31,7 @@ import universe
 from storage import local_store
 
 from . import finmind_loader
-from .finmind_loader import FinMindIPBanned
+from .finmind_loader import FinMindIPBanned, FinMindQuotaExceeded
 from .ingest import TW_MARKET, _dq_filter
 
 logger = logging.getLogger("ai-market-backend.backfill_tw")
@@ -129,6 +129,17 @@ def backfill_watchlist(
             )
             time.sleep(sleep_for)
             continue  # 不推進索引，重試同一個 task
+        except FinMindQuotaExceeded:
+            # 每小時額度耗盡：等整點回補對 backfill 不划算，直接中止、回報剩餘，稍後續跑。
+            logger.error(
+                "FinMind 每小時額度耗盡，中止回補。完成 %d/%d 任務，剩 %d 檔未補（稍後再續）。",
+                i, len(tasks), len({t[0] for t in tasks[i:]}),
+            )
+            return _summary(
+                aborted=True,
+                ban={"reason": "hourly_quota_exceeded", "at_symbol": sym, "at_kind": kind},
+                done_tasks=i,
+            )
         except Exception as exc:  # noqa: BLE001 — 單檔失敗不阻斷其他
             counts[kind][1] += 1
             errors[f"{kind}:{sym}"] = str(exc)

@@ -25,9 +25,71 @@ import time
 from pathlib import Path
 from typing import Any
 
+from config import settings
+from data_sources.finmind_loader import FinMindBackoff
 from processor.fundamentals import build_fundamentals
 
 logger = logging.getLogger("ai-market-backend.prefetch")
+
+
+def _parse_hhmm_list(spec: str) -> list[int]:
+    """'07:30,08:20' → [450, 500]（一日中的分鐘數）。略過不合法項目。"""
+    out: list[int] = []
+    for item in (spec or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            h, m = (int(x) for x in item.split(":"))
+            out.append(h * 60 + m)
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def _crawl_blackout_window() -> str:
+    """慢爬靜默窗 'HH:MM-HH:MM'：顯式設定優先，否則連動晨報排程自動推算。
+
+    自動推算：start = 最早晨報活動 − lead 分鐘；end = 最晚晨報活動 + tail 分鐘。
+    晨報活動取 PREFETCH_TIMES + REPORT_TIMES（後者空則退回 morning_report_time）。
+    推不出時間（皆未設）→ 回空字串＝不靜默。
+    """
+    explicit = (settings.fundamentals_crawl_blackout or "").strip()
+    if explicit:
+        return explicit
+    times = _parse_hhmm_list(settings.prefetch_times)
+    times += _parse_hhmm_list(settings.report_times or settings.morning_report_time)
+    if not times:
+        return ""
+    start = (min(times) - settings.crawl_blackout_lead_min) % 1440
+    end = (max(times) + settings.crawl_blackout_tail_min) % 1440
+    return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"
+
+
+def _in_crawl_blackout(window: str) -> bool:
+    """現在（schedule_tz 當地時間）是否落在慢爬靜默窗 'HH:MM-HH:MM' 內。
+
+    靜默窗用來把 FinMind 整點額度完整讓給晨報——FinMind 額度按小時回補，晨報前 1 小時
+    停抓即可讓那小時的額度全歸晨報。窗格為空或格式不合法則一律不靜默（不擋慢爬）。
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    window = (window or "").strip()
+    if "-" not in window:
+        return False
+    try:
+        a, b = window.split("-", 1)
+        sh, sm = (int(x) for x in a.split(":"))
+        eh, em = (int(x) for x in b.split(":"))
+    except (ValueError, TypeError):
+        return False
+    now = datetime.now(ZoneInfo(settings.schedule_tz))
+    cur = now.hour * 60 + now.minute
+    start, end = sh * 60 + sm, eh * 60 + em
+    if start <= end:
+        return start <= cur < end
+    return cur >= start or cur < end  # 跨午夜的窗格
 
 _WATCHLIST_JSON = Path(__file__).resolve().parent.parent / "configs" / "universe" / "tw.json"
 
@@ -89,9 +151,17 @@ def prefetch(symbols: list[str] | None = None, *, force: bool = False, refresh: 
     else:
         mode, syms = "focus", _dynamic_focus(refresh)
 
+    # 靜默窗只套用在全市場慢爬；focus/explicit（晨報自己的 prefetch）刻意在窗內執行，不可被擋。
+    blackout = _crawl_blackout_window() if mode == "full" else ""
     ok = empty = error = processed = 0
+    stop_reason: str | None = None
     for sym in syms:
         if max_seconds is not None and (time.monotonic() - t0) > max_seconds:
+            stop_reason = "time_budget"
+            break
+        if blackout and _in_crawl_blackout(blackout):
+            stop_reason = "brief_blackout"
+            logger.info("慢爬進入晨報靜默窗 %s，本輪暫停（已處理 %d 檔），下輪續跑", blackout, processed)
             break
         processed += 1
         try:
@@ -100,12 +170,19 @@ def prefetch(symbols: list[str] | None = None, *, force: bool = False, refresh: 
                 ok += 1
             else:
                 empty += 1
+        except FinMindBackoff as exc:
+            # 額度耗盡 / IP 封鎖：再打也只是繼續失敗。停手，靠磁碟快取下輪重入續跑。
+            stop_reason = "finmind_backoff"
+            logger.warning("FinMind 額度/封鎖觸發，慢爬本輪停止（已處理 %d 檔，下輪續跑）: %s",
+                           processed, exc)
+            break
         except Exception as exc:  # noqa: BLE001 — 單檔失敗不中斷整批
             error += 1
             logger.warning("預抓基本面 %s 失敗: %s", sym, exc)
     result = {"mode": mode, "total": len(syms), "processed": processed, "ok": ok,
               "empty": empty, "error": error, "skipped": len(syms) - processed,
-              "done": processed == len(syms),
+              "done": stop_reason is None and processed == len(syms),
+              "stop_reason": stop_reason,
               "elapsed_sec": round(time.monotonic() - t0, 1), "force": force}
     logger.info("基本面預抓完成: %s", result)
     return result
