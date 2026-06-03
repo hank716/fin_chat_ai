@@ -49,6 +49,73 @@ def _news_focus_symbols(tw_feats: dict[str, Any], cap: int = 12) -> list[str]:
     return out[:cap]
 
 
+def _caution_signals(entry: dict[str, Any]) -> list[str]:
+    """從個股 features 萃取可佐證『偏空/要注意』的實際訊號（皆為真實數值，不外推）。"""
+    sig: list[str] = []
+    r5 = entry.get("return_5d_pct")
+    if isinstance(r5, (int, float)) and r5 < 0:
+        sig.append(f"近5日{r5:.1f}%")
+    vs = entry.get("vs_index_20d_pct")
+    if isinstance(vs, (int, float)) and vs < 0:
+        sig.append(f"相對大盤{vs:.1f}%")
+    if entry.get("above_ma20") is False:
+        sig.append("跌破MA20")
+    streak = entry.get("foreign_net_streak")
+    if isinstance(streak, int) and streak < 0:
+        sig.append(f"外資連賣{abs(streak)}日")
+    f5 = entry.get("foreign_net_buy_5d_lots")
+    if isinstance(f5, (int, float)) and f5 < 0:
+        sig.append(f"外資5日賣超{abs(int(f5)):,}張")
+    smr = entry.get("short_margin_ratio_pct")
+    if isinstance(smr, (int, float)) and smr >= 30:
+        sig.append(f"資券比{smr:.0f}%偏高")
+    return sig
+
+
+def _backfill_caution(result: Any, features: dict[str, Any], want: int = 5) -> int:
+    """偏空清單不足時，從 movers 以實際數據補齊，確保晨報永遠有『偏空/要注意標的』段落。
+
+    模型在偏多盤勢常整段略過 tw_caution（rare bug）。這裡用 movers 跌幅/資券比/相對弱勢/外資賣超排行
+    補列——符號都出自 movers（必在 features.tw.stocks，可過 guardrail），signals 全為真實數值不捏造。
+    回補上的檔數。
+    """
+    from ai.schemas import WatchItem
+
+    if len(result.tw_caution) >= want:
+        return 0
+    tw = features.get("tw", {}) or {}
+    stocks = tw.get("stocks", {}) or {}
+    movers = tw.get("movers", {}) or {}
+    have = {w.symbol for w in result.tw_caution}
+    added = 0
+    for key in ("top_losers_5d", "top_below_index_20d", "top_short_margin_ratio", "top_foreign_sell_5d"):
+        for it in movers.get(key, []):
+            if len(result.tw_caution) >= want:
+                break
+            sym = it.get("symbol")
+            if not sym or sym in have:
+                continue
+            entry = stocks.get(sym, {})
+            sigs = _caution_signals(entry)
+            if not sigs:  # 找不到可佐證的偏空訊號就不硬湊
+                continue
+            have.add(sym)
+            added += 1
+            result.tw_caution.append(WatchItem(
+                symbol=sym,
+                name=entry.get("name") or it.get("name") or sym,
+                sector=entry.get("sector") or it.get("sector"),
+                thesis="技術面偏空：" + "、".join(sigs[:3])
+                + "（系統依排行自動補列，建議搭配當日量價與消息確認）",
+                signals=sigs,
+                uncertainty="自動補列、未經 AI 個別研判；目標價/止損請依技術區間自行評估。",
+            ))
+    if added:
+        logger.info("tw_caution 由模型回傳 %d 檔，已用 movers 實際數據補至 %d 檔",
+                    len(result.tw_caution) - added, len(result.tw_caution))
+    return added
+
+
 def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str, int]]:
     """組出餵 Gemini 的合併 features：美股+加密 / 台股+籌碼 / 聚焦新聞 / 跨市場連動。"""
     # 1) 美股指數 + BTC + 大盤 TWII → DQ → parquet
@@ -102,6 +169,10 @@ def generate_morning_brief(
         "output_tokens": research_usage["output_tokens"] + struct_usage["output_tokens"],
     }
     tracker.record_cost(brief_cost)
+
+    # 偏空清單偶爾被模型整段略過 → 用 movers 實際數據補齊（在 guardrail 前，符號必在資料範圍內）
+    _backfill_caution(result, feats)
+
     cost_info = {
         "brief_twd": brief_cost,
         "tokens": usage,

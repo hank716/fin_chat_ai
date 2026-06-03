@@ -53,7 +53,7 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 
 接著填兩份觀察清單（都不是買賣建議）：
 - **tw_watchlist（正向，5 檔）**：訊號偏多、值得關注者——族群轉強、法人連續買超、相對大盤強、站上均線。從 features.tw.movers.top_gainers_5d / top_foreign_buy_5d 與 sectors 強勢族群挑。
-- **tw_caution（負向/要注意，5 檔）**：訊號偏空或有風險者——外資/投信連續賣超、跌破均線、相對大盤明顯弱（vs_index_20d_pct 負值大）、**資券比偏高或融資急增（追高風險）**、近期跌幅大。從 features.tw.movers.top_losers_5d / top_foreign_sell_5d / top_short_margin_ratio / top_below_index_20d 挑。每檔在 signals 帶出具體警示數值。
+- **tw_caution（負向/要注意，5 檔）**：訊號偏空或有風險者——外資/投信連續賣超、跌破均線、相對大盤明顯弱（vs_index_20d_pct 負值大）、**資券比偏高或融資急增（追高風險）**、近期跌幅大。從 features.tw.movers.top_losers_5d / top_foreign_sell_5d / top_short_margin_ratio / top_below_index_20d 挑。每檔在 signals 帶出具體警示數值。**即使今日大盤偏多，這 5 檔仍必須列出**——上述排行（跌幅榜／賣超榜／資券比榜／弱於大盤榜）任何盤勢都有候選，不可因整體偏多就留空或少於 5 檔。
 
 最後填 risks（今日風險提醒，敘事數點）、follow_ups（後續追蹤重點）、news_digest（重要新聞解讀）。"""
 
@@ -134,6 +134,9 @@ def build_brief_structuring_prompt(analysis: str, features: dict[str, Any]) -> s
         "- sections：照分析稿各段落（今日美股摘要/加密貨幣/跨市場連動/台股大盤/台股族群觀察/籌碼面/技術面/基本面），"
         "narrative 用分析稿原文精簡；evidence 的 source_ref 指向 features 欄位路徑。\n"
         "- tw_watchlist（偏多）/ tw_caution（偏空），帶 signals、target_price、stop_loss、uncertainty。\n"
+        "  **tw_caution 不可為空**：分析稿若沒明列偏空標的，就從 features.tw.movers 的 "
+        "top_losers_5d / top_short_margin_ratio / top_below_index_20d / top_foreign_sell_5d 補滿（盡量 5 檔），"
+        "signals 帶該標的在 features.tw.stocks 內的實際數值（跌幅／資券比／相對大盤強弱／外資賣超）。\n"
         "- risks / follow_ups / news_digest（保留來源/日期/url）/ sources。data_as_of 用 features.as_of。\n"
         "- 禁誇大保證語。\n\n"
         f"分析稿：\n```\n{analysis}\n```\n\n"

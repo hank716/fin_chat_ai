@@ -157,6 +157,24 @@ def record_cost(cost_twd: float) -> None:
         logger.warning("記錄成本失敗: %s", exc)
 
 
+def set_month_total(total_twd: float) -> float:
+    """把『當月全站累計』校準成 Google 後台的實際金額（覆寫月桶，保留/補回 TTL）。
+
+    估算與後台必有落差（cache 折扣、級距、grounding、匯率、latest 別名版本）；定期以後台數字
+    重設基準，之後照常累加即可讓首頁橫幅貼近真實。回傳設定後的月度值。
+    """
+    try:
+        mk = _month_key()
+        redis_client.set(mk, round(float(total_twd), 4), keepttl=True)
+        if redis_client.ttl(mk) < 0:          # 原本無 TTL（或新建）→ 補回月桶 70d
+            redis_client.expire(mk, 70 * 24 * 3600)
+        logger.info("校準當月全站成本為 NT$%.4f", total_twd)
+        return month_total()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("校準月度成本失敗: %s", exc)
+        return month_total()
+
+
 def check_budget() -> tuple[bool, str, float, float]:
     """檢查每日與每月全站上限。回 (是否仍有額度, 婉拒原因, 今日已花, 每日上限)。"""
     d, m = today_total(), month_total()

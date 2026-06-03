@@ -90,6 +90,23 @@ async def post_prefetch(
     return await run_in_threadpool(prefetch, scope=scope, force=force, max_seconds=max_seconds)
 
 
+@router.post("/admin/cost/calibrate")
+async def calibrate_cost(
+    month_total_twd: float = Query(..., description="Google 後台當月實際用量(TWD)，用它重設月度基準"),
+) -> dict:
+    """把當月全站累計校準成後台實際金額（估算與後台必有落差時對齊；之後照常累加）。"""
+    from cost import tracker
+
+    before = tracker.month_total()
+    after = tracker.set_month_total(month_total_twd)
+    return {
+        "month": tracker.current_month(),
+        "before_twd": before,
+        "after_twd": after,
+        "day_total_twd": tracker.today_total(),
+    }
+
+
 @router.get("/brief/status")
 async def status() -> dict:
     """排程 catch-up 用：今日（schedule_tz）是否已產生報告。"""

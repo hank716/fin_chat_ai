@@ -157,7 +157,9 @@ GEMINI_BRIEF_SCHEMA: dict = {
         "data_as_of": {"type": "string"},
         "sources": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["headline", "sections", "data_as_of"],
+    # tw_watchlist/tw_caution 列入 required，強制模型每次都輸出這兩個鍵（即使空陣列也要在），
+    # 避免偏空清單在偏多盤勢被整個略過；不足時由 morning_brief 端以 movers 實際數據補齊。
+    "required": ["headline", "sections", "tw_watchlist", "tw_caution", "data_as_of"],
 }
 
 
