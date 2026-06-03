@@ -1,9 +1,10 @@
 """晨報端點（M1 step 5；M1 驗收：POST /brief/morning → 瀏覽器看得到完整頁面）。"""
 from __future__ import annotations
 
+import secrets
 import threading
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from ai.gemini_client import GeminiError, GeminiQuotaExceeded
@@ -90,11 +91,27 @@ async def post_prefetch(
     return await run_in_threadpool(prefetch, scope=scope, force=force, max_seconds=max_seconds)
 
 
+def _require_admin(x_admin_token: str | None) -> None:
+    """管理端點權杖檢查。未設定 ADMIN_TOKEN → fail-closed（停用端點）；token 不符 → 401。"""
+    from config import settings
+
+    expected = settings.admin_token.strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="管理端點未啟用：請先在 .env 設定 ADMIN_TOKEN")
+    if not x_admin_token or not secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="X-Admin-Token 缺少或不正確")
+
+
 @router.post("/admin/cost/calibrate")
 async def calibrate_cost(
     month_total_twd: float = Query(..., description="Google 後台當月實際用量(TWD)，用它重設月度基準"),
+    x_admin_token: str | None = Header(default=None),
 ) -> dict:
-    """把當月全站累計校準成後台實際金額（估算與後台必有落差時對齊；之後照常累加）。"""
+    """把當月全站累計校準成後台實際金額（估算與後台必有落差時對齊；之後照常累加）。
+
+    需帶 `X-Admin-Token` 標頭，值＝.env 的 ADMIN_TOKEN。
+    """
+    _require_admin(x_admin_token)
     from cost import tracker
 
     before = tracker.month_total()

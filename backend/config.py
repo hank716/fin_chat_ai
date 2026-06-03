@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     daily_cost_limit_twd: int = 30                    # 每日全站總花費上限（晨報+問答）
     monthly_cost_limit_twd: int = 600                 # 每月全站總花費上限（對齊後台預算）
 
+    # ── 管理端點權杖（/admin/*；空＝停用管理端點，fail-closed）──
+    admin_token: str = ""
+
     # ── Discord（1 guild / 3 channels / 2 users）──
     discord_token: str = ""
     discord_guild_id: str = ""

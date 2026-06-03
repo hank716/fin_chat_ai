@@ -69,6 +69,7 @@ cat .env
 | 類別 | 變數 |
 |---|---|
 | LLM | `GEMINI_API_KEY`、`GEMINI_MODEL_BRIEF`、`GEMINI_MODEL_QA`、`DAILY_COST_LIMIT_TWD`、`MONTHLY_COST_LIMIT_TWD` |
+| 管理 | `ADMIN_TOKEN`（保護 `/admin/*` 成本校準端點；留空＝端點停用） |
 | 排程 | `SCHEDULE_TZ`、`REPORT_TIMES`（逗號分隔 HH:MM，控制每日自動產報告的時間點） |
 | 資料源 | `FINMIND_TOKEN` |
 | Discord | `DISCORD_TOKEN`、`DISCORD_GUILD_ID`、`DISCORD_DAILY_REPORT_CHANNEL_ID`、`DISCORD_JAY_CHAT_CHANNEL_ID`、`DISCORD_HANK_CHAT_CHANNEL_ID`、`DISCORD_JAY_USER_ID`、`DISCORD_HANK_USER_ID` |
@@ -204,7 +205,7 @@ docker logs ai-market-scheduler --tail 5      # 應看到「scheduler 啟動：�
 | 改了什麼 | 重啟指令 |
 |---|---|
 | `REPORT_TIMES` / `SCHEDULE_TZ`（排程時間點） | `docker compose up -d scheduler` |
-| `DAILY_COST_LIMIT_TWD` / `MONTHLY_COST_LIMIT_TWD` / `GEMINI_*` / `FINMIND_TOKEN` | `docker compose up -d backend` |
+| `DAILY_COST_LIMIT_TWD` / `MONTHLY_COST_LIMIT_TWD` / `GEMINI_*` / `FINMIND_TOKEN` / `ADMIN_TOKEN` | `docker compose up -d backend` |
 | `DISCORD_*`（頻道 / token / 使用者） | `docker compose up -d bot` |
 | `CLOUDFLARE_TUNNEL_TOKEN` / `PUBLIC_*` | `docker compose up -d cloudflared caddy` |
 | 不確定 | `docker compose up -d`（全部，自動只動有變的） |
@@ -262,14 +263,36 @@ docker exec ai-market-backend python -m processor.prefetch_fundamentals --force
 
 ### 校正 / 重設「本月 AI 花費」數字（首頁橫幅）
 
-首頁橫幅與每日上限是用 redis 累計的 token 估算，和 Google 後台的真實帳單會有落差。要對齊後台真實值：
+首頁橫幅與每日上限是用 redis 累計的 token 估算，和 Google 後台的真實帳單會有落差
+（cache 折扣、>200k 級距、grounding、匯率、`*-latest` 別名實際版本等）。要對齊後台真實值，
+兩種方式擇一：
+
+**A. HTTP 端點（推薦，會保留月桶 TTL、回傳校準前後值）**
+
+先在 `.env` 設好 `ADMIN_TOKEN`（保護 `/admin/*`，留空＝端點停用）：
+
+```bash
+# 產生一段隨機 token，填進 .env 的 ADMIN_TOKEN，然後重啟 backend
+python -c "import secrets;print(secrets.token_urlsafe(32))"
+docker compose up -d backend
+
+# 把「當月全站累計」校準成 Google 後台的本月實際金額（例：121.15）
+curl -s -X POST "localhost:8000/admin/cost/calibrate?month_total_twd=121.15" \
+  -H "X-Admin-Token: <你 .env 裡的 ADMIN_TOKEN>"
+# 回傳 {"month":"2026-06","before_twd":..., "after_twd":121.15, "day_total_twd":...}
+```
+
+> 未設 `ADMIN_TOKEN` → 端點回 503（fail-closed）；token 不符 → 401。對外網域走 Cloudflare
+> Access 已擋一層，這個 token 再多擋一層，避免有人改你的成本計數。
+
+**B. 直接寫 redis（不經 backend；不會回傳校準前後值）**
 
 ```bash
 # 看現在的桶（YYYYMM / YYYYMMDD = 你的 SCHEDULE_TZ 當下日期）
 docker exec ai-market-redis redis-cli keys 'cost:*'
 
-# 直接覆寫成後台真實金額（例：本月 79.70）
-docker exec ai-market-redis redis-cli set cost:month:202606 79.70
+# 直接覆寫成後台真實金額（例：本月 121.15）
+docker exec ai-market-redis redis-cli set cost:month:202606 121.15
 # 重設今日累計（例如測試後想歸零）
 docker exec ai-market-redis redis-cli set cost:day:20260602 0
 ```
