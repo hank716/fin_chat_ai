@@ -134,6 +134,25 @@ async def calibrate_cost(
     }
 
 
+@router.post("/admin/data/purge-future")
+async def purge_future_rows(
+    market: str | None = Query(default=None, description="限定市場(tw/us/crypto)，留空=全部"),
+    x_admin_token: str | None = Header(default=None),
+) -> dict:
+    """清掉磁碟上既有的「未來日」幽靈列（價/籌碼/融券）。
+
+    歷史 glitch（TWSE/TPEx 偶發回近未來日，舊 _assert_reasonable_date 用 abs()+30天容忍漏網）
+    會以唯一 trade_date 落地、upsert keep-last 永不覆蓋，長期汙染 as_of=max(trade_date)，
+    並讓新聞抓取對未來日空打、個股指標錨在偽資料上。冪等、可重複執行。
+
+    需帶 `X-Admin-Token` 標頭，值＝.env 的 ADMIN_TOKEN。
+    """
+    _require_admin(x_admin_token)
+    from storage import local_store
+
+    return local_store.purge_future_rows(market)
+
+
 @router.get("/brief/status")
 async def status() -> dict:
     """排程 catch-up 用：今日（schedule_tz）是否已產生報告。"""

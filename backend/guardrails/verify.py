@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -29,17 +30,38 @@ CAUSALITY_BANNED = (
 )
 
 
+# path 段：base key 後可接零或多個清單索引，如 top_foreign_buy_5d[0] 或 matrix[1][2]
+_PATH_PART_RE = re.compile(r"^([^\[\]]+)((?:\[\d+\])*)$")
+
+
 def _resolve(features: dict[str, Any], ref: str) -> Any:
-    """解析 source_ref（如 features.tw.index.return_20d_pct）到 features 內的值。"""
+    """解析 source_ref 到 features 內的值。
+
+    支援 dict key 與清單索引混用，例如：
+      features.tw.index.return_20d_pct
+      features.tw.movers.top_foreign_buy_5d[0].foreign_net_buy_5d_lots
+    模型引用 movers 排行（list of dict）時必帶 [i]，舊版只走 dict key 會把真實數值
+    誤判為捏造而移除，故此處需解析索引段。
+    """
     parts = ref.split(".")
     if parts and parts[0] == "features":
         parts = parts[1:]
     cur: Any = features
     for p in parts:
-        if isinstance(cur, dict) and p in cur:
-            cur = cur[p]
+        m = _PATH_PART_RE.match(p)
+        if not m:
+            return _MISSING
+        key, idx_str = m.group(1), m.group(2)
+        if isinstance(cur, dict) and key in cur:
+            cur = cur[key]
         else:
             return _MISSING
+        for idx in re.findall(r"\[(\d+)\]", idx_str):
+            i = int(idx)
+            if isinstance(cur, (list, tuple)) and 0 <= i < len(cur):
+                cur = cur[i]
+            else:
+                return _MISSING
     return cur
 
 

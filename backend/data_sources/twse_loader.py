@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -132,11 +132,23 @@ def _parse_response_date(s: str | None) -> date:
     return datetime.strptime(s, "%Y%m%d").date()
 
 
-def _assert_reasonable_date(requested: date, actual: date, max_diff_days: int = 30) -> None:
-    """防 TWSE/TPEx 偶發回不合理日期 (曾觀察到對 20260506 偶爾回 20311122)。
+# 容忍的「未來」寬限：跨時區下容器 date.today()(UTC) 可能比台北日期早 1 天，留 2 天緩衝
+# 避免誤殺當日合法資料；觀察到的 glitch 皆為 +15 天甚至 +5 年，>2 天即可攔下。
+_FUTURE_GRACE_DAYS = 2
 
-    若實際日期離 requested > max_diff_days, 抛 TWSEError 觸發 tenacity retry。
+
+def _assert_reasonable_date(requested: date, actual: date, max_diff_days: int = 30) -> None:
+    """防 TWSE/TPEx 偶發回不合理日期 (曾觀察到對 20260506 偶爾回 20311122 或近未來日)。
+
+    兩道檢查，任一不合理就抛 TWSEError 觸發 tenacity retry：
+      1) 未來日：trade_date 不可能晚於今天（近未來 glitch 如回 +15 天會落在 max_diff 內、
+         又因 abs() 不分方向而漏網，曾導致幽靈未來列汙染 as_of=max(trade_date)）。
+      2) 偏離 requested > max_diff_days：大幅 glitch（如 +5 年）。
     """
+    if actual > date.today() + timedelta(days=_FUTURE_GRACE_DAYS):
+        raise TWSEError(
+            f"API 回的 date={actual} 為未來日（today={date.today()}），視為 glitch"
+        )
     diff = abs((actual - requested).days)
     if diff > max_diff_days:
         raise TWSEError(

@@ -11,6 +11,7 @@ Decimal → float 落地（parquet 無原生 Decimal 便利型，分析端用 fl
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,16 @@ import pandas as pd
 from config import settings
 
 PARQUET_ROOT = Path(settings.local_storage_path) / "local_parquet"
+
+# 未來日的幽靈列保險絲：trade_date 不可能晚於今天。上游 _assert_reasonable_date 已擋
+# TWSE/TPEx 的近未來 glitch；這裡是「跨所有來源」（含 FinMind 正規化列）的最後一道寫入閘，
+# 確保任何來源的未來列都進不了 parquet（否則 upsert keep-last 會讓它永久汙染 as_of=max）。
+# 留 2 天寬限避免跨時區誤殺當日合法資料（容器 UTC date 可能比台北早 1 天）。
+_FUTURE_GRACE_DAYS = 2
+
+
+def _future_cutoff() -> date:
+    return date.today() + timedelta(days=_FUTURE_GRACE_DAYS)
 
 PRICE_COLUMNS = ["trade_date", "open", "high", "low", "close", "volume", "amount", "source"]
 CHIP_COLUMNS = ["trade_date", "foreign_net_buy", "trust_net_buy", "dealer_net_buy", "source"]
@@ -63,8 +74,12 @@ def _upsert_parquet(path: Path, df_new: pd.DataFrame) -> int:
 
 
 def _write_by_symbol(rows: Iterable[Any], columns: list[str], subdir: Path) -> dict[str, Any]:
+    cutoff = _future_cutoff()
     buckets: dict[str, list[Any]] = {}
     for r in rows:
+        td = getattr(r, "trade_date", None)
+        if isinstance(td, date) and td > cutoff:  # 丟棄未來日幽靈列（任何來源）
+            continue
         buckets.setdefault(r.symbol, []).append(r)
     symbols = 0
     rows_written = 0
@@ -114,3 +129,41 @@ def read_margin(symbol: str, market: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=MARGIN_COLUMNS)
     return pd.read_parquet(path)
+
+
+def purge_future_rows(market: str | None = None) -> dict[str, Any]:
+    """一次性清掉磁碟上既有的「未來日」幽靈列（價/籌碼/融券）。
+
+    歷史 glitch（_assert_reasonable_date 修補前漏網的近未來日）會以唯一 trade_date 落地、
+    upsert keep-last 永不覆蓋，長期汙染 as_of=max(trade_date)。此函式掃描所有 per-symbol
+    parquet，移除 trade_date > 今日(留寬限) 的列，回報清理統計。冪等、可重複執行。
+    """
+    cutoff = pd.Timestamp(_future_cutoff())
+    roots = [PARQUET_ROOT / market] if market else [p for p in PARQUET_ROOT.iterdir() if p.is_dir()]
+    files_scanned = 0
+    files_modified = 0
+    rows_removed = 0
+    for root in roots:
+        for path in root.rglob("*.parquet"):
+            files_scanned += 1
+            try:
+                df = pd.read_parquet(path)
+            except Exception:  # noqa: BLE001 — 壞檔跳過
+                continue
+            if df.empty or "trade_date" not in df.columns:
+                continue
+            ts = pd.to_datetime(df["trade_date"])
+            mask_future = ts > cutoff
+            n = int(mask_future.sum())
+            if n == 0:
+                continue
+            kept = df.loc[~mask_future].reset_index(drop=True)
+            kept.to_parquet(path, engine="pyarrow", index=False)
+            files_modified += 1
+            rows_removed += n
+    return {
+        "cutoff": cutoff.date().isoformat(),
+        "files_scanned": files_scanned,
+        "files_modified": files_modified,
+        "rows_removed": rows_removed,
+    }
