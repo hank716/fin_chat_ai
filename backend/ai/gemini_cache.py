@@ -20,18 +20,28 @@ import httpx
 from config import settings
 from redis_client import redis_client
 
+from .gemini_client import SEARCH_TOOLS
+
 logger = logging.getLogger("ai-market-backend.gemini-cache")
 
 CACHE_URL = "https://generativelanguage.googleapis.com/v1beta/cachedContents"
 TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 
 
+# key 版本：快取結構改變（如把 tools 併入快取）時 bump，避免沿用舊結構的快取名稱。
+_KEY_VERSION = "v2"
+
+
 def _redis_key(model: str, report_id: str) -> str:
-    return f"gemini:cache:{model}:{report_id}"
+    return f"gemini:cache:{_KEY_VERSION}:{model}:{report_id}"
 
 
 def get_or_create_qa_cache(report_id: str, static_block: str, model: str) -> str | None:
-    """取得（或建立）當日 QA 靜態 context 的明確快取，回 cachedContents 名稱；任何失敗回 None。"""
+    """取得（或建立）當日 QA 靜態 context 的明確快取，回 cachedContents 名稱；任何失敗回 None。
+
+    QA 路徑會用 Google 搜尋，故把 tools **一併放進快取**（cachedContent 帶 tools），之後
+    generateContent 引用此快取時就不再重送 tools（否則 Gemini 會回 400）。
+    """
     if not settings.enable_gemini_explicit_cache or not report_id:
         return None
     if not settings.gemini_api_key.strip():
@@ -50,6 +60,8 @@ def get_or_create_qa_cache(report_id: str, static_block: str, model: str) -> str
         # cachedContents 的 model 需 "models/" 前綴，且要與 generateContent 用的 model 一致
         "model": f"models/{model}",
         "contents": [{"role": "user", "parts": [{"text": static_block}]}],
+        # tools 放進快取（QA 走搜尋）；引用此快取的請求不可再帶 tools。
+        "tools": SEARCH_TOOLS,
         "ttl": f"{ttl}s",
     }
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}

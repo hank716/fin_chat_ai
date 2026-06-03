@@ -38,6 +38,15 @@ BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 # 完整晨報 input/output 較大，模型回應可能 >60s；放寬 read timeout。
 TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 
+# Gemini 研究工具：搜尋公開網路 + 讀網頁內容 + 跑運算（API 需明確帶，非預設）。
+# ⚠️ 與明確快取（cachedContent）併用時，tools 必須**放進 CachedContent**、不可再放進
+# generateContent 請求（否則 400），故下方 generate_text 在帶 cached_content 時不重送 tools。
+SEARCH_TOOLS = [
+    {"google_search": {}},
+    {"url_context": {}},
+    {"code_execution": {}},
+]
+
 
 class GeminiError(RuntimeError):
     pass
@@ -216,13 +225,9 @@ def generate_text(
     }
     if cached_content:
         payload["cachedContent"] = cached_content
-    if use_search:
-        # Gemini 2.x 研究工具：搜尋公開網路 + 讀網頁內容 + 跑運算（API 需明確帶，非預設）
-        payload["tools"] = [
-            {"google_search": {}},
-            {"url_context": {}},
-            {"code_execution": {}},
-        ]
+    # 帶明確快取時 tools 已在快取內，不可再放進請求（會 400）；否則照常帶。
+    if use_search and not cached_content:
+        payload["tools"] = SEARCH_TOOLS
     headers = {"Content-Type": "application/json", "X-goog-api-key": settings.gemini_api_key}
     resp = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT)
     monitor.mark("ai")  # 記一次對外 AI 流量（待機偵測用）
