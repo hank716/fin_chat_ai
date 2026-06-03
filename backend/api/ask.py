@@ -71,6 +71,11 @@ def _admin_ok(token: str | None) -> bool:
 
 @router.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None)) -> AskResponse:
+    # ⚠️ 預算原子性不變式：check_budget() → record_cost() 之間**不得有 await/yield**。
+    # 本 handler 全程為同步阻塞呼叫（含 gemini_client.generate_text、同步 redis），故同一 process
+    # 內兩個 /ask 不會交錯，check-then-spend 對本地請求是原子的（家用單 worker 規模足夠）。
+    # 若日後把下游改成 async await，這個不變式就會被打破而出現 TOCTOU 超支——屆時需改用
+    # redis 原子操作（如 Lua / INCR 預扣）來守上限。跨 process（晨報排程）為軟上限、超支有界，可接受。
     ok, reason, spent, limit = tracker.check_budget()
     # 測試放行：帶有效 X-Admin-Token 時跳過上限，但**花費照常計入**（buckets 仍累加）。
     bypass = _admin_ok(x_admin_token)

@@ -65,15 +65,17 @@ def build_discord_summary(report: dict[str, Any]) -> str:
         parts.append("**台股觀察族群（近20日強）**\n"
                      + "\n".join(f"- {s}：{_pct(v)}" for s, v in strong))
 
-    # 外資買賣超
-    buy = movers.get("top_foreign_buy_5d", [])[:3]
-    sell = movers.get("top_foreign_sell_5d", [])[:3]
+    # 外資買賣超：top_foreign_sell_5d 與 buy 共用同一 key（升冪），值為負＝賣超。
+    # 依正負過濾，避免「movers 不足時」把淨買方塞進賣超榜（反之亦然）；賣超數字取絕對值顯示。
+    _k = "foreign_net_buy_5d_lots"
+    buy = [it for it in movers.get("top_foreign_buy_5d", []) if (it.get(_k) or 0) > 0][:3]
+    sell = [it for it in movers.get("top_foreign_sell_5d", []) if (it.get(_k) or 0) < 0][:3]
     if buy:
         parts.append("**外資5日買超**\n"
-                     + "\n".join(f"- {it['name']}：{it['foreign_net_buy_5d_lots']:,} 張" for it in buy))
+                     + "\n".join(f"- {it['name']}：{it[_k]:,} 張" for it in buy))
     if sell:
         parts.append("**外資5日賣超**\n"
-                     + "\n".join(f"- {it['name']}：{it['foreign_net_buy_5d_lots']:,} 張" for it in sell))
+                     + "\n".join(f"- {it['name']}：{abs(it[_k]):,} 張" for it in sell))
 
     # 候選 / 要注意
     watch = report.get("tw_watchlist", [])

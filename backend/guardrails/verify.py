@@ -76,18 +76,21 @@ def run_guardrails(result: BriefResult, features: dict[str, Any]) -> tuple[Brief
         sec.evidence = kept
 
     # ── Symbol Guard：候選標的必須在 features.tw.stocks ──
+    # 必須 fail-closed：若 stocks 為空（上游台股資料失敗），代表「沒有任何可驗證的合法符號」，
+    # 此時模型給的候選一律無法比對 → 全部移除並記錄，而非放行（放行 == guard 形同失效）。
     tw_symbols = set((features.get("tw", {}) or {}).get("stocks", {}).keys())
     for attr, label in (("tw_watchlist", "正向候選"), ("tw_caution", "負向候選")):
         kept = []
         for w in getattr(cleaned, attr):
-            if tw_symbols and w.symbol not in tw_symbols:
+            if w.symbol not in tw_symbols:
                 counts["symbols_dropped"] += 1
-                add("symbol", "error", f"{label} {w.symbol} {w.name} 不在資料範圍，已移除")
+                why = "資料範圍為空（台股資料疑似缺失）" if not tw_symbols else "不在資料範圍"
+                add("symbol", "error", f"{label} {w.symbol} {w.name} {why}，已移除")
                 continue
             kept.append(w)
         setattr(cleaned, attr, kept)
 
-    # ── News Citation Guard：須有 source/date/title/url 且比對得到 features.news ──
+    # ── News Citation Guard：須有 source/date/title 且比對得到 features.news（url 可選，缺則回填）──
     news_by_url = {n.get("url"): n for n in features.get("news", []) if n.get("url")}
     news_by_title = {n.get("title"): n for n in features.get("news", [])}
     kept_news = []
@@ -98,10 +101,13 @@ def run_guardrails(result: BriefResult, features: dict[str, Any]) -> tuple[Brief
             counts["news_dropped"] += 1
             add("news", "error", f"新聞「{nd.title[:30]}」無法比對到來源資料，疑似捏造，已移除")
             continue
-        if not (nd.source and nd.date and nd.title and nd.url):
+        # url 為可選（schema 允許 None）：已比對到真實來源即非捏造，不因缺 url 而丟。
+        if not (nd.source and nd.date and nd.title):
             counts["news_dropped"] += 1
-            add("news", "error", f"新聞「{nd.title[:30]}」缺 source/date/url，已移除")
+            add("news", "error", f"新聞「{nd.title[:30]}」缺 source/date/title，已移除")
             continue
+        if not nd.url:                                # 模型沒帶 url 時用比對到的來源回填，頁面才有連結
+            nd.url = match.get("url")
         nd.tier = match.get("tier", "authoritative")  # 由原始資料回填分層
         kept_news.append(nd)
     cleaned.news_digest = kept_news
