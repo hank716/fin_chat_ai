@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     enable_edge_model: bool = True                # 啟用本地 ML edge 模型（樣本不足時自動跳過）
     edge_model_min_samples: int = 150             # 訓練 edge 模型所需最少已到期樣本數
 
+    # ── 歷史行情慢爬（把 parquet 歷史拉長，餵大 edge 訓練集；見 data_sources.history_crawl）──
+    history_crawl_target_days: int = 730          # 回溯目標（天）：預設 2 年（落在 TWSE 2024+ schema）
+    history_crawl_chunk_days: int = 30            # 軌道 A 每 chunk 回補幾天（界記憶體/續跑粒度）
+    history_crawl_max_minutes: float = 40         # 軌道 A 每輪時間預算（分）
+    history_finmind_per_run: int = 120            # 軌道 B（上櫃價）每輪最多打幾次 FinMind（<550/h 留額度給晨報）
+
     # ── 排程 ──
     schedule_tz: str = "Asia/Taipei"
     morning_report_time: str = "08:30"

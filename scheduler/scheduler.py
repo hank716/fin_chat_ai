@@ -34,6 +34,11 @@ PREFETCH_TIMES = os.environ.get("PREFETCH_TIMES", "")
 # （可選）全市場財報「慢爬」時間點：逗號分隔 HH:MM，留空＝關閉。觸發後背景慢慢掃全市場(2700+)
 # 財報到磁碟（焦點股優先），可數小時～23h；季更慢資料，靠快取 TTL 可重入續跑。例：CRAWL_TIMES=09:00。
 CRAWL_TIMES = os.environ.get("CRAWL_TIMES", "")
+# 歷史行情慢爬（拉長 parquet 歷史，餵大 edge 訓練集）：
+#   HISTORY_CRAWL_TIMES：軌道 A 上市歷史（TWSE，不打 FinMind），逗號分隔 HH:MM（建議深夜一晚），留空=關閉。
+#   HISTORY_TPEX_HOURLY_MIN：軌道 B 上櫃價（FinMind 每小時小批），每小時的「分鐘」(0-59)，留空=關閉。
+HISTORY_CRAWL_TIMES = os.environ.get("HISTORY_CRAWL_TIMES", "")
+HISTORY_TPEX_HOURLY_MIN = os.environ.get("HISTORY_TPEX_HOURLY_MIN", "")
 # 整條管線（刷新台股/美股/加密 + Gemini）可能跑數分鐘，給足 read timeout
 GENERATE_TIMEOUT = float(os.environ.get("BRIEF_GENERATE_TIMEOUT", "900"))
 
@@ -115,6 +120,40 @@ def crawl_fundamentals(*, reason: str = "scheduled") -> None:
         logger.error("全市場財報慢爬觸發例外: %s", exc)
 
 
+def crawl_listed_history_job(*, reason: str = "scheduled") -> None:
+    """軌道 A：觸發 backend 上市歷史慢爬（背景執行、立即回）。不限交易日（歷史資料靜態）。"""
+    logger.info("觸發上市歷史慢爬 (%s) → POST %s/brief/backfill-history", reason, BACKEND_URL)
+    try:
+        resp = httpx.post(f"{BACKEND_URL}/brief/backfill-history", timeout=30)
+        logger.info("上市歷史慢爬已啟動: HTTP %s %s", resp.status_code, resp.text[:200])
+    except Exception as exc:  # noqa: BLE001
+        logger.error("上市歷史慢爬觸發例外: %s", exc)
+
+
+def crawl_tpex_prices_job() -> None:
+    """軌道 B：觸發 backend 上櫃價慢爬一小批（FinMind，每小時）。背景執行、立即回。"""
+    try:
+        resp = httpx.post(f"{BACKEND_URL}/brief/backfill-tpex-prices", timeout=30)
+        logger.info("上櫃價慢爬已啟動: HTTP %s %s", resp.status_code, resp.text[:200])
+    except Exception as exc:  # noqa: BLE001
+        logger.error("上櫃價慢爬觸發例外: %s", exc)
+
+
+def history_catch_up() -> None:
+    """軌道 A 啟動補跑：設了 HISTORY_CRAWL_TIMES 且已過今日最早時間 → 立即補觸發一次。"""
+    if not HISTORY_CRAWL_TIMES.strip():
+        return
+    if not _wait_backend_ready():
+        logger.warning("backend 未就緒，跳過上市歷史慢爬 catch-up")
+        return
+    h, m = _parse_times(HISTORY_CRAWL_TIMES)[0]
+    now = datetime.now(TZ)
+    scheduled_today = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now >= scheduled_today:
+        logger.info("catch-up：已過今日上市歷史慢爬時間 %02d:%02d，立即補觸發", h, m)
+        crawl_listed_history_job(reason="catch-up")
+
+
 def crawl_catch_up() -> None:
     """啟動補跑全市場財報慢爬：服務晚於 CRAWL_TIMES 啟動時，scheduler 的 cron job 會
     misfire（超過 grace 直接跳過），慢爬本身又沒有自身 catch-up，當天就靜默漏掉。
@@ -186,6 +225,7 @@ def main() -> None:
 
     catch_up()
     crawl_catch_up()
+    history_catch_up()
 
     scheduler = BlockingScheduler(timezone=TZ)
     for h, m in times:
@@ -225,6 +265,33 @@ def main() -> None:
     if crawl_times:
         logger.info("全市場財報慢爬排程：每日 %s",
                     ", ".join(f"{h:02d}:{m:02d}" for h, m in crawl_times))
+
+    # 軌道 A：上市歷史慢爬（每日深夜一晚）
+    history_times = _parse_times(HISTORY_CRAWL_TIMES) if HISTORY_CRAWL_TIMES.strip() else []
+    for h, m in history_times:
+        scheduler.add_job(
+            crawl_listed_history_job,
+            CronTrigger(hour=h, minute=m, timezone=TZ),
+            id=f"histlisted_{h:02d}{m:02d}",
+            misfire_grace_time=3600, coalesce=True, max_instances=1,
+        )
+    if history_times:
+        logger.info("上市歷史慢爬排程：每日 %s",
+                    ", ".join(f"{h:02d}:{m:02d}" for h, m in history_times))
+
+    # 軌道 B：上櫃價慢爬（每小時 :MM 跑一小批）
+    if HISTORY_TPEX_HOURLY_MIN.strip():
+        try:
+            minute = int(HISTORY_TPEX_HOURLY_MIN.strip())
+            scheduler.add_job(
+                crawl_tpex_prices_job,
+                CronTrigger(minute=minute, timezone=TZ),
+                id="histtpex_hourly",
+                misfire_grace_time=600, coalesce=True, max_instances=1,
+            )
+            logger.info("上櫃價慢爬排程：每小時 :%02d", minute)
+        except ValueError:
+            logger.warning("HISTORY_TPEX_HOURLY_MIN 非整數，忽略: %r", HISTORY_TPEX_HOURLY_MIN)
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

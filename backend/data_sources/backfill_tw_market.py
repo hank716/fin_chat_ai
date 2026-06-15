@@ -38,10 +38,12 @@ def _try(fetch, d: date) -> list:
         return []
 
 
-def backfill_market(days: int = 90) -> dict[str, Any]:
-    end = date.today()
-    start = end - timedelta(days=days)
+def backfill_window(start: date, end: date, *, include_tpex_today: bool = False) -> dict[str, Any]:
+    """回補 [start, end] 區間的全市場 TWSE/TPEx 價/籌/券（單日端點，皆支援歷史，不打 FinMind）。
 
+    include_tpex_today=True 時額外抓「今日」TPEx 上櫃價（該端點只回當日、無歷史）——僅每日刷新用。
+    歷史慢爬請留 False（上櫃價歷史改由 FinMind per-stock 另爬，見 data_sources.history_crawl）。
+    """
     prices: list = []
     chips: list = []
     margins: list = []
@@ -55,10 +57,12 @@ def backfill_market(days: int = 90) -> dict[str, Any]:
             chips += _try(twse_loader.fetch_twse_chip, d)        # TWSE 三大法人（歷史）
             margins += _try(twse_loader.fetch_twse_margin, d)    # TWSE 融資券（歷史）
             chips += _try(twse_loader.fetch_tpex_chip, d)        # TPEx 三大法人（歷史）
+            margins += _try(twse_loader.fetch_tpex_margin, d)    # TPEx 融資券（歷史）
         d -= timedelta(days=1)
 
-    # TPEx 價：只回當日（無歷史），抓今日當起點
-    prices += _try(twse_loader.fetch_tpex_daily, end)
+    # TPEx 價：只回當日（無歷史），抓今日當起點（僅每日刷新；歷史慢爬不抓）
+    if include_tpex_today:
+        prices += _try(twse_loader.fetch_tpex_daily, end)
 
     # 過濾到 universe（TPEx daily 會夾帶大量權證等非清單標的，否則會產生數千個垃圾 parquet）
     import universe
@@ -78,8 +82,14 @@ def backfill_market(days: int = 90) -> dict[str, Any]:
         "chips": {"rows": len(chips), "symbols": c["symbols"]},
         "margins": {"rows": len(margins), "symbols": m["symbols"]},
     }
-    logger.info("全市場回補完成: %s", summary)
+    logger.info("區間回補完成: %s", summary)
     return summary
+
+
+def backfill_market(days: int = 90) -> dict[str, Any]:
+    """每日刷新用：回補近 days 天全市場（含今日 TPEx 上櫃價）。委派 backfill_window。"""
+    end = date.today()
+    return backfill_window(end - timedelta(days=days), end, include_tpex_today=True)
 
 
 if __name__ == "__main__":

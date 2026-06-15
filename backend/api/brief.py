@@ -15,6 +15,8 @@ router = APIRouter(tags=["brief"])
 
 # 全市場財報慢爬的單例守門：同時只跑一個（可重入靠磁碟快取續跑）
 _crawl_state: dict[str, bool] = {"running": False}
+# 歷史行情慢爬的單例守門（軌道 A 上市 / 軌道 B 上櫃價各一）
+_history_state: dict[str, bool] = {"listed": False, "tpex": False}
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -163,6 +165,49 @@ async def post_build_training_set() -> dict:
         return {"training_set": stats, "edge_model": edge}
 
     return await run_in_threadpool(_run)
+
+
+@router.post("/brief/backfill-history")
+async def post_backfill_history(max_minutes: float | None = Query(default=None)) -> dict:
+    """軌道 A：上市歷史慢爬（TWSE 單日端點，不打 FinMind）。背景執行、單例、立即回。"""
+    if _history_state["listed"]:
+        return {"started": False, "reason": "listed history crawl already running"}
+
+    def _run() -> None:
+        _history_state["listed"] = True
+        try:
+            from data_sources.history_crawl import crawl_listed_history
+            crawl_listed_history(max_seconds=(max_minutes * 60) if max_minutes else None)
+        finally:
+            _history_state["listed"] = False
+
+    threading.Thread(target=_run, name="history-listed", daemon=True).start()
+    return {"started": True, "track": "listed", "background": True}
+
+
+@router.post("/brief/backfill-tpex-prices")
+async def post_backfill_tpex_prices(max_calls: int | None = Query(default=None)) -> dict:
+    """軌道 B：上櫃個股價慢爬（FinMind per-stock，每小時小批、嚴守額度）。背景執行、單例、立即回。"""
+    if _history_state["tpex"]:
+        return {"started": False, "reason": "tpex price crawl already running"}
+
+    def _run() -> None:
+        _history_state["tpex"] = True
+        try:
+            from data_sources.history_crawl import crawl_tpex_prices
+            crawl_tpex_prices(max_calls=max_calls)
+        finally:
+            _history_state["tpex"] = False
+
+    threading.Thread(target=_run, name="history-tpex", daemon=True).start()
+    return {"started": True, "track": "tpex_prices", "background": True}
+
+
+@router.get("/brief/history-status")
+async def get_history_status() -> dict:
+    """歷史慢爬進度（目標/已回溯最早日/上櫃完成數）。"""
+    from data_sources.history_crawl import status
+    return status()
 
 
 def _require_admin(x_admin_token: str | None) -> None:
