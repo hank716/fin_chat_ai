@@ -37,9 +37,14 @@ async def home() -> str:
     from reports import strategy_calibration
     calibration = strategy_calibration.latest_summary()
     evaluation = strategy_calibration.latest_evaluation()
+    try:
+        from data_sources.history_crawl import status as history_status
+        history = history_status()
+    except Exception:  # noqa: BLE001 — 慢爬狀態讀取失敗不影響首頁
+        history = None
     return render_history_html(
         morning_brief.list_reports(), cost=cost, activity=activity,
-        calibration=calibration, evaluation=evaluation,
+        calibration=calibration, evaluation=evaluation, history=history,
     )
 
 

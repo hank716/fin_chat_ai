@@ -25,11 +25,34 @@
 </div>
 {% endif %}
 
+{% if history %}
+<details class="panel">
+  <summary>
+    <span class="ps-title">📚 歷史回補進度</span>
+    <span class="ps-hint">資料最早 {{ history.parquet_earliest }}・上市 {{ history.listed_progress_pct }}%・上櫃 {{ history.tpex_prices.done }}/{{ history.tpex_prices.total or '—' }}</span>
+  </summary>
+  <div class="panel-body">
+    <div class="panel-meta">把行情歷史慢慢拉長到 {{ history.target_earliest }}（約 2 年），餵大 edge 訓練集。背景慢爬、不影響晨報。</div>
+    <div class="cc-head">上市歷史（TWSE 價/籌/券，不打 FinMind）</div>
+    <div class="pbar"><i style="width:{{ history.listed_progress_pct }}%"></i></div>
+    <div class="sb-note">目前最早資料日 <b>{{ history.parquet_earliest }}</b> → 目標 {{ history.target_earliest }}（約 {{ history.listed_progress_pct }}%）{% if history.listed.reached_target %}・✅ 已到目標{% elif history.listed.earliest_done %}・回補中{% endif %}</div>
+    <div class="cc-head" style="margin-top:12px">上櫃個股價（FinMind 每小時慢爬）</div>
+    <div class="pbar"><i style="width:{{ history.tpex_progress_pct }}%"></i></div>
+    <div class="sb-note">已完成 <b>{{ history.tpex_prices.done }}</b> / {{ history.tpex_prices.total or '—' }} 檔（剩 {{ history.tpex_prices.remaining }}）{% if history.tpex_prices.updated_at %}・更新 {{ history.tpex_prices.updated_at }}{% endif %}</div>
+    <div class="sb-note" style="margin-top:10px">🔄 <b>每當慢爬補進新歷史，系統會自動重建訓練集並重訓 edge 模型</b>——歷史越長、跨越的行情越多，模型越有機會學到 edge（首頁「策略回測校準」會反映最新樣本數與 AUC）。</div>
+  </div>
+</details>
+{% endif %}
+
 {% if activity %}
-<div class="standby">
-  <h2 class="sb-title">🔌 待機建議（電腦何時可休眠省電）</h2>
+<details class="panel">
+  <summary>
+    <span class="ps-title">🔌 待機建議</span>
+    <span class="ps-hint">{% if activity.enough_data %}{% if activity.idle_windows %}{{ activity.idle_windows|length }} 個建議待機窗{% else %}暫無固定閒置窗{% endif %}{% else %}資料累積中 {{ activity.observed_days }}/{{ activity.min_observed_days }} 天{% endif %}</span>
+  </summary>
+  <div class="panel-body">
   <div class="sb-meta">
-    依本系統工作（資料抓取＋AI 呼叫＋本機回測/模型訓練）統計・時區 {{ activity.tz }}・已累積 {{ activity.observed_days }} 天資料
+    依本系統工作（資料抓取〔含歷史回補慢爬〕＋AI 呼叫＋本機回測/模型訓練）統計・時區 {{ activity.tz }}・已累積 {{ activity.observed_days }} 天資料
   </div>
   <div class="sb-heat">
     {% for h in activity.hourly %}
@@ -54,12 +77,18 @@
   {% else %}
     <div class="sb-note">資料累積中：已 {{ activity.observed_days }} / {{ activity.min_observed_days }} 天，達標後即會給出建議待機時段。</div>
   {% endif %}
-</div>
+  <div class="sb-note" style="opacity:.75">註：歷史回補期間（深夜 02:30 上市、每小時 :20 上櫃）會有背景慢爬，待機窗會暫時變短，爬完即恢復。</div>
+  </div>
+</details>
 {% endif %}
 
 {% if calibration and calibration.sample_n %}
-<div class="panel">
-  <div class="panel-title">🎯 策略回測校準</div>
+<details class="panel">
+  <summary>
+    <span class="ps-title">🎯 策略回測校準</span>
+    <span class="ps-hint">樣本 {{ calibration.sample_n }} 檔・主窗 {{ calibration.primary_horizon }} 日</span>
+  </summary>
+  <div class="panel-body">
   <div class="panel-meta">
     系統依過去預估準確度自動修正・取最近 {{ calibration.lookback_reports }} 份已到期晨報・主窗 {{ calibration.primary_horizon }} 交易日・樣本 {{ calibration.sample_n }} 檔{% if calibration.generated_at %}・更新 {{ calibration.generated_at }}{% endif %}
   </div>
@@ -112,7 +141,8 @@
   {% if calibration.calibration_text %}
   <div class="sb-note" style="white-space:pre-line">{{ calibration.calibration_text }}</div>
   {% endif %}
-</div>
+  </div>
+</details>
 {% endif %}
 
 {% if reports %}

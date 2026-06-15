@@ -211,15 +211,26 @@ def crawl_tpex_prices(max_calls: int | None = None) -> dict[str, Any]:
 
 
 def status() -> dict[str, Any]:
-    """目前慢爬進度（給端點/觀察用）。"""
+    """目前慢爬進度（給端點/首頁顯示用）。含可直接畫進度條的百分比。"""
     listed = _load(LISTED_PATH)
     tpex = _load(TPEX_PATH)
+    today = date.today()
+    pe = _parquet_earliest() or today
+    te = _target_earliest()
+    total_days = max((today - te).days, 1)
+    have_days = max((today - pe).days, 0)
+    listed_pct = round(min(100.0, have_days / total_days * 100))
+    tpex_total = tpex.get("total") or 0
+    tpex_done = len(tpex.get("done", []))
+    tpex_pct = round(tpex_done / tpex_total * 100) if tpex_total else 0
     return {
-        "target_earliest": _target_earliest().isoformat(),
-        "parquet_earliest": (_parquet_earliest() or date.today()).isoformat(),
+        "target_earliest": te.isoformat(),
+        "parquet_earliest": pe.isoformat(),
+        "listed_progress_pct": listed_pct,
+        "tpex_progress_pct": tpex_pct,
         "listed": {k: listed.get(k) for k in
                    ("earliest_done", "target_earliest", "chunks_done", "reached_target", "updated_at")},
-        "tpex_prices": {"total": tpex.get("total"), "done": len(tpex.get("done", [])),
-                        "remaining": (tpex.get("total") or 0) - len(tpex.get("done", [])),
+        "tpex_prices": {"total": tpex.get("total"), "done": tpex_done,
+                        "remaining": (tpex.get("total") or 0) - tpex_done,
                         "updated_at": tpex.get("updated_at")},
     }

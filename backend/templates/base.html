@@ -181,6 +181,27 @@
     .eval-box .cc-head { font-size:.84rem; font-weight:700; margin-bottom:8px; }
     .eval-box .cc-head small { color:var(--muted); font-weight:500; }
 
+    /* 可折疊面板（details.panel）：點標題列展開／收合，預設收合讓首頁短 */
+    details.panel { padding:0; }
+    details.panel > summary { list-style:none; cursor:pointer; padding:15px 18px;
+      display:flex; align-items:center; gap:10px; }
+    details.panel > summary::-webkit-details-marker { display:none; }
+    /* 純 CSS 邊框畫的下拉箭頭（不依賴字型字元，跨系統一致）：收合朝下、展開朝上 */
+    details.panel > summary::after { content:""; flex:none; width:8px; height:8px; margin-left:4px;
+      margin-top:-3px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted);
+      transform:rotate(45deg); transition:transform .2s; }
+    details.panel[open] > summary::after { margin-top:2px; transform:rotate(-135deg); }
+    details.panel[open] > summary { padding-bottom:6px; }
+    details.panel > summary .ps-title { font-weight:700; font-size:1.02rem; flex:none; }
+    details.panel > summary .ps-hint { margin-left:auto; font-size:.8rem; color:var(--muted);
+      font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    details.panel .panel-body { padding:0 18px 16px; }
+
+    /* 通用進度條 */
+    .pbar { height:8px; background:var(--soft); border-radius:99px; overflow:hidden; margin:8px 0; }
+    .pbar > i { display:block; height:100%; border-radius:99px; transition:width .4s;
+      background:linear-gradient(90deg,var(--accent),var(--accent-2)); }
+
     /* ── 回到最上方 浮動按鈕 ────────────────────────────── */
     #backTop { position:fixed; right:20px; bottom:24px; width:46px; height:46px; border-radius:50%; border:0;
       background:var(--accent); color:#fff; font-size:1.3rem; line-height:1; cursor:pointer;
@@ -212,6 +233,7 @@
       .panel, .standby { padding:14px 15px; }
       .sb-heat { height:40px; }
       .calib-grid { grid-template-columns:1fr; gap:8px; }
+      details.panel > summary .ps-hint { display:none; }   /* 手機收合列只留標題，不擠 */
       .hist { padding:12px 13px; gap:11px; }
       .hist-date { padding:5px 8px; font-size:.78rem; }
       .hist-go { font-size:1.2rem; }
