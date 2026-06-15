@@ -35,6 +35,9 @@ EVAL_MIN_DATES = 10
 
 # 文字校準的最低樣本門檻（低於此不注入，避免雜訊誤導模型）
 MIN_TEXT_SAMPLES = 12
+# edge 模型只有在保留樣本上展現預測力（AUC > 此值）才拿來重排候選，否則不動——
+# 不讓「沒 edge 的模型」誤導選股（例：5 日窗 AUC 0.44 < 0.5 等於沒用，就該略過）。
+EDGE_MIN_AUC = 0.52
 _VALID = lambda r: r and r.get("outcome") not in (None, "pending", "no_data")  # noqa: E731
 
 
@@ -277,9 +280,13 @@ def build_calibration_block() -> str:
 
 # ───────────────────────── 本地 edge 模型 ─────────────────────────
 
-def _training_samples() -> tuple[list[dict[str, Any]], list[int], list[str]]:
-    """從所有 scorecard 組訓練集：X=featurize 向量、y=主窗方向是否正確、date 供時間序切分。"""
-    h = _primary_h()
+def _model_path(h: int) -> Path:
+    """每個時間窗各自一顆模型（edge_model_5.pkl / edge_model_20.pkl）。"""
+    return STRATEGY_DIR / f"edge_model_{h}.pkl"
+
+
+def _live_samples(h: int) -> tuple[list[dict[str, Any]], list[int], list[str]]:
+    """從 scorecard 組某窗的『線上真選股』樣本：X=featurize、y=方向是否正確、date 供時間切分。"""
     X: list[dict[str, Any]] = []
     y: list[int] = []
     dates: list[str] = []
@@ -297,94 +304,114 @@ def _training_samples() -> tuple[list[dict[str, Any]], list[int], list[str]]:
 
 
 def train_edge_model() -> dict[str, Any]:
-    """訓練本地 edge 模型（HistGradientBoosting）。樣本不足/單一類別→跳過。回 meta。"""
+    """訓練本地 edge 模型——**每個窗（5/20 日）各一顆**，吃『歷史回放選股集 + 線上真選股』。
+
+    歷史集（reports.training_set）讓樣本一次到位、不必等數週；兩者合併後做時間序 walk-forward。
+    回 combined meta：頂層＝主窗（相容首頁/判讀），另含 per_horizon 各窗明細。
+    """
     if not settings.enable_edge_model:
         return {"trained": False, "reason": "disabled"}
     try:
         import joblib  # noqa: PLC0415
-        import numpy as np  # noqa: PLC0415
         import pandas as pd  # noqa: PLC0415
         from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: PLC0415
         from sklearn.inspection import permutation_importance  # noqa: PLC0415
         from sklearn.metrics import accuracy_score, roc_auc_score  # noqa: PLC0415
-    except Exception as exc:  # noqa: BLE001 — 套件未裝（如尚未 rebuild 容器）→ 靜默跳過
+    except Exception as exc:  # noqa: BLE001 — 套件未裝（尚未 rebuild 容器）→ 靜默跳過
         logger.warning("edge 模型套件未就緒，跳過訓練: %s", exc)
         return {"trained": False, "reason": f"import failed: {exc}"}
 
-    X, y, dates = _training_samples()
-    n = len(y)
+    from reports import training_set  # noqa: PLC0415
+
     minimum = settings.edge_model_min_samples
-    # 樣本不足/單一類別：仍把「目前累積進度」落地成 meta，讓首頁/判讀顯示真實 n/min（而非 0）。
-    if n < minimum or len(set(y)) < 2:
-        reason = f"樣本不足 {n}/{minimum}" if n < minimum else f"標籤僅單一類別（n={n}）"
-        meta = {
-            "trained": False, "reason": reason,
-            "n_samples": n, "min_samples": minimum,
-            "primary_horizon": _primary_h(),
-            "checked_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
-        }
-        STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
-        EDGE_META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        return meta
 
-    # 時間序排序，前 80% 訓練、後 20% 驗證（walk-forward，避免用未來資料評估）
-    order = sorted(range(n), key=lambda i: dates[i])
-    Xs = pd.DataFrame([X[i] for i in order], columns=FEATURE_COLUMNS).astype(float)
-    ys = np.array([y[i] for i in order])
-    split = max(1, int(n * 0.8))
-    X_tr, X_te, y_tr, y_te = Xs.iloc[:split], Xs.iloc[split:], ys[:split], ys[split:]
+    def _dataset(h: int):
+        """某窗的完整訓練集（歷史回放 + 線上）：回 (Xdf, y, dates)，按時間排序。"""
+        frames = []
+        hist = training_set.load_training_set(h)
+        if not hist.empty:
+            hd = hist[FEATURE_COLUMNS].astype(float).copy()
+            hd["__y"] = hist["label"].astype(int).to_numpy()
+            hd["__d"] = hist["as_of"].astype(str).to_numpy()
+            frames.append(hd)
+        Xl, yl, dl = _live_samples(h)
+        if Xl:
+            ld = pd.DataFrame(Xl, columns=FEATURE_COLUMNS).astype(float)
+            ld["__y"] = yl
+            ld["__d"] = dl
+            frames.append(ld)
+        if not frames:
+            return None
+        ds = pd.concat(frames, ignore_index=True).sort_values("__d").reset_index(drop=True)
+        return ds
 
-    model = HistGradientBoostingClassifier(
-        max_iter=200, learning_rate=0.05, max_depth=4, l2_regularization=1.0,
-        random_state=42,
-    )
-    model.fit(X_tr, y_tr)
-
-    holdout_acc = holdout_auc = None
-    top_features: list[str] = []
-    if len(y_te) >= 5 and len(set(y_te)) >= 1:
-        pred = model.predict(X_te)
-        holdout_acc = round(float(accuracy_score(y_te, pred)), 3)
-        if len(set(y_te)) == 2:
-            holdout_auc = round(float(roc_auc_score(y_te, model.predict_proba(X_te)[:, 1])), 3)
+    def _train_one(h: int) -> dict[str, Any]:
+        ds = _dataset(h)
+        n = 0 if ds is None else len(ds)
+        if ds is None or n < minimum or ds["__y"].nunique() < 2:
+            reason = (f"樣本不足 {n}/{minimum}" if (ds is None or n < minimum)
+                      else f"標籤僅單一類別（n={n}）")
+            return {"trained": False, "reason": reason, "n_samples": n,
+                    "min_samples": minimum, "horizon": h}
+        X = ds[FEATURE_COLUMNS]
+        yv = ds["__y"].to_numpy()
+        split = max(1, int(n * 0.8))
+        X_tr, X_te, y_tr, y_te = X.iloc[:split], X.iloc[split:], yv[:split], yv[split:]
+        model = HistGradientBoostingClassifier(
+            max_iter=200, learning_rate=0.05, max_depth=4, l2_regularization=1.0, random_state=42,
+        )
+        model.fit(X_tr, y_tr)
+        acc = auc = None
+        top: list[str] = []
+        if len(y_te) >= 5 and len(set(y_te)) == 2:
+            acc = round(float(accuracy_score(y_te, model.predict(X_te))), 3)
+            auc = round(float(roc_auc_score(y_te, model.predict_proba(X_te)[:, 1])), 3)
             try:
                 imp = permutation_importance(model, X_te, y_te, n_repeats=5, random_state=42)
                 ranked = sorted(zip(FEATURE_COLUMNS, imp.importances_mean), key=lambda t: t[1], reverse=True)
-                top_features = [c for c, v in ranked if v > 0][:5] or [ranked[0][0]]
+                top = [c for c, v in ranked if v > 0][:5] or [ranked[0][0]]
             except Exception:  # noqa: BLE001
-                top_features = []
+                top = []
+        model.fit(X, yv)                      # 全資料重擬合上線
+        STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+        joblib.dump({"model": model, "columns": FEATURE_COLUMNS}, _model_path(h))
+        return {"trained": True, "n_samples": n, "min_samples": minimum, "horizon": h,
+                "holdout_accuracy": acc, "holdout_auc": auc, "top_features": top,
+                "positive_rate": round(float(yv.mean()), 3)}
 
-    # 用全部資料重新擬合（上線模型），存檔
-    model.fit(Xs, ys)
-    STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": model, "columns": FEATURE_COLUMNS}, EDGE_MODEL_PATH)
+    hs = backtest.horizons()
+    per = {h: _train_one(h) for h in hs}
+    ph = _primary_h()
+    primary = per.get(ph, {"trained": False, "n_samples": 0, "min_samples": minimum})
     meta = {
-        "trained": True,
+        **primary,
         "trained_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
-        "n_samples": n,
-        "min_samples": minimum,
-        "primary_horizon": _primary_h(),
-        "holdout_accuracy": holdout_acc,
-        "holdout_auc": holdout_auc,
-        "top_features": top_features,
-        "positive_rate": round(float(sum(y) / n), 3),
+        "primary_horizon": ph,
+        "horizons": hs,
+        "per_horizon": {str(h): per[h] for h in hs},
     }
+    STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
     EDGE_META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("edge 模型訓練完成：n=%d acc=%s auc=%s top=%s", n, holdout_acc, holdout_auc, top_features)
+    logger.info("edge 模型訓練：各窗 %s",
+                {h: (per[h].get("holdout_auc") if per[h].get("trained") else per[h].get("reason")) for h in hs})
     return meta
 
 
 def score_candidates(candidates: list[dict[str, Any]]) -> dict[str, float]:
-    """替當日候選打成功機率。candidates=[{symbol, stock_entry, side}]。無模型回空 dict。
-
-    回 {symbol: P(這個方向看法在主窗內成立)}，供 morning_brief 重排候選。
-    """
-    if not settings.enable_edge_model or not EDGE_MODEL_PATH.exists() or not candidates:
+    """用主窗模型替當日候選打成功機率。candidates=[{symbol, stock_entry, side}]。無模型回空 dict。"""
+    path = _model_path(_primary_h())
+    if not settings.enable_edge_model or not path.exists() or not candidates:
+        return {}
+    # 紀律：主窗模型在保留樣本上沒展現 edge（AUC <= 門檻）就不重排，避免無效模型誤導選股。
+    pm = ((_load_json(EDGE_META_PATH) or {}).get("per_horizon") or {}).get(str(_primary_h())) or {}
+    auc = pm.get("holdout_auc")
+    if auc is None or auc < EDGE_MIN_AUC:
+        logger.info("edge 主窗 AUC=%s 未達 %.2f，本次不以模型重排候選", auc, EDGE_MIN_AUC)
         return {}
     try:
         import joblib  # noqa: PLC0415
         import pandas as pd  # noqa: PLC0415
-        bundle = joblib.load(EDGE_MODEL_PATH)
+        bundle = joblib.load(path)
         model, cols = bundle["model"], bundle["columns"]
         rows = [featurize(c.get("stock_entry", {}), c.get("side", "watchlist")) for c in candidates]
         X = pd.DataFrame([{c: r.get(c) for c in cols} for r in rows], columns=cols).astype(float)

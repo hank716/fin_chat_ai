@@ -145,6 +145,26 @@ async def post_eval() -> dict:
     return await run_in_threadpool(strategy_calibration.evaluate_effectiveness)
 
 
+@router.post("/brief/build-training-set")
+async def post_build_training_set() -> dict:
+    """重建歷史『回放選股規則』訓練集（純本地、CPU 數十秒）後重訓 edge 模型。
+
+    讓 edge 模型一次取得數千筆與線上同分布的樣本（5/20 日各一份），不必等數週累積。
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from reports import strategy_calibration, training_set
+
+    def _run() -> dict:
+        stats = training_set.build_training_set()
+        edge = strategy_calibration.train_edge_model()
+        strategy_calibration.rebuild()                 # 讓 calibration.json 帶到最新 edge 狀態（供首頁）
+        strategy_calibration.evaluate_effectiveness()
+        return {"training_set": stats, "edge_model": edge}
+
+    return await run_in_threadpool(_run)
+
+
 def _require_admin(x_admin_token: str | None) -> None:
     """管理端點權杖檢查。未設定 ADMIN_TOKEN → fail-closed（停用端點）；token 不符 → 401。"""
     from config import settings

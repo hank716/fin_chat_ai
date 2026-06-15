@@ -102,8 +102,10 @@
     {% if evaluation.verdict %}<div class="sb-note">{{ evaluation.verdict }}</div>{% endif %}
   </div>
   {% endif %}
-  {% if calibration.edge_model and calibration.edge_model.trained %}
-  <div class="sb-note">🧠 本地 edge 模型：樣本 {{ calibration.edge_model.n_samples }}・holdout 準確率 {% if calibration.edge_model.holdout_accuracy is not none %}{{ '%.0f%%'|format(calibration.edge_model.holdout_accuracy*100) }}{% else %}—{% endif %}{% if calibration.edge_model.top_features %}・關鍵因子：{{ calibration.edge_model.top_features[:4]|join('、') }}{% endif %}</div>
+  {% if calibration.edge_model and calibration.edge_model.per_horizon %}
+  <div class="sb-note">🧠 本地 edge 模型（各時間窗）：
+    {% for h, pm in calibration.edge_model.per_horizon.items() %}{% if pm.trained %}{{ h }}日 AUC <b>{{ pm.holdout_auc if pm.holdout_auc is not none else '—' }}</b>（樣本 {{ pm.n_samples }}）{% else %}{{ h }}日 累積中 {{ pm.n_samples }}/{{ pm.min_samples }}{% endif %}{% if not loop.last %}　·　{% endif %}{% endfor %}{% if calibration.edge_model.top_features %}・主窗關鍵因子：{{ calibration.edge_model.top_features[:4]|join('、') }}{% endif %}
+    <br><span style="opacity:.75">AUC&gt;0.5 才有預測力；訓練集＝歷史回放選股 + 線上真選股。</span></div>
   {% else %}
   <div class="sb-note">🧠 本地 edge 模型：樣本累積中（已 {{ calibration.edge_model.n_samples or 0 }} / {{ calibration.edge_model.min_samples or 150 }} 檔，達標後自動啟用），目前以文字校準回灌晨報。</div>
   {% endif %}

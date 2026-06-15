@@ -174,12 +174,13 @@ def _run_backtest_loop() -> dict[str, Any]:
 
     全程 guarded：任何失敗都只記 log，**絕不影響晨報產出**。回最新校準 summary 供顯示。
     """
-    from reports import backtest, strategy_calibration
+    from reports import backtest, strategy_calibration, training_set
 
     summary: dict[str, Any] = {}
     try:
         backtest.run_due_evaluations()
-        strategy_calibration.train_edge_model()        # 先訓練→寫 edge_meta（含目前樣本進度）
+        training_set.build_if_stale()                  # 歷史回放訓練集（過舊才重建，便宜）
+        strategy_calibration.train_edge_model()        # 各窗(5/20)訓練→寫 edge_meta
         summary = strategy_calibration.rebuild()       # 再彙整：calibration 才會帶到最新 edge 狀態
         strategy_calibration.evaluate_effectiveness()  # 成效量測（把「準不準」變數字）
     except Exception as exc:  # noqa: BLE001
