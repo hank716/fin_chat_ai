@@ -148,6 +148,44 @@ def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str
     return combined, landed
 
 
+def _candidate_list(result: Any, feats: dict[str, Any]) -> list[dict[str, Any]]:
+    """組出 edge 模型打分用的候選清單（symbol + 當日 features + 偏多/偏空）。"""
+    stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
+    out: list[dict[str, Any]] = []
+    for side, lst in (("watchlist", result.tw_watchlist), ("caution", result.tw_caution)):
+        for w in lst:
+            out.append({"symbol": w.symbol, "side": side, "stock_entry": stocks.get(w.symbol, {})})
+    return out
+
+
+def _apply_edge_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
+    """用本地 edge 模型替候選打成功機率並重排（高機率在前）；無模型則原序不動。"""
+    from reports import strategy_calibration
+
+    scores = strategy_calibration.score_candidates(_candidate_list(result, feats))
+    if scores:
+        result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
+        result.tw_caution.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
+    return scores
+
+
+def _run_backtest_loop() -> dict[str, Any]:
+    """回測迴圈（純本地、零 LLM 成本）：回測已到期晨報 → 重建校準 → 訓練 edge 模型。
+
+    全程 guarded：任何失敗都只記 log，**絕不影響晨報產出**。回最新校準 summary 供顯示。
+    """
+    from reports import backtest, strategy_calibration
+
+    summary: dict[str, Any] = {}
+    try:
+        backtest.run_due_evaluations()
+        summary = strategy_calibration.rebuild()
+        strategy_calibration.train_edge_model()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("回測/校準迴圈失敗（不影響晨報）: %s", exc)
+    return summary
+
+
 def generate_morning_brief(
     raw_query: str | None = None, *, refresh_tw: bool = True,
     push_discord: bool = False, publish: bool = False,
@@ -156,8 +194,16 @@ def generate_morning_brief(
 
     feats, landed = _build_combined_features(refresh_tw)
 
+    # 策略自動修正（回灌端）：注入「過去預估的回測校準」讓模型自我修正選股傾向。讀本機檔，便宜。
+    from reports import strategy_calibration
+    calibration_text = strategy_calibration.build_calibration_block()
+    if calibration_text:
+        logger.info("注入策略校準（%d 字）至晨報 prompt", len(calibration_text))
+
     # 晨報主推理即時連網：兩段式 ①PRO+Google搜尋 寫分析稿 → ②Flash 純格式化成結構
-    result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(feats)
+    result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(
+        feats, calibration=calibration_text or None
+    )
     brief_cost = round(
         # ①研究階段 grounded（PRO+Google 搜尋）②格式化階段純文字（Flash，不連網）
         tracker.cost_of_usage(research_usage, settings.gemini_model_brief, grounded=True)
@@ -189,10 +235,26 @@ def generate_morning_brief(
     logger.info("guardrail passed=%s errors=%s warnings=%s",
                 guardrail["passed"], guardrail["error_count"], guardrail["warning_count"])
 
+    # 策略自動修正（打分端）：本地 edge 模型替候選打成功機率並重排（guarded，無模型則不動）
+    edge_scores: dict[str, float] = {}
+    try:
+        edge_scores = _apply_edge_scores(result, feats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("edge 打分/重排失敗（不影響晨報）: %s", exc)
+
+    # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
+    backtest_summary = _run_backtest_loop()
+
     # 4) builders
     report = build_report_dict(result, generated_at=generated_at, raw_query=raw_query)
     report["guardrail"] = guardrail
     report["cost"] = cost_info
+    if edge_scores:
+        report["edge_scores"] = edge_scores
+    if calibration_text:
+        report["calibration_injected"] = calibration_text
+    if backtest_summary:
+        report["backtest_summary"] = backtest_summary
     report_id = f"morning_{generated_at:%Y%m%d_%H%M%S}"
     report["report_id"] = report_id
     report["report_date"] = generated_at.date().isoformat()  # 晨報日期(今日)，有別於資料日期

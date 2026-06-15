@@ -87,6 +87,17 @@ def build_discord_summary(report: dict[str, Any]) -> str:
         parts.append("**要注意（負向）**\n"
                      + "\n".join(f"- {w['symbol']} {w['name']}" for w in caution))
 
+    # 策略回測校準（依過去預估準確度自動修正；有資料才附）
+    bt = report.get("backtest_summary") or {}
+    if bt.get("sample_n"):
+        ph = bt.get("primary_horizon", 5)
+        wl = ((bt.get("metrics") or {}).get("watchlist") or {}).get(str(ph)) or {}
+        if wl.get("n"):
+            seg = [f"偏多近{ph}日方向準確率 {wl['direction_accuracy']*100:.0f}%"]
+            if wl.get("avg_forward_return_pct") is not None:
+                seg.append(f"平均報酬 {_pct(wl['avg_forward_return_pct'])}")
+            parts.append(f"🎯 策略回測（樣本{bt['sample_n']}檔）：" + "、".join(seg))
+
     parts.append(f"\n📄 完整報告：{_report_url(report.get('report_id', ''))}")
     gr = report.get("guardrail") or {}
     if gr:

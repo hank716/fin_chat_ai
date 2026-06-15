@@ -25,7 +25,8 @@ def render_history_html(
     reports: list[dict[str, Any]],
     cost: dict[str, Any] | None = None,
     activity: dict[str, Any] | None = None,
+    calibration: dict[str, Any] | None = None,
 ) -> str:
     return _env.get_template("history.html").render(
-        reports=reports, cost=cost, activity=activity
+        reports=reports, cost=cost, activity=activity, calibration=calibration
     )

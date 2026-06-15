@@ -154,19 +154,36 @@ def build_qa_prompt(
     )
 
 
-def build_full_brief_prompt(features: dict[str, Any]) -> str:
-    """組出餵 Gemini 的完整晨報 prompt（rules + 合併 features JSON）。"""
+def _calibration_block(calibration: str | None) -> str:
+    """把回測校準提示包成可注入 prompt 的尾段（空則不加）。"""
+    if not calibration or not calibration.strip():
+        return ""
+    return (
+        "\n\n以下是『策略校準』——系統依**過去晨報預估的事後回測**自動歸納，"
+        "請據此調整本次選股傾向（例如目標價是否訂太樂觀、哪些訊號較可靠）；"
+        "但所有數據仍以 features 為準、不得捏造，校準僅影響你的判斷取捨：\n"
+        f"{calibration.strip()}"
+    )
+
+
+def build_full_brief_prompt(features: dict[str, Any], calibration: str | None = None) -> str:
+    """組出餵 Gemini 的完整晨報 prompt（rules + 合併 features JSON + 選用回測校準）。"""
     features_json = json.dumps(features, ensure_ascii=False, indent=2)
     return (
         f"{FULL_BRIEF_RULES}\n\n"
         f"以下是今日所有可引用的 features（唯一資料來源；不得引用以外的任何資訊）：\n"
-        f"```json\n{features_json}\n```\n\n"
+        f"```json\n{features_json}\n```"
+        f"{_calibration_block(calibration)}\n\n"
         f"請輸出符合 schema 的結構化晨報。"
     )
 
 
-def build_brief_research_prompt(features: dict[str, Any]) -> str:
-    """晨報主推理（即時連網）：用 Google 搜尋查證即時事實 + features 數據，輸出完整敘事分析稿。"""
+def build_brief_research_prompt(features: dict[str, Any], calibration: str | None = None) -> str:
+    """晨報主推理（即時連網）：用 Google 搜尋查證即時事實 + features 數據，輸出完整敘事分析稿。
+
+    calibration：選用的回測校準提示（由 strategy_calibration 依過去預估準確度歸納），
+    注入後讓模型自我修正選股傾向（策略自動修正迴圈的回灌端）。
+    """
     features_json = json.dumps(features, ensure_ascii=False, indent=2)
     return (
         f"{FULL_BRIEF_RULES}\n\n"
@@ -176,6 +193,7 @@ def build_brief_research_prompt(features: dict[str, Any]) -> str:
         f"輸出**完整繁體中文敘事分析**（不是 JSON）：涵蓋上述所有段落、候選標的（含目標價/止損與理由）、"
         f"風險、後續追蹤、重要新聞（含來源/日期）。稍後系統會把它整理成結構化格式。\n\n"
         f"features（數據事實來源）：\n```json\n{features_json}\n```"
+        f"{_calibration_block(calibration)}"
     )
 
 

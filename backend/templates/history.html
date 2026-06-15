@@ -54,6 +54,49 @@
 </div>
 {% endif %}
 
+{% if calibration and calibration.sample_n %}
+<div class="standby">
+  <h2 class="sb-title">🎯 策略回測校準（系統依過去預估準確度自動修正）</h2>
+  <div class="sb-meta">
+    取最近 {{ calibration.lookback_reports }} 份已到期晨報・主窗 {{ calibration.primary_horizon }} 交易日・樣本 {{ calibration.sample_n }} 檔
+    {% if calibration.generated_at %}・更新 {{ calibration.generated_at }}{% endif %}
+  </div>
+  <table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:13px">
+    <tr style="text-align:left;opacity:.7">
+      <th>清單／窗</th><th>方向準確率</th><th>目標命中</th><th>觸止損</th><th>平均報酬</th><th>目標樂觀度</th>
+    </tr>
+    {% for side, label in [('watchlist','偏多'),('caution','偏空/注意')] %}
+      {% for h in calibration.horizons %}
+        {% set m = (calibration.metrics.get(side) or {}).get(h|string) or {} %}
+        {% if m.n %}
+        <tr>
+          <td>{{ label }}・{{ h }}日（n={{ m.n }}）</td>
+          <td>{{ '%.0f%%'|format((m.direction_accuracy or 0)*100) }}</td>
+          <td>{% if m.target_hit_rate is not none %}{{ '%.0f%%'|format(m.target_hit_rate*100) }}{% else %}—{% endif %}</td>
+          <td>{% if m.stop_hit_rate is not none %}{{ '%.0f%%'|format(m.stop_hit_rate*100) }}{% else %}—{% endif %}</td>
+          <td>{% if m.avg_forward_return_pct is not none %}{{ '%+.1f%%'|format(m.avg_forward_return_pct) }}{% else %}—{% endif %}</td>
+          <td>{% if m.target_optimism is not none %}{{ '%.1f×'|format(m.target_optimism) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  </table>
+  {% if calibration.signal_ranking %}
+  <div class="sb-windows">
+    {% for s in calibration.signal_ranking[:3] %}<span class="sb-win">👍 {{ s.tag }} {{ '%+.1f%%'|format(s.avg_edge_return_pct) }}（n={{ s.n }}）</span>{% endfor %}
+  </div>
+  {% endif %}
+  {% if calibration.edge_model and calibration.edge_model.trained %}
+  <div class="sb-note">🧠 本地 edge 模型：樣本 {{ calibration.edge_model.n_samples }}・holdout 準確率 {% if calibration.edge_model.holdout_accuracy is not none %}{{ '%.0f%%'|format(calibration.edge_model.holdout_accuracy*100) }}{% else %}—{% endif %}{% if calibration.edge_model.top_features %}・關鍵因子：{{ calibration.edge_model.top_features[:4]|join('、') }}{% endif %}</div>
+  {% else %}
+  <div class="sb-note">🧠 本地 edge 模型：樣本累積中（達 {{ calibration.edge_model.n_samples if calibration.edge_model else 0 }} 檔後啟用），目前以文字校準回灌晨報。</div>
+  {% endif %}
+  {% if calibration.calibration_text %}
+  <div class="sb-note" style="white-space:pre-line;margin-top:6px">{{ calibration.calibration_text }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if reports %}
 {% for r in reports %}
 <a class="hist" href="/report/{{ r.report_id }}">

@@ -101,6 +101,15 @@ class Settings(BaseSettings):
     public_hostname: str = ""
     public_report_base_url: str = ""
 
+    # ── 回測 / 策略自動修正（本地、零 LLM 成本）──
+    # 對「過去晨報的 tw_watchlist/tw_caution 預估」做事後回測，產出校準回灌晨報 prompt，
+    # 並（資料夠時）訓練本地 ML edge 模型替候選打成功機率。全程讀本機 parquet，不打外部 API。
+    backtest_horizons: str = "5,20"               # 評估時間窗（交易日），逗號分隔；同時跑
+    backtest_calibration_lookback: int = 60       # 校準彙整取最近幾份已到期報告
+    enable_strategy_calibration: bool = True      # 把回測校準文字注入晨報 prompt（自我修正）
+    enable_edge_model: bool = True                # 啟用本地 ML edge 模型（樣本不足時自動跳過）
+    edge_model_min_samples: int = 150             # 訓練 edge 模型所需最少已到期樣本數
+
     # ── 排程 ──
     schedule_tz: str = "Asia/Taipei"
     morning_report_time: str = "08:30"

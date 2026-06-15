@@ -178,14 +178,15 @@ def analyze_full_brief(features: dict[str, Any]) -> tuple[BriefResult, dict[str,
 
 
 def analyze_full_brief_grounded(
-    features: dict[str, Any],
+    features: dict[str, Any], calibration: str | None = None,
 ) -> tuple[BriefResult, dict[str, int], dict[str, int]]:
     """兩段式即時連網晨報：①PRO+Google 搜尋 寫分析稿（主推理連網）→ ②Flash 純格式化成 BriefResult。
 
     回 (result, 研究階段 usage, 格式化階段 usage)。突破 responseSchema 不能與 tool 並用的限制。
+    calibration：選用的回測校準提示，注入研究階段 prompt 讓模型依過去準確度自我修正選股傾向。
     """
     analysis, research_usage = generate_text(
-        build_brief_research_prompt(features),
+        build_brief_research_prompt(features, calibration=calibration),
         model=settings.gemini_model_brief,
         use_search=True,
     )

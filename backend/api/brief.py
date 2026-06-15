@@ -32,7 +32,11 @@ async def home() -> str:
         "daily_limit_twd": float(settings.daily_cost_limit_twd),
     }
     activity = monitor.idle_report()
-    return render_history_html(morning_brief.list_reports(), cost=cost, activity=activity)
+    from reports import strategy_calibration
+    calibration = strategy_calibration.latest_summary()
+    return render_history_html(
+        morning_brief.list_reports(), cost=cost, activity=activity, calibration=calibration
+    )
 
 
 @router.get("/activity")
@@ -99,6 +103,32 @@ async def post_prefetch(
         return {"started": True, "scope": "full", "background": True}
 
     return await run_in_threadpool(prefetch, scope=scope, force=force, max_seconds=max_seconds)
+
+
+@router.post("/brief/backtest")
+async def post_backtest() -> dict:
+    """手動觸發回測迴圈（純本地、零 LLM 花費）：回測已到期晨報 → 重建校準 → 訓練 edge 模型。
+
+    平日由每次產晨報自動帶跑；此端點供隨時重算（如剛補了行情或想看最新校準）。
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from reports import backtest, strategy_calibration
+
+    def _run() -> dict:
+        evald = backtest.run_due_evaluations()
+        summary = strategy_calibration.rebuild()
+        edge = strategy_calibration.train_edge_model()
+        return {
+            "evaluated": evald,
+            "sample_n": summary.get("sample_n"),
+            "metrics": summary.get("metrics"),
+            "signal_ranking": summary.get("signal_ranking"),
+            "calibration_text": summary.get("calibration_text"),
+            "edge_model": edge,
+        }
+
+    return await run_in_threadpool(_run)
 
 
 def _require_admin(x_admin_token: str | None) -> None:
