@@ -34,8 +34,10 @@ async def home() -> str:
     activity = monitor.idle_report()
     from reports import strategy_calibration
     calibration = strategy_calibration.latest_summary()
+    evaluation = strategy_calibration.latest_evaluation()
     return render_history_html(
-        morning_brief.list_reports(), cost=cost, activity=activity, calibration=calibration
+        morning_brief.list_reports(), cost=cost, activity=activity,
+        calibration=calibration, evaluation=evaluation,
     )
 
 
@@ -119,6 +121,7 @@ async def post_backtest() -> dict:
         evald = backtest.run_due_evaluations()
         summary = strategy_calibration.rebuild()
         edge = strategy_calibration.train_edge_model()
+        evaluation = strategy_calibration.evaluate_effectiveness()
         return {
             "evaluated": evald,
             "sample_n": summary.get("sample_n"),
@@ -126,9 +129,20 @@ async def post_backtest() -> dict:
             "signal_ranking": summary.get("signal_ranking"),
             "calibration_text": summary.get("calibration_text"),
             "edge_model": edge,
+            "evaluation": evaluation,
         }
 
     return await run_in_threadpool(_run)
+
+
+@router.post("/brief/eval")
+async def post_eval() -> dict:
+    """成效量測（純本地）：把「策略準不準」變成數字——選股是否贏大盤、edge OOS、樣本是否足夠。"""
+    from starlette.concurrency import run_in_threadpool
+
+    from reports import strategy_calibration
+
+    return await run_in_threadpool(strategy_calibration.evaluate_effectiveness)
 
 
 def _require_admin(x_admin_token: str | None) -> None:

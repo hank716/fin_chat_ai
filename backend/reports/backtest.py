@@ -297,6 +297,8 @@ def evaluate_report(report: dict[str, Any], hs: list[int] | None = None) -> dict
         "generated_at": report.get("generated_at"),
         "horizons": hs,
         "matured": {str(h): matured[h] for h in hs},
+        # 該晨報是否曾注入策略校準（供成效量測比較「校準前/後」兩個世代，免再載 report.json）
+        "calibration_injected": bool(report.get("calibration_injected")),
         "items": items,
         "aggregates": _aggregate(items, hs),
     }

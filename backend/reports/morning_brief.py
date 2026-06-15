@@ -181,6 +181,7 @@ def _run_backtest_loop() -> dict[str, Any]:
         backtest.run_due_evaluations()
         summary = strategy_calibration.rebuild()
         strategy_calibration.train_edge_model()
+        strategy_calibration.evaluate_effectiveness()  # 成效量測（把「準不準」變數字）
     except Exception as exc:  # noqa: BLE001
         logger.warning("回測/校準迴圈失敗（不影響晨報）: %s", exc)
     return summary

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -28,6 +28,10 @@ STRATEGY_DIR = Path(settings.local_storage_path) / "strategy"
 CALIBRATION_PATH = STRATEGY_DIR / "calibration.json"
 EDGE_MODEL_PATH = STRATEGY_DIR / "edge_model.pkl"
 EDGE_META_PATH = STRATEGY_DIR / "edge_model_meta.json"
+EVAL_PATH = STRATEGY_DIR / "evaluation.json"
+
+# 成效量測：足以下定論所需的最少樣本與交易日數（跨多種行情才不被單一 regime 帶偏）
+EVAL_MIN_DATES = 10
 
 # 文字校準的最低樣本門檻（低於此不注入，避免雜訊誤導模型）
 MIN_TEXT_SAMPLES = 12
@@ -101,6 +105,115 @@ def rebuild(lookback: int | None = None) -> dict[str, Any]:
 def latest_summary() -> dict[str, Any]:
     """讀回最近一次彙整（給首頁/報告/Discord 顯示；無檔回空 dict）。"""
     return _load_json(CALIBRATION_PATH) or {}
+
+
+# ───────────────────────── 成效量測 harness ─────────────────────────
+# 把「會不會準」變成可看的數字：最誠實的指標——選股有沒有贏大盤——不需任何 ML，
+# 直接用 scorecard 已存的 vs_index_pct（相對大盤超額）算出來。
+
+def _excess_stats(scorecards: list[dict[str, Any]], side: str, h: int) -> dict[str, Any]:
+    """某 side×窗 的成效：方向準確率、平均報酬、**平均超額（贏大盤幅度）**、贏過大盤比率。"""
+    rows = []
+    for sc in scorecards:
+        for it in sc.get("items", []):
+            if it.get("side") != side:
+                continue
+            r = it.get("horizons", {}).get(str(h))
+            if _VALID(r):
+                rows.append(r)
+    n = len(rows)
+    if n == 0:
+        return {"n": 0}
+    fwd = [r["forward_return_pct"] for r in rows if r.get("forward_return_pct") is not None]
+    exc = [r["vs_index_pct"] for r in rows if r.get("vs_index_pct") is not None]
+    dir_ok = sum(1 for r in rows if r.get("direction_correct"))
+    beat = sum(1 for v in exc if v > 0)
+    return {
+        "n": n,
+        "direction_accuracy": round(dir_ok / n, 3),
+        "avg_forward_return_pct": round(sum(fwd) / len(fwd), 2) if fwd else None,
+        "avg_excess_vs_market_pct": round(sum(exc) / len(exc), 2) if exc else None,
+        "beat_market_rate": round(beat / len(exc), 3) if exc else None,
+    }
+
+
+def _eval_verdict(sufficient: bool, n_dates: int, span: int,
+                  wl: dict[str, Any], cau: dict[str, Any], edge: dict[str, Any]) -> str:
+    """誠實白話判讀：先講資料夠不夠下定論，再講目前數字顯示什麼。"""
+    parts: list[str] = []
+    if not sufficient:
+        parts.append(
+            f"⚠️ 樣本仍不足以下定論（偏多 {wl.get('n',0)} 檔、{n_dates} 個交易日、跨 {span} 天；"
+            f"需 ≥{settings.edge_model_min_samples} 檔且涵蓋多種行情）。下列數字僅供參考、會隨資料變動。"
+        )
+    else:
+        parts.append(f"資料量已具參考性（偏多 {wl.get('n',0)} 檔、{n_dates} 個交易日、跨 {span} 天）。")
+
+    ex = wl.get("avg_excess_vs_market_pct")
+    br = wl.get("beat_market_rate")
+    if ex is not None and br is not None:
+        verb = "贏" if ex > 0 else "輸"
+        parts.append(f"偏多選股平均{verb}大盤 {abs(ex):.1f}%、贏過大盤比率 {br*100:.0f}%"
+                     + ("（有超額、選股有加值）。" if ex > 0 else "（落後大盤，選股目前未加值）。"))
+    if cau.get("direction_accuracy") is not None:
+        parts.append(f"避雷側方向準確率 {cau['direction_accuracy']*100:.0f}%。")
+    if edge.get("trained") and edge.get("holdout_auc") is not None:
+        auc = edge["holdout_auc"]
+        parts.append(f"edge 模型 OOS AUC {auc}（>0.5 才有預測力，{'有' if auc > 0.55 else '尚無明顯'}edge）。")
+    else:
+        parts.append(f"edge 模型尚未訓練（樣本 {edge.get('n_samples', 0)}/{settings.edge_model_min_samples}）。")
+    return "".join(parts)
+
+
+def evaluate_effectiveness(lookback: int | None = None) -> dict[str, Any]:
+    """量測策略成效並落地 evaluation.json。純讀 scorecard（excess 指標零 ML），回 summary。"""
+    lookback = lookback or settings.backtest_calibration_lookback
+    hs = backtest.horizons()
+    ph = hs[0]
+    scorecards = backtest.load_scorecards(limit=lookback)
+    dates = sorted({sc.get("as_of") for sc in scorecards if sc.get("as_of")})
+    span = 0
+    if len(dates) >= 2:
+        try:
+            span = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days
+        except ValueError:
+            span = 0
+
+    wl = _excess_stats(scorecards, "watchlist", ph)
+    cau = _excess_stats(scorecards, "caution", ph)
+    sufficient = wl.get("n", 0) >= settings.edge_model_min_samples and len(dates) >= EVAL_MIN_DATES
+
+    # 校準前/後世代比較（confounded by regime，僅供長期追蹤，附警語）
+    def _era(flag: bool) -> dict[str, Any]:
+        return _excess_stats([sc for sc in scorecards if bool(sc.get("calibration_injected")) == flag],
+                             "watchlist", ph)
+    eras = {"with_calibration": _era(True), "without_calibration": _era(False)}
+
+    edge = _load_json(EDGE_META_PATH) or {}
+    out = {
+        "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
+        "primary_horizon": ph,
+        "data": {
+            "watchlist_n": wl.get("n", 0), "caution_n": cau.get("n", 0),
+            "distinct_dates": len(dates), "date_span_days": span,
+            "date_range": [dates[0], dates[-1]] if dates else [],
+            "sufficient": sufficient, "min_samples_needed": settings.edge_model_min_samples,
+        },
+        "watchlist": wl,
+        "caution": cau,
+        "calibration_eras": eras,
+        "calibration_eras_note": "校準前/後比較會被市場行情干擾（confounded），僅供長期趨勢參考、不可單獨下因果結論。",
+        "edge_model": {k: edge.get(k) for k in ("trained", "n_samples", "holdout_accuracy", "holdout_auc")},
+        "verdict": _eval_verdict(sufficient, len(dates), span, wl, cau, edge),
+    }
+    STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+    EVAL_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def latest_evaluation() -> dict[str, Any]:
+    """讀回最近一次成效量測（給首頁/端點顯示；無檔回空 dict）。"""
+    return _load_json(EVAL_PATH) or {}
 
 
 def _compose_text(summary: dict[str, Any]) -> str:
