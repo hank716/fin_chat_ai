@@ -30,6 +30,7 @@ from config import settings
 from data_sources import rate_limiter
 from data_sources.backfill_tw_market import backfill_window
 from data_sources.ingest import TW_MARKET, _dq_filter
+from data_sources.twse_loader import TWSEBlockedError
 from processor.prefetch_fundamentals import _crawl_blackout_window, _in_crawl_blackout
 from storage import local_store
 
@@ -105,6 +106,13 @@ def crawl_listed_history(max_seconds: float | None = None) -> dict[str, Any]:
         chunk_start = max(target, chunk_end - timedelta(days=settings.history_crawl_chunk_days))
         try:
             backfill_window(chunk_start, chunk_end)               # 不含今日 TPEx 價
+        except TWSEBlockedError as exc:
+            # 反爬封鎖：整輪立即停手且「不前進游標」——避免空轉寫 0 筆造成假進度，
+            # 下輪（下個排程/catch-up）等封鎖解除後從同一游標續爬。
+            stop = "twse_blocked"
+            logger.warning("上市歷史回補遇 TWSE 反爬封鎖，本輪停止（游標保持 %s，下輪續）: %s",
+                           cursor.isoformat(), exc)
+            break
         except Exception as exc:  # noqa: BLE001 — 單 chunk 失敗就停、游標已存、下輪續
             stop = f"error:{exc}"
             logger.warning("上市歷史回補 chunk [%s,%s] 失敗: %s", chunk_start, chunk_end, exc)

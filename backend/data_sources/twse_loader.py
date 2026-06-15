@@ -40,6 +40,21 @@ TWSE_TABLE_TITLE_PREFIX = "每日收盤行情"
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
+# TWSE/TPEx WAF 反爬封鎖頁的特徵字串（中英都可能出現）。
+_BLOCK_MARKERS = ("安全性考量", "SECURITY REASONS", "CAN NOT BE ACCESSED")
+
+
+def _raise_if_blocked(resp: httpx.Response, label: str) -> None:
+    """偵測反爬封鎖 → 抛 TWSEBlockedError。
+
+    這些 JSON 端點正常一律回 200；出現 307（導向安全頁）或 body 帶封鎖特徵字串，
+    即視為被 WAF 暫時封鎖。早於 status!=200 檢查呼叫，讓封鎖走專屬例外（不被 tenacity retry）。
+    """
+    if resp.status_code == 307 or any(m in resp.text for m in _BLOCK_MARKERS):
+        raise TWSEBlockedError(
+            f"{label} 反爬封鎖 HTTP {resp.status_code}: {resp.text[:120].strip()}"
+        )
+
 
 class TWSEError(RuntimeError):
     pass
@@ -50,6 +65,16 @@ class TWSENoDataError(RuntimeError):
 
     刻意不繼承 TWSEError, 讓 tenacity 的 retry_if_exception_type((..., TWSEError))
     不會匹配 — 該日無資料時 retry 同一天無意義, caller 應 fallback 到 T-1。
+    """
+    pass
+
+
+class TWSEBlockedError(RuntimeError):
+    """TWSE/TPEx 反爬 WAF 封鎖：HTTP 307 +「安全性考量 / FOR SECURITY REASONS」頁。
+
+    持續高頻（如歷史慢爬連打數分鐘）會觸發，封鎖會持續數分鐘才解除。
+    刻意不繼承 TWSEError → tenacity 不 retry（立即重試只是空轉、還拉長被封時間）；
+    caller（慢爬）應接住後「整輪立即停手且不前進游標」，避免空轉寫 0 筆造成假進度。
     """
     pass
 
@@ -174,6 +199,7 @@ def fetch_twse_daily(trade_date: date) -> tuple[date, list[PriceRow]]:
     params = {"date": _twse_date_str(trade_date), "type": "ALLBUT0999", "response": "json"}
     with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": "finflow-ai/0.1"}) as client:
         resp = client.get(TWSE_MI_INDEX, params=params)
+    _raise_if_blocked(resp, "TWSE MI_INDEX")
     if resp.status_code != 200:
         raise TWSEError(f"TWSE HTTP {resp.status_code}: {resp.text[:200]}")
     body = resp.json()
@@ -230,6 +256,7 @@ def fetch_tpex_daily(trade_date: date) -> tuple[date, list[PriceRow]]:
     params = {"l": "zh-tw", "d": _tpex_date_str(trade_date), "se": "AL", "s": "0,asc,0"}
     with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": "finflow-ai/0.1"}) as client:
         resp = client.get(TPEX_DAILY, params=params)
+    _raise_if_blocked(resp, "TPEx daily")
     if resp.status_code != 200:
         raise TWSEError(f"TPEx HTTP {resp.status_code}: {resp.text[:200]}")
     body = resp.json()
@@ -339,6 +366,7 @@ def fetch_twse_chip(trade_date: date) -> tuple[date, list[ChipRow]]:
     }
     with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": "finflow-ai/0.1"}) as client:
         resp = client.get(TWSE_T86, params=params)
+    _raise_if_blocked(resp, "TWSE T86")
     if resp.status_code != 200:
         raise TWSEError(f"TWSE T86 HTTP {resp.status_code}: {resp.text[:200]}")
     body = resp.json()
@@ -406,6 +434,7 @@ def fetch_tpex_chip(trade_date: date) -> tuple[date, list[ChipRow]]:
     }
     with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": "finflow-ai/0.1"}) as client:
         resp = client.get(TPEX_T86, params=params)
+    _raise_if_blocked(resp, "TPEx T86")
     if resp.status_code != 200:
         raise TWSEError(f"TPEx T86 HTTP {resp.status_code}: {resp.text[:200]}")
     body = resp.json()
@@ -506,6 +535,7 @@ def fetch_twse_margin(trade_date: date) -> tuple[date, list[MarginRow]]:
     }
     with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": "finflow-ai/0.1"}) as client:
         resp = client.get(TWSE_MI_MARGN, params=params)
+    _raise_if_blocked(resp, "TWSE MI_MARGN")
     if resp.status_code != 200:
         raise TWSEError(f"TWSE MI_MARGN HTTP {resp.status_code}: {resp.text[:200]}")
     body = resp.json()
@@ -569,6 +599,7 @@ def fetch_tpex_margin(trade_date: date) -> tuple[date, list[MarginRow]]:
     params = {"l": "zh-tw", "o": "json", "d": _tpex_date_str(trade_date)}
     with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": "finflow-ai/0.1"}) as client:
         resp = client.get(TPEX_MARGIN, params=params)
+    _raise_if_blocked(resp, "TPEx margin")
     if resp.status_code != 200:
         raise TWSEError(f"TPEx margin HTTP {resp.status_code}: {resp.text[:200]}")
     body = resp.json()

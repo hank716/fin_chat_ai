@@ -22,7 +22,7 @@ from storage import local_store
 
 from . import twse_loader
 from .ingest import TW_MARKET, _dq_filter
-from .twse_loader import TWSENoDataError
+from .twse_loader import TWSEBlockedError, TWSENoDataError
 
 logger = logging.getLogger("ai-market-backend.backfill_market")
 
@@ -33,6 +33,8 @@ def _try(fetch, d: date) -> list:
         return _dq_filter(rows)
     except TWSENoDataError:
         return []
+    except TWSEBlockedError:
+        raise  # 反爬封鎖：不吞，往上拋讓慢爬整輪立即停手（避免對封鎖中的 WAF 空轉）
     except Exception as exc:  # noqa: BLE001 — 單來源單日失敗不阻斷
         logger.warning("%s %s 失敗: %s", getattr(fetch, "__name__", fetch), d, exc)
         return []

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 
@@ -39,8 +40,11 @@ QUOTAS: dict[str, Quota] = {
     #   3) 全市場財報慢爬 reentrant 且容忍 403（FinMindIPBanned 被逐檔 except 接住、可續跑）
     # burst 30：讓熱快取晨報的 ~24 則新聞請求瞬間完成、不被逐筆節流。
     "finmind": Quota(rate_per_sec=0.5, burst=30, hourly_budget=settings.finmind_hourly_budget),
-    "twse": Quota(rate_per_sec=1.0, burst=5),
-    "tpex": Quota(rate_per_sec=1.0, burst=5),
+    # TWSE/TPEx 官方端點有反爬 WAF：持續 1 req/s 連打數分鐘（歷史慢爬）會被回 HTTP 307
+    # 「安全性考量」暫時封鎖。降到 0.4/s + 較小 burst，並在 acquire 等待時加 jitter（見下），
+    # 打散規律高頻、避開 WAF pattern。每日刷新只抓近 3 天、量小，降頻不影響晨報速度。
+    "twse": Quota(rate_per_sec=0.4, burst=3),
+    "tpex": Quota(rate_per_sec=0.4, burst=3),
     "yahoo": Quota(rate_per_sec=2.0, burst=10),
 }
 
@@ -117,8 +121,8 @@ def acquire(provider: str, *, cost: int = 1, max_wait_sec: float = 30.0,
             return waited
         if time.monotonic() >= deadline:
             raise RateLimitTimeout(f"{provider} rate limit timeout (waited {waited:.1f}s)")
-        # 估計需 wait 多久才能補滿 cost 個 token
-        sleep_sec = max(cost / quota.rate_per_sec, 0.1)
+        # 估計需 wait 多久才能補滿 cost 個 token；加 jitter 打散規律高頻（避開反爬 WAF pattern）。
+        sleep_sec = max(cost / quota.rate_per_sec, 0.1) * random.uniform(0.8, 1.5)
         time.sleep(sleep_sec)
         waited += sleep_sec
 
