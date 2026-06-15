@@ -39,9 +39,11 @@ def _day_key(d: datetime) -> str:
 
 
 def mark(source: str = "data") -> None:
-    """記一次本系統對外活動（source 例：'data'＝資料抓取、'ai'＝Gemini 呼叫）。
+    """記一次本系統活動（source 例：'data'＝資料抓取、'ai'＝Gemini 呼叫、'compute'＝本機回測/模型訓練）。
 
-    寫入「當地時區當日分鐘索引」的計數；同一來源同一分鐘只寫一次。任何例外都靜默忽略。
+    多數來源是對外工作；'compute' 為本機 CPU 工作（回測/edge 模型訓練），一併計入是為了讓
+    『待機建議』在訓練進行時不要建議讓電腦睡。寫入「當地時區當日分鐘索引」的計數；
+    同一來源同一分鐘只寫一次。任何例外都靜默忽略。
     """
     try:
         epoch_min = int(time.time() // 60)

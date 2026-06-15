@@ -29,7 +29,7 @@
 <div class="standby">
   <h2 class="sb-title">🔌 待機建議（電腦何時可休眠省電）</h2>
   <div class="sb-meta">
-    依本系統「對外工作」（資料抓取＋AI 呼叫）統計・時區 {{ activity.tz }}・已累積 {{ activity.observed_days }} 天資料
+    依本系統工作（資料抓取＋AI 呼叫＋本機回測/模型訓練）統計・時區 {{ activity.tz }}・已累積 {{ activity.observed_days }} 天資料
   </div>
   <div class="sb-heat">
     {% for h in activity.hourly %}

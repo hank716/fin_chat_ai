@@ -365,6 +365,13 @@ def run_due_evaluations(hs: list[int] | None = None) -> dict[str, Any]:
     hs = hs or horizons()
     if not REPORTS_DIR.exists():
         return {"evaluated": 0, "skipped": 0, "reason": "no reports dir"}
+    # 本機回測/模型訓練是 CPU 工作（非對外流量）：記一次活動，讓「待機建議」在運算時不建議睡。
+    # 放在這裡可同時覆蓋晨報迴圈與 /brief/backtest 端點（兩者都先呼叫 run_due_evaluations）。
+    try:
+        from activity import monitor
+        monitor.mark("compute")
+    except Exception:  # noqa: BLE001 — 埋點絕不可拖垮回測
+        pass
     BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
     evaluated = skipped = errors = 0
     for rp in sorted(REPORTS_DIR.glob("morning_*.json")):
