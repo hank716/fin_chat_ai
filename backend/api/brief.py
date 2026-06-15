@@ -119,8 +119,8 @@ async def post_backtest() -> dict:
 
     def _run() -> dict:
         evald = backtest.run_due_evaluations()
-        summary = strategy_calibration.rebuild()
-        edge = strategy_calibration.train_edge_model()
+        edge = strategy_calibration.train_edge_model()   # 先訓練→寫 edge_meta
+        summary = strategy_calibration.rebuild()          # 再彙整，帶到最新 edge 狀態
         evaluation = strategy_calibration.evaluate_effectiveness()
         return {
             "evaluated": evald,

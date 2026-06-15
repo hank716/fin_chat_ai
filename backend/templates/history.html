@@ -105,7 +105,7 @@
   {% if calibration.edge_model and calibration.edge_model.trained %}
   <div class="sb-note">🧠 本地 edge 模型：樣本 {{ calibration.edge_model.n_samples }}・holdout 準確率 {% if calibration.edge_model.holdout_accuracy is not none %}{{ '%.0f%%'|format(calibration.edge_model.holdout_accuracy*100) }}{% else %}—{% endif %}{% if calibration.edge_model.top_features %}・關鍵因子：{{ calibration.edge_model.top_features[:4]|join('、') }}{% endif %}</div>
   {% else %}
-  <div class="sb-note">🧠 本地 edge 模型：樣本累積中（達 {{ calibration.edge_model.n_samples if calibration.edge_model else 0 }} 檔後啟用），目前以文字校準回灌晨報。</div>
+  <div class="sb-note">🧠 本地 edge 模型：樣本累積中（已 {{ calibration.edge_model.n_samples or 0 }} / {{ calibration.edge_model.min_samples or 150 }} 檔，達標後自動啟用），目前以文字校準回灌晨報。</div>
   {% endif %}
   {% if calibration.calibration_text %}
   <div class="sb-note" style="white-space:pre-line">{{ calibration.calibration_text }}</div>

@@ -313,11 +313,19 @@ def train_edge_model() -> dict[str, Any]:
 
     X, y, dates = _training_samples()
     n = len(y)
-    if n < settings.edge_model_min_samples:
-        return {"trained": False, "reason": f"樣本不足 {n}/{settings.edge_model_min_samples}",
-                "n_samples": n}
-    if len(set(y)) < 2:
-        return {"trained": False, "reason": "標籤僅單一類別", "n_samples": n}
+    minimum = settings.edge_model_min_samples
+    # 樣本不足/單一類別：仍把「目前累積進度」落地成 meta，讓首頁/判讀顯示真實 n/min（而非 0）。
+    if n < minimum or len(set(y)) < 2:
+        reason = f"樣本不足 {n}/{minimum}" if n < minimum else f"標籤僅單一類別（n={n}）"
+        meta = {
+            "trained": False, "reason": reason,
+            "n_samples": n, "min_samples": minimum,
+            "primary_horizon": _primary_h(),
+            "checked_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
+        }
+        STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+        EDGE_META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        return meta
 
     # 時間序排序，前 80% 訓練、後 20% 驗證（walk-forward，避免用未來資料評估）
     order = sorted(range(n), key=lambda i: dates[i])
@@ -354,6 +362,7 @@ def train_edge_model() -> dict[str, Any]:
         "trained": True,
         "trained_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
         "n_samples": n,
+        "min_samples": minimum,
         "primary_horizon": _primary_h(),
         "holdout_accuracy": holdout_acc,
         "holdout_auc": holdout_auc,

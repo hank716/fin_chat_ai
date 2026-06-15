@@ -179,8 +179,8 @@ def _run_backtest_loop() -> dict[str, Any]:
     summary: dict[str, Any] = {}
     try:
         backtest.run_due_evaluations()
-        summary = strategy_calibration.rebuild()
-        strategy_calibration.train_edge_model()
+        strategy_calibration.train_edge_model()        # 先訓練→寫 edge_meta（含目前樣本進度）
+        summary = strategy_calibration.rebuild()       # 再彙整：calibration 才會帶到最新 edge 狀態
         strategy_calibration.evaluate_effectiveness()  # 成效量測（把「準不準」變數字）
     except Exception as exc:  # noqa: BLE001
         logger.warning("回測/校準迴圈失敗（不影響晨報）: %s", exc)
