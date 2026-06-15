@@ -2,14 +2,16 @@
 {% block title %}{{ report.report_type }}・{{ report.data_as_of }}{% endblock %}
 {% block content %}
 <p class="nav"><a href="/">← 回報告列表</a></p>
-<header>
-  <h1>AI 多市場研究報告</h1>
-  <div class="meta">
-    {{ report.report_type }}　•　報告日期 {{ report.report_date or report.data_as_of }}　•　資料日期 {{ report.data_as_of }}
-    　•　引用來源 {{ report.sources|length }}
-    {% if report.cost %}<br>💰 本篇報告花費 NT${{ '%.4f'|format(report.cost.brief_twd) }}{% endif %}
+<div class="brand">
+  <div class="mark">📈</div>
+  <div class="bt">
+    <h1>AI 多市場研究報告</h1>
+    <div class="sub">{{ report.report_type }}　•　報告 {{ report.report_date or report.data_as_of }}　•　資料 {{ report.data_as_of }}</div>
   </div>
-</header>
+</div>
+<div class="meta">
+  引用來源 {{ report.sources|length }}{% if report.cost %}　•　💰 本篇報告花費 NT${{ '%.4f'|format(report.cost.brief_twd) }}{% endif %}
+</div>
 
 {% if report.raw_query %}
 <div class="card"><strong>使用者問題</strong><br>{{ report.raw_query }}</div>
@@ -108,11 +110,11 @@
   <h2>給其他 AI 的分析包</h2>
   <p class="meta">複製下面整段，貼到 Claude / ChatGPT / Gemini 做進一步深度分析。系統不會自動呼叫。</p>
   <textarea id="copyText" readonly>{{ report.copy_for_ai }}</textarea>
-  <p style="margin-top:10px;">
+  <div class="copy-actions">
     <button class="copy" onclick="copyPack()">📋 複製分析包</button>
-    <a href="/report/{{ report.report_id }}.md" style="margin-left:12px;">下載 Markdown</a>
-    <a href="/report/{{ report.report_id }}.json" style="margin-left:12px;">下載 JSON</a>
-  </p>
+    <a href="/report/{{ report.report_id }}.md">下載 Markdown</a>
+    <a href="/report/{{ report.report_id }}.json">下載 JSON</a>
+  </div>
 </div>
 
 <p class="disclaimer">⚠️ 本報告之方向看法、目標價與止損價皆為技術面輔助參考，非保證獲利或準確，亦不保證成交；請自行評估風險後決策。系統自動產生，僅供家庭內部研究。</p>
