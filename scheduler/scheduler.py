@@ -37,8 +37,10 @@ CRAWL_TIMES = os.environ.get("CRAWL_TIMES", "")
 # 歷史行情慢爬（拉長 parquet 歷史，餵大 edge 訓練集）：
 #   HISTORY_CRAWL_TIMES：軌道 A 上市歷史（TWSE，不打 FinMind），逗號分隔 HH:MM（建議深夜一晚），留空=關閉。
 #   HISTORY_TPEX_HOURLY_MIN：軌道 B 上櫃價（FinMind 每小時小批），每小時的「分鐘」(0-59)，留空=關閉。
+#   HISTORY_FUND_HOURLY_MIN：軌道 C 基本面歷史（FinMind 每小時小批），每小時的「分鐘」(0-59)，留空=關閉。
 HISTORY_CRAWL_TIMES = os.environ.get("HISTORY_CRAWL_TIMES", "")
 HISTORY_TPEX_HOURLY_MIN = os.environ.get("HISTORY_TPEX_HOURLY_MIN", "")
+HISTORY_FUND_HOURLY_MIN = os.environ.get("HISTORY_FUND_HOURLY_MIN", "")
 # 整條管線（刷新台股/美股/加密 + Gemini）可能跑數分鐘，給足 read timeout
 GENERATE_TIMEOUT = float(os.environ.get("BRIEF_GENERATE_TIMEOUT", "900"))
 
@@ -137,6 +139,15 @@ def crawl_tpex_prices_job() -> None:
         logger.info("上櫃價慢爬已啟動: HTTP %s %s", resp.status_code, resp.text[:200])
     except Exception as exc:  # noqa: BLE001
         logger.error("上櫃價慢爬觸發例外: %s", exc)
+
+
+def crawl_fundamentals_history_job() -> None:
+    """軌道 C：觸發 backend 基本面歷史慢爬一小批（FinMind，每小時）。背景執行、立即回。"""
+    try:
+        resp = httpx.post(f"{BACKEND_URL}/brief/backfill-fundamentals", timeout=30)
+        logger.info("基本面歷史慢爬已啟動: HTTP %s %s", resp.status_code, resp.text[:200])
+    except Exception as exc:  # noqa: BLE001
+        logger.error("基本面歷史慢爬觸發例外: %s", exc)
 
 
 def history_catch_up() -> None:
@@ -292,6 +303,20 @@ def main() -> None:
             logger.info("上櫃價慢爬排程：每小時 :%02d", minute)
         except ValueError:
             logger.warning("HISTORY_TPEX_HOURLY_MIN 非整數，忽略: %r", HISTORY_TPEX_HOURLY_MIN)
+
+    # 軌道 C：基本面歷史慢爬（每小時 :MM 跑一小批）
+    if HISTORY_FUND_HOURLY_MIN.strip():
+        try:
+            minute = int(HISTORY_FUND_HOURLY_MIN.strip())
+            scheduler.add_job(
+                crawl_fundamentals_history_job,
+                CronTrigger(minute=minute, timezone=TZ),
+                id="histfund_hourly",
+                misfire_grace_time=600, coalesce=True, max_instances=1,
+            )
+            logger.info("基本面歷史慢爬排程：每小時 :%02d", minute)
+        except ValueError:
+            logger.warning("HISTORY_FUND_HOURLY_MIN 非整數，忽略: %r", HISTORY_FUND_HOURLY_MIN)
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

@@ -30,21 +30,40 @@ CAUSALITY_BANNED = (
 )
 
 
-# path 段：base key 後可接零或多個清單索引，如 top_foreign_buy_5d[0] 或 matrix[1][2]
-_PATH_PART_RE = re.compile(r"^([^\[\]]+)((?:\[\d+\])*)$")
+# path 段：base key（含 CJK/數字/底線等，但不含括號）後可接零或多個 bracket 存取段
+# （[0] 數字索引 或 ["代碼"]/['名稱'] 字串鍵），如 stocks["2408"]、top_foreign_buy_5d[0]。
+_PATH_PART_RE = re.compile(r"^([^\[\].]*)((?:\[[^\[\]]*\])*)$")
+_BRACKET_RE = re.compile(r"\[([^\[\]]*)\]")
+# 註解起始符：模型常把說明（如「（是…）=1.38%）」）直接黏在 source_ref 後面，截斷後再解析。
+_ANNOT_RE = re.compile(r"[（(=\s]")
+
+
+def _bracket_accessor(raw: str) -> tuple[str, Any]:
+    """把 bracket 內容轉成存取子：('idx', int) 數字索引 或 ('key', str) 字串鍵。"""
+    s = raw.strip()
+    if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
+        return "key", s[1:-1]                  # 去引號 → 字串鍵（如 "2408"、"航運業"、"SOX~NASDAQ"）
+    if s.lstrip("-").isdigit():
+        return "idx", int(s)                   # 純數字 → 清單索引
+    return "key", s                            # 裸字串 → 也當字串鍵
 
 
 def _resolve(features: dict[str, Any], ref: str) -> Any:
-    """解析 source_ref 到 features 內的值。
+    """解析 source_ref 到 features 內的值，容忍模型實際用的 JSONPath 方言。
 
-    支援 dict key 與清單索引混用，例如：
-      features.tw.index.return_20d_pct
-      features.tw.movers.top_foreign_buy_5d[0].foreign_net_buy_5d_lots
-    模型引用 movers 排行（list of dict）時必帶 [i]，舊版只走 dict key 會把真實數值
-    誤判為捏造而移除，故此處需解析索引段。
+    支援：dict key、數字清單索引、**字串鍵 bracket**（["2408"]/["航運業"]），並寬容：
+      ① 根前綴 `features`／`$`（JSONPath）皆可省略；
+      ② source_ref 後黏的中文註解/`=值`（模型常見）自動截斷後再解析。
+    例：features.tw.index.return_20d_pct、$.tw.stocks["2408"].close、
+        $.us_crypto.return_correlations_20d["SOX~NASDAQ"]
+    僅放寬「語法」，仍嚴格要求解析到的欄位真實存在於 features（捏造路徑照樣回 _MISSING 被移除）。
     """
+    if not ref:
+        return _MISSING
+    cut = _ANNOT_RE.search(ref)                # 截掉黏在後面的註解（首個 （ ( = 或空白起）
+    ref = (ref[: cut.start()] if cut else ref).strip()
     parts = ref.split(".")
-    if parts and parts[0] == "features":
+    if parts and parts[0] in ("features", "$", ""):
         parts = parts[1:]
     cur: Any = features
     for p in parts:
@@ -52,14 +71,17 @@ def _resolve(features: dict[str, Any], ref: str) -> Any:
         if not m:
             return _MISSING
         key, idx_str = m.group(1), m.group(2)
-        if isinstance(cur, dict) and key in cur:
-            cur = cur[key]
-        else:
-            return _MISSING
-        for idx in re.findall(r"\[(\d+)\]", idx_str):
-            i = int(idx)
-            if isinstance(cur, (list, tuple)) and 0 <= i < len(cur):
-                cur = cur[i]
+        if key:                                # 段首可能直接是 bracket（key 為空）則跳過 key 解析
+            if isinstance(cur, dict) and key in cur:
+                cur = cur[key]
+            else:
+                return _MISSING
+        for raw in _BRACKET_RE.findall(idx_str):
+            kind, val = _bracket_accessor(raw)
+            if kind == "idx" and isinstance(cur, (list, tuple)) and 0 <= val < len(cur):
+                cur = cur[val]
+            elif kind == "key" and isinstance(cur, dict) and val in cur:
+                cur = cur[val]
             else:
                 return _MISSING
     return cur

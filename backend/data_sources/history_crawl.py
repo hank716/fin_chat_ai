@@ -42,6 +42,8 @@ _EARLIEST_PROBE = "2330"
 _STRATEGY_DIR = Path(settings.local_storage_path) / "strategy"
 LISTED_PATH = _STRATEGY_DIR / "history_listed.json"
 TPEX_PATH = _STRATEGY_DIR / "history_tpex.json"
+FUND_PATH = _STRATEGY_DIR / "history_fund.json"
+_FUND_CALLS_PER_SYM = 4                            # 月營收 + 損益 + 資產負債 + 現金流
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -218,10 +220,77 @@ def crawl_tpex_prices(max_calls: int | None = None) -> dict[str, Any]:
     return result
 
 
+# ──────────────────── 軌道 C：基本面歷史（FinMind 季/月報，每小時小批）────────────────────
+
+def crawl_fundamentals_history(max_calls: int | None = None) -> dict[str, Any]:
+    """基本面歷史慢爬：每輪做尚未完成的前 N 檔（point-in-time 月營收 + 季報）。回 stats。
+
+    每檔約 4 次 FinMind 呼叫。嚴守額度：每輪上限 max_calls 次呼叫 + 晨報靜默窗跳過 + 遇額度耗盡/
+    封鎖即停、已完成記進 done 集、下個整點續跑。全部完成才重建訓練集/模型（避免每輪重建）。
+    """
+    if max_calls is None:
+        max_calls = settings.history_fund_per_run
+    blackout = _crawl_blackout_window()
+    if blackout and _in_crawl_blackout(blackout):
+        return {"track": "fundamentals", "symbols": 0, "stop_reason": "brief_blackout"}
+
+    import universe
+    from data_sources.finmind_loader import FinMindBackoff
+    from processor import fundamentals_history
+
+    p = _load(FUND_PATH)
+    syms = p.get("symbols") or sorted(universe.watchlist_symbols())
+    p["symbols"] = syms
+    p["total"] = len(syms)
+    done = set(p.get("done", []))
+    todo = [s for s in syms if s not in done]
+
+    ok = empty = err = 0
+    calls = 0
+    stop: str | None = None
+    t0 = time.monotonic()
+    for sym in todo:
+        if calls + _FUND_CALLS_PER_SYM > max_calls:
+            stop = "batch_limit"
+            break
+        if blackout and _in_crawl_blackout(blackout):
+            stop = "brief_blackout"
+            break
+        calls += _FUND_CALLS_PER_SYM
+        try:
+            res = fundamentals_history.build_symbol_fundamentals_history(sym)
+            if res.get("rev_rows") or res.get("fin_rows"):
+                ok += 1
+            else:
+                empty += 1
+            done.add(sym)                                  # 成功（含查無資料）→ 標記完成
+        except (FinMindBackoff, rate_limiter.RateLimitExhausted) as exc:
+            stop = "finmind_backoff"                        # 額度耗盡/封鎖：立即停手、下個整點續
+            logger.warning("基本面歷史慢爬遇 FinMind 退避，本輪停止（已完成 %d/%d 檔）: %s",
+                           len(done), len(syms), exc)
+            break
+        except Exception as exc:  # noqa: BLE001 — 單檔其他錯誤：標記完成避免卡關
+            err += 1
+            done.add(sym)
+            logger.warning("基本面歷史慢爬 %s 失敗（跳過）: %s", sym, exc)
+
+    p["done"] = sorted(done)
+    _save(FUND_PATH, p)
+    remaining = len(syms) - len(done)
+    if ok and remaining == 0:                              # 全部爬完才重建（避免每小時重建）
+        _post_crawl_refresh()
+    result = {"track": "fundamentals", "symbols": ok, "empty": empty, "error": err,
+              "done_total": len(done), "remaining": remaining, "stop_reason": stop,
+              "elapsed_sec": round(time.monotonic() - t0, 1)}
+    logger.info("基本面歷史慢爬: %s", result)
+    return result
+
+
 def status() -> dict[str, Any]:
     """目前慢爬進度（給端點/首頁顯示用）。含可直接畫進度條的百分比。"""
     listed = _load(LISTED_PATH)
     tpex = _load(TPEX_PATH)
+    fund = _load(FUND_PATH)
     today = date.today()
     pe = _parquet_earliest() or today
     te = _target_earliest()
@@ -231,14 +300,21 @@ def status() -> dict[str, Any]:
     tpex_total = tpex.get("total") or 0
     tpex_done = len(tpex.get("done", []))
     tpex_pct = round(tpex_done / tpex_total * 100) if tpex_total else 0
+    fund_total = fund.get("total") or 0
+    fund_done = len(fund.get("done", []))
+    fund_pct = round(fund_done / fund_total * 100) if fund_total else 0
     return {
         "target_earliest": te.isoformat(),
         "parquet_earliest": pe.isoformat(),
         "listed_progress_pct": listed_pct,
         "tpex_progress_pct": tpex_pct,
+        "fund_progress_pct": fund_pct,
         "listed": {k: listed.get(k) for k in
                    ("earliest_done", "target_earliest", "chunks_done", "reached_target", "updated_at")},
         "tpex_prices": {"total": tpex.get("total"), "done": tpex_done,
                         "remaining": (tpex.get("total") or 0) - tpex_done,
                         "updated_at": tpex.get("updated_at")},
+        "fundamentals": {"total": fund.get("total"), "done": fund_done,
+                         "remaining": (fund.get("total") or 0) - fund_done,
+                         "updated_at": fund.get("updated_at")},
     }

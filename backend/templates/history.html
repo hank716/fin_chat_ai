@@ -29,7 +29,7 @@
 <details class="panel">
   <summary>
     <span class="ps-title">📚 歷史回補進度</span>
-    <span class="ps-hint">資料最早 {{ history.parquet_earliest }}・上市 {{ history.listed_progress_pct }}%・上櫃 {{ history.tpex_prices.done }}/{{ history.tpex_prices.total or '—' }}</span>
+    <span class="ps-hint">資料最早 {{ history.parquet_earliest }}・上市 {{ history.listed_progress_pct }}%・上櫃 {{ history.tpex_prices.done }}/{{ history.tpex_prices.total or '—' }}・基本面 {{ history.fundamentals.done }}/{{ history.fundamentals.total or '—' }}</span>
   </summary>
   <div class="panel-body">
     <div class="panel-meta">把行情歷史慢慢拉長到 {{ history.target_earliest }}（約 2 年），餵大 edge 訓練集。背景慢爬、不影響晨報。</div>
@@ -39,6 +39,9 @@
     <div class="cc-head" style="margin-top:12px">上櫃個股價（FinMind 每小時慢爬）</div>
     <div class="pbar"><i style="width:{{ history.tpex_progress_pct }}%"></i></div>
     <div class="sb-note">已完成 <b>{{ history.tpex_prices.done }}</b> / {{ history.tpex_prices.total or '—' }} 檔（剩 {{ history.tpex_prices.remaining }}）{% if history.tpex_prices.updated_at %}・更新 {{ history.tpex_prices.updated_at }}{% endif %}</div>
+    <div class="cc-head" style="margin-top:12px">基本面歷史（FinMind point-in-time 月營收/季報，每小時慢爬）</div>
+    <div class="pbar"><i style="width:{{ history.fund_progress_pct }}%"></i></div>
+    <div class="sb-note">已完成 <b>{{ history.fundamentals.done }}</b> / {{ history.fundamentals.total or '—' }} 檔（剩 {{ history.fundamentals.remaining }}）{% if history.fundamentals.updated_at %}・更新 {{ history.fundamentals.updated_at }}{% endif %}</div>
     <div class="sb-note" style="margin-top:10px">🔄 <b>每當慢爬補進新歷史，系統會自動重建訓練集並重訓 edge 模型</b>——歷史越長、跨越的行情越多，模型越有機會學到 edge（首頁「策略回測校準」會反映最新樣本數與 AUC）。</div>
   </div>
 </details>
@@ -77,7 +80,7 @@
   {% else %}
     <div class="sb-note">資料累積中：已 {{ activity.observed_days }} / {{ activity.min_observed_days }} 天，達標後即會給出建議待機時段。</div>
   {% endif %}
-  <div class="sb-note" style="opacity:.75">註：歷史回補期間（深夜 02:30 上市、每小時 :20 上櫃）會有背景慢爬，待機窗會暫時變短，爬完即恢復。</div>
+  <div class="sb-note" style="opacity:.75">註：歷史回補期間（深夜 02:30 上市、每小時 :20 上櫃、:40 基本面）會有背景慢爬，待機窗會暫時變短，爬完即恢復。</div>
   </div>
 </details>
 {% endif %}

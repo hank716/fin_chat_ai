@@ -149,12 +149,24 @@ def _build_combined_features(refresh_tw: bool) -> tuple[dict[str, Any], dict[str
 
 
 def _candidate_list(result: Any, feats: dict[str, Any]) -> list[dict[str, Any]]:
-    """組出 edge 模型打分用的候選清單（symbol + 當日 features + 偏多/偏空）。"""
+    """組出模型打分用的候選清單（symbol + 當日 features + 偏多/偏空）。
+
+    並把當前大盤 regime[9]（趨勢/波動）注入每檔 stock_entry，讓 featurize 與訓練端定義一致
+    （regime 是市場級、同日對所有股相同；訓練端在 big 欄、serve 端在這裡注入）。
+    """
+    from reports import training_set
+
     stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
+    try:
+        regime = {k: v for k, v in training_set.current_market_regime().items() if v is not None}
+    except Exception:  # noqa: BLE001 — regime 取得失敗不阻斷打分（缺值 HistGBT 原生吃）
+        regime = {}
     out: list[dict[str, Any]] = []
     for side, lst in (("watchlist", result.tw_watchlist), ("caution", result.tw_caution)):
         for w in lst:
-            out.append({"symbol": w.symbol, "side": side, "stock_entry": stocks.get(w.symbol, {})})
+            se = dict(stocks.get(w.symbol, {}))
+            se.update(regime)
+            out.append({"symbol": w.symbol, "side": side, "stock_entry": se})
     return out
 
 
@@ -166,6 +178,32 @@ def _apply_edge_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     if scores:
         result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
         result.tw_caution.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
+    return scores
+
+
+def _apply_risk_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
+    """用本地回撤風險模型打「未來深跌機率」：標記偏多高風險 + 強化避雷側排序（與方向分離）。
+
+    避雷側(caution)依風險由高到低排（最該避的在前）；偏多清單**不重排**，只把 risk_score 寫進
+    WatchItem 供前端標 ⚠。無模型/未過 gate 則原序不動。
+    """
+    from reports import strategy_calibration
+
+    scores = strategy_calibration.score_risk(_candidate_list(result, feats))
+    if scores:
+        for w in result.tw_watchlist:
+            w.risk_score = scores.get(w.symbol)        # 標記用，不重排偏多
+        result.tw_caution.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
+    return scores
+
+
+def _apply_rank_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
+    """用報酬 rank 模型(殘差方向)重排偏多 watchlist（高分在前）；未過 rank-IC gate 則原序不動。"""
+    from reports import strategy_calibration
+
+    scores = strategy_calibration.score_rank(_candidate_list(result, feats))
+    if scores:
+        result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
     return scores
 
 
@@ -181,6 +219,8 @@ def _run_backtest_loop() -> dict[str, Any]:
         backtest.run_due_evaluations()
         training_set.build_if_stale()                  # 歷史回放訓練集（過舊才重建，便宜）
         strategy_calibration.train_edge_model()        # 各窗(5/20)訓練→寫 edge_meta
+        strategy_calibration.train_risk_model()        # 回撤風險模型（與方向並存）→寫 risk_meta
+        strategy_calibration.train_rank_model()        # 報酬 rank 模型（殘差方向，rank-IC）→寫 rank_meta
         summary = strategy_calibration.rebuild()       # 再彙整：calibration 才會帶到最新 edge 狀態
         strategy_calibration.evaluate_effectiveness()  # 成效量測（把「準不準」變數字）
     except Exception as exc:  # noqa: BLE001
@@ -239,10 +279,22 @@ def generate_morning_brief(
 
     # 策略自動修正（打分端）：本地 edge 模型替候選打成功機率並重排（guarded，無模型則不動）
     edge_scores: dict[str, float] = {}
+    risk_scores: dict[str, float] = {}
     try:
         edge_scores = _apply_edge_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("edge 打分/重排失敗（不影響晨報）: %s", exc)
+    # 回撤風險：標記偏多高風險 + 強化避雷側排序（guarded，無模型則不動）
+    try:
+        risk_scores = _apply_risk_scores(result, feats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("風險打分/標記失敗（不影響晨報）: %s", exc)
+    # 報酬 rank：殘差方向重排偏多 watchlist（guarded，未過 rank-IC gate 則不動）
+    rank_scores: dict[str, float] = {}
+    try:
+        rank_scores = _apply_rank_scores(result, feats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("rank 打分/重排失敗（不影響晨報）: %s", exc)
 
     # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
     backtest_summary = _run_backtest_loop()
@@ -253,6 +305,10 @@ def generate_morning_brief(
     report["cost"] = cost_info
     if edge_scores:
         report["edge_scores"] = edge_scores
+    if risk_scores:
+        report["risk_scores"] = risk_scores
+    if rank_scores:
+        report["rank_scores"] = rank_scores
     if calibration_text:
         report["calibration_injected"] = calibration_text
     if backtest_summary:

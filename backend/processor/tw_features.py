@@ -93,16 +93,28 @@ def _price_block(df: pd.DataFrame) -> dict[str, Any] | None:
     ret = close.pct_change()
     ma20 = close.tail(20).mean()
     ma60 = close.tail(60).mean()
+    last_close = float(last["close"])
+    # 與選股規則較不共線的連續特徵：離均線距離(%)取代布林 above_maNN；量能異常 turnover_surge。
+    dist_ma20 = round((last_close / ma20 - 1) * 100, 2) if not pd.isna(ma20) and ma20 else None
+    dist_ma60 = round((last_close / ma60 - 1) * 100, 2) if not pd.isna(ma60) and ma60 else None
+    turnover_surge = None
+    if "amount" in df.columns:
+        amt = df["amount"].astype(float)
+        amt20 = amt.tail(20).mean()
+        if not pd.isna(amt.iloc[-1]) and not pd.isna(amt20) and amt20 > 0:
+            turnover_surge = round(float(amt.iloc[-1]) / float(amt20), 2)
     return {
         "as_of": last["trade_date"].date().isoformat(),
-        "close": round(float(last["close"]), 2),
+        "close": round(last_close, 2),
         "return_1d_pct": _clean(round(float(ret.iloc[-1]) * 100, 2)) if len(ret.dropna()) else None,
         "return_5d_pct": _cum_return_pct(close, 5),
         "return_20d_pct": _cum_return_pct(close, 20),
         "volatility_20d_pct": _clean(round(float(ret.tail(20).std()) * 100, 2))
         if len(ret.dropna()) >= 2 else None,
-        "above_ma20": bool(last["close"] > ma20) if not pd.isna(ma20) else None,
-        "above_ma60": bool(last["close"] > ma60) if not pd.isna(ma60) else None,
+        "dist_ma20_pct": _clean(dist_ma20),
+        "dist_ma60_pct": _clean(dist_ma60),
+        "turnover_surge": turnover_surge,
+        "_ret5_raw": _cum_return_pct(close, 5),    # 供短期相對強弱 vs_index_5d_pct
         "_ret20_raw": _cum_return_pct(close, 20),  # 供相對強弱/族群聚合
         "_amount": _clean(float(last["amount"])) if "amount" in df.columns
         and not pd.isna(last.get("amount")) else None,  # 最新成交金額(元)，供流動性過濾
@@ -115,6 +127,7 @@ def _chip_block(df: pd.DataFrame) -> dict[str, Any]:
     df = df.sort_values("trade_date").reset_index(drop=True)
     last = df.iloc[-1]
     foreign = df["foreign_net_buy"]
+    dealer = df["dealer_net_buy"] if "dealer_net_buy" in df.columns else None
     return {
         "foreign_net_buy_1d_lots": _lots(last.get("foreign_net_buy")),
         "trust_net_buy_1d_lots": _lots(last.get("trust_net_buy")),
@@ -122,6 +135,8 @@ def _chip_block(df: pd.DataFrame) -> dict[str, Any]:
         "foreign_net_buy_5d_lots": _lots(foreign.tail(5).sum()),
         "foreign_net_streak": _net_streak(foreign),
         "trust_net_streak": _net_streak(df["trust_net_buy"]),
+        "dealer_net_buy_5d_lots": _lots(dealer.tail(5).sum()) if dealer is not None else None,
+        "dealer_net_streak": _net_streak(dealer) if dealer is not None else None,
     }
 
 
@@ -153,8 +168,10 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
     index_df = local_store.read_prices(INDEX_SYMBOL, TW_MARKET)
     index_block = _price_block(index_df)
     index_ret20 = index_block["_ret20_raw"] if index_block else None
+    index_ret5 = index_block.get("_ret5_raw") if index_block else None
     if index_block:
         index_block.pop("_ret20_raw", None)
+        index_block.pop("_ret5_raw", None)
         index_block["name"] = universe.index_meta().get("name", "加權指數")
 
     # 全市場計算（迭代實際有 parquet 的 universe 標的）
@@ -167,14 +184,20 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
         if price is None:
             continue
         ret20 = price.pop("_ret20_raw", None)
+        ret5 = price.pop("_ret5_raw", None)
         vs_index = (
             round(ret20 - index_ret20, 2)
             if ret20 is not None and index_ret20 is not None else None
+        )
+        vs_index_5d = (
+            round(ret5 - index_ret5, 2)
+            if ret5 is not None and index_ret5 is not None else None
         )
         all_stocks[sym] = {
             "name": universe.display_name(sym),
             "sector": universe.sector_of(sym),
             **price,
+            "vs_index_5d_pct": vs_index_5d,
             "vs_index_20d_pct": vs_index,
             **_chip_block(local_store.read_chip(sym, TW_MARKET)),
             **_margin_block(local_store.read_margin(sym, TW_MARKET)),
@@ -182,6 +205,7 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
         if price.get("as_of"):
             as_of_dates.append(price["as_of"])
 
+    _attach_sector_rs(all_stocks)
     sectors = _aggregate_sectors(all_stocks)
     movers = _movers(all_stocks)
     # 只把「movers 出現過的標的」的明細丟給 AI（全市場 2000+ 檔不能全塞進 prompt）
@@ -217,6 +241,20 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
         "notes": "stocks 僅含 movers 涉及之標的明細（全市場共 universe_size 檔，完整資料在系統內）；"
         "籌碼單位張(=股/1000)；vs_index_20d_pct=個股20日報酬減大盤(相對強弱)；net_streak 正=連買天數負=連賣。",
     }
+
+
+def _attach_sector_rs(stocks: dict[str, Any]) -> None:
+    """為每檔補 sector_rs_20d_pct＝個股 20 日報酬 − 同產業中位數（族群內相對強弱，原地寫入）。"""
+    for syms in universe.sectors().values():
+        members = [(s, stocks[s]) for s in syms if s in stocks]
+        ret20s = sorted(e["return_20d_pct"] for _, e in members if e.get("return_20d_pct") is not None)
+        if len(ret20s) < 3:  # 成員太少不算（與聚合一致，降雜訊）
+            continue
+        mid = len(ret20s) // 2
+        median = ret20s[mid] if len(ret20s) % 2 else (ret20s[mid - 1] + ret20s[mid]) / 2
+        for _s, e in members:
+            r = e.get("return_20d_pct")
+            e["sector_rs_20d_pct"] = round(r - median, 2) if r is not None else None
 
 
 def _aggregate_sectors(stocks: dict[str, Any]) -> dict[str, Any]:

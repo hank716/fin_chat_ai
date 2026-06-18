@@ -109,12 +109,19 @@ class Settings(BaseSettings):
     enable_strategy_calibration: bool = True      # 把回測校準文字注入晨報 prompt（自我修正）
     enable_edge_model: bool = True                # 啟用本地 ML edge 模型（樣本不足時自動跳過）
     edge_model_min_samples: int = 150             # 訓練 edge 模型所需最少已到期樣本數
+    # 回撤風險模型（方向 edge 撞效率牆，改預測「未來會不會深跌」＝波動持續性，OOS AUC 高很多）。
+    enable_risk_model: bool = True                # 啟用本地回撤風險模型（與方向 edge 並存、不取代）
+    risk_model_min_auc: float = 0.58              # 風險模型 OOS AUC ≥ 此值才用於排序/標記（比 edge 0.52 嚴）
+    # 報酬 rank 模型（Phase 2[12]）：回歸因子中性化殘差報酬，以 rank-IC 評估、過門檻才重排偏多。
+    enable_rank_model: bool = True                # 啟用本地報酬 rank 模型（殘差方向，learning-to-rank 取向）
+    rank_ic_gate: float = 0.03                    # rank 模型 OOS rank-IC ≥ 此值才重排 watchlist（液態股方向多半不過＝正常）
 
     # ── 歷史行情慢爬（把 parquet 歷史拉長，餵大 edge 訓練集；見 data_sources.history_crawl）──
     history_crawl_target_days: int = 730          # 回溯目標（天）：預設 2 年（落在 TWSE 2024+ schema）
     history_crawl_chunk_days: int = 30            # 軌道 A 每 chunk 回補幾天（界記憶體/續跑粒度）
     history_crawl_max_minutes: float = 40         # 軌道 A 每輪時間預算（分）
     history_finmind_per_run: int = 120            # 軌道 B（上櫃價）每輪最多打幾次 FinMind（<550/h 留額度給晨報）
+    history_fund_per_run: int = 400               # 軌道 C（基本面）每輪 FinMind 呼叫上限（每檔約 4 次→~100 檔/輪）
 
     # ── 排程 ──
     schedule_tz: str = "Asia/Taipei"

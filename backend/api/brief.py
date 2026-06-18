@@ -16,7 +16,7 @@ router = APIRouter(tags=["brief"])
 # 全市場財報慢爬的單例守門：同時只跑一個（可重入靠磁碟快取續跑）
 _crawl_state: dict[str, bool] = {"running": False}
 # 歷史行情慢爬的單例守門（軌道 A 上市 / 軌道 B 上櫃價各一）
-_history_state: dict[str, bool] = {"listed": False, "tpex": False}
+_history_state: dict[str, bool] = {"listed": False, "tpex": False, "fund": False}
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -127,6 +127,8 @@ async def post_backtest() -> dict:
     def _run() -> dict:
         evald = backtest.run_due_evaluations()
         edge = strategy_calibration.train_edge_model()   # 先訓練→寫 edge_meta
+        risk = strategy_calibration.train_risk_model()   # 回撤風險模型（與方向並存）→寫 risk_meta
+        rank = strategy_calibration.train_rank_model()   # 報酬 rank 模型（殘差方向，rank-IC）→寫 rank_meta
         summary = strategy_calibration.rebuild()          # 再彙整，帶到最新 edge 狀態
         evaluation = strategy_calibration.evaluate_effectiveness()
         return {
@@ -136,6 +138,8 @@ async def post_backtest() -> dict:
             "signal_ranking": summary.get("signal_ranking"),
             "calibration_text": summary.get("calibration_text"),
             "edge_model": edge,
+            "risk_model": risk,
+            "rank_model": rank,
             "evaluation": evaluation,
         }
 
@@ -165,11 +169,39 @@ async def post_build_training_set() -> dict:
     def _run() -> dict:
         stats = training_set.build_training_set()
         edge = strategy_calibration.train_edge_model()
+        risk = strategy_calibration.train_risk_model()
+        rank = strategy_calibration.train_rank_model()
         strategy_calibration.rebuild()                 # 讓 calibration.json 帶到最新 edge 狀態（供首頁）
         strategy_calibration.evaluate_effectiveness()
-        return {"training_set": stats, "edge_model": edge}
+        return {"training_set": stats, "edge_model": edge, "risk_model": risk, "rank_model": rank}
 
     return await run_in_threadpool(_run)
+
+
+@router.post("/brief/battlefield-experiment")
+async def post_battlefield_experiment(smallcap_min: float = Query(default=5_000_000)) -> dict:
+    """改戰場另池實驗（純本地、零 LLM）：比較主池/中小型股/事件窗的 edge/risk/rank OOS 表現。
+
+    只回報指標、不存模型、不動晨報；用來判斷小型股或 PEAD 事件窗是否有更強的方向訊號。
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from reports import strategy_calibration
+
+    return await run_in_threadpool(strategy_calibration.run_battlefield_experiment, smallcap_min)
+
+
+@router.post("/brief/smallcap-sleeve-backtest")
+async def post_smallcap_sleeve_backtest(top_k: int = Query(default=3),
+                                        smallcap_min: float = Query(default=5_000_000)) -> dict:
+    """小型股 5 日 rank sleeve 的扣成本淨報酬回測（純本地、零 LLM）。結果存
+    storage/strategy/smallcap_sleeve_backtest.json。"""
+    from starlette.concurrency import run_in_threadpool
+
+    from reports import strategy_calibration
+
+    return await run_in_threadpool(
+        strategy_calibration.backtest_smallcap_sleeve, smallcap_min=smallcap_min, top_k=top_k)
 
 
 @router.post("/brief/backfill-history")
@@ -206,6 +238,24 @@ async def post_backfill_tpex_prices(max_calls: int | None = Query(default=None))
 
     threading.Thread(target=_run, name="history-tpex", daemon=True).start()
     return {"started": True, "track": "tpex_prices", "background": True}
+
+
+@router.post("/brief/backfill-fundamentals")
+async def post_backfill_fundamentals(max_calls: int | None = Query(default=None)) -> dict:
+    """軌道 C：基本面歷史慢爬（FinMind 季/月報 point-in-time，每小時小批、嚴守額度）。背景、單例、立即回。"""
+    if _history_state["fund"]:
+        return {"started": False, "reason": "fundamentals crawl already running"}
+
+    def _run() -> None:
+        _history_state["fund"] = True
+        try:
+            from data_sources.history_crawl import crawl_fundamentals_history
+            crawl_fundamentals_history(max_calls=max_calls)
+        finally:
+            _history_state["fund"] = False
+
+    threading.Thread(target=_run, name="history-fund", daemon=True).start()
+    return {"started": True, "track": "fundamentals", "background": True}
 
 
 @router.get("/brief/history-status")

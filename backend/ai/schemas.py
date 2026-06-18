@@ -64,6 +64,7 @@ class WatchItem(BaseModel):
     target_price: str | None = None  # 技術面目標價（參考，非保證）
     stop_loss: str | None = None  # 技術面止損價（參考，非保證）
     uncertainty: str | None = None  # 不確定性 / 需隔日驗證之處
+    risk_score: float | None = None  # 本地回撤風險模型打的「未來深跌機率」（事後填，Gemini 不產）
 
 
 class NewsDigestItem(BaseModel):

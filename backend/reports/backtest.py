@@ -151,13 +151,33 @@ def signal_tags(signals: list[str]) -> list[str]:
     return tags
 
 
-# edge 模型用的數值特徵欄位（順序固定；缺值留 None，HistGBT 原生吃 NaN）
+# edge 模型用的數值特徵欄位（順序固定；缺值留 None，HistGBT 原生吃 NaN）。
+# 設計：用「連續距離 dist_maNN」取代過於共線的布林 above_maNN；加自營商流、量能異常、
+# 短期相對強弱、產業相對強弱等正交訊號，降低與選股規則的共線、提升剩餘鑑別力。
 FEATURE_COLUMNS = [
     "return_1d_pct", "return_5d_pct", "return_20d_pct", "volatility_20d_pct",
-    "above_ma20", "above_ma60", "vs_index_20d_pct",
+    "dist_ma20_pct", "dist_ma60_pct",
+    "vs_index_5d_pct", "vs_index_20d_pct", "sector_rs_20d_pct",
     "foreign_net_buy_5d_lots", "foreign_net_streak", "trust_net_streak",
-    "margin_chg_5d_lots", "short_margin_ratio_pct", "side_bull",
+    "dealer_net_buy_5d_lots", "dealer_net_streak",
+    "turnover_surge",
+    "margin_chg_5d_lots", "short_margin_ratio_pct",
+    # 基本面（point-in-time；歷史走 _symbol_long 平面欄位、線上走 stock_entry["fundamentals"]）
+    "revenue_yoy_pct", "revenue_mom_pct", "eps_ttm",
+    "gross_margin_pct", "operating_margin_pct", "net_margin_pct",
+    "debt_ratio_pct", "free_cashflow_ttm_100m",
+    # regime[9]：大盤趨勢/波動狀態（同日對所有股相同；歷史走 _symbol_long 旁的 big 欄、
+    # 線上走 stock_entry 注入 current_market_regime）。讓模型學「行情依賴」型態。
+    "mkt_trend_20d_pct", "mkt_vol_20d_pct",
+    "side_bull",
 ]
+
+# 基本面欄位：線上 stock_entry 把它們放在巢狀 "fundamentals"，歷史訓練集則是平面欄位。
+_FUNDAMENTAL_FEATURES = frozenset({
+    "revenue_yoy_pct", "revenue_mom_pct", "eps_ttm",
+    "gross_margin_pct", "operating_margin_pct", "net_margin_pct",
+    "debt_ratio_pct", "free_cashflow_ttm_100m",
+})
 
 
 def _bool_to_num(v: Any) -> float | None:
@@ -171,23 +191,23 @@ def _bool_to_num(v: Any) -> float | None:
 
 
 def featurize(stock_entry: dict[str, Any], side: str) -> dict[str, float | None]:
-    """個股當日 features → edge 模型輸入向量（FEATURE_COLUMNS 順序）。"""
+    """個股當日 features → edge 模型輸入向量（FEATURE_COLUMNS 順序）。
+
+    基本面欄位先讀平面 key（歷史訓練集 _symbol_long 的平面欄位），缺則 fallback 到巢狀
+    stock_entry["fundamentals"]（線上 tw_features 的擺法）——兩端定義一致、免 train/serve skew。
+    """
     e = stock_entry or {}
-    return {
-        "return_1d_pct": _bool_to_num(e.get("return_1d_pct")),
-        "return_5d_pct": _bool_to_num(e.get("return_5d_pct")),
-        "return_20d_pct": _bool_to_num(e.get("return_20d_pct")),
-        "volatility_20d_pct": _bool_to_num(e.get("volatility_20d_pct")),
-        "above_ma20": _bool_to_num(e.get("above_ma20")),
-        "above_ma60": _bool_to_num(e.get("above_ma60")),
-        "vs_index_20d_pct": _bool_to_num(e.get("vs_index_20d_pct")),
-        "foreign_net_buy_5d_lots": _bool_to_num(e.get("foreign_net_buy_5d_lots")),
-        "foreign_net_streak": _bool_to_num(e.get("foreign_net_streak")),
-        "trust_net_streak": _bool_to_num(e.get("trust_net_streak")),
-        "margin_chg_5d_lots": _bool_to_num(e.get("margin_chg_5d_lots")),
-        "short_margin_ratio_pct": _bool_to_num(e.get("short_margin_ratio_pct")),
-        "side_bull": 1.0 if side == "watchlist" else 0.0,
-    }
+    fund = e.get("fundamentals") or {}
+
+    def _val(key: str) -> float | None:
+        v = e.get(key)
+        if v is None and key in _FUNDAMENTAL_FEATURES:
+            v = fund.get(key)
+        return _bool_to_num(v)
+
+    out = {c: _val(c) for c in FEATURE_COLUMNS}
+    out["side_bull"] = 1.0 if side == "watchlist" else 0.0
+    return out
 
 
 def evaluate_item(
