@@ -1,0 +1,12 @@
+# 隔離離線 image 依賴——只此容器需要 pyqlib，絕不進 backend serving 容器。
+# numpy 釘 <2：pyqlib 0.9.x 對 numpy 2 尚不穩（C 擴充與 expression engine）。
+numpy<2
+pandas>=2.0,<2.3
+pyarrow>=14
+scipy>=1.10
+scikit-learn>=1.3,<1.6
+# joblib 釘 <1.3：qlib 0.9.6 的 ParallelExt 仰賴 joblib<1.3 的 self._backend_args，
+# joblib 1.3+ 移除該屬性會在 D.features 平行載入時炸 AttributeError。
+joblib==1.2.0
+lightgbm>=4.0
+pyqlib==0.9.6

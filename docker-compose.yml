@@ -47,6 +47,23 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Qlib 隔離離線因子/排序（階段 3[8]）：pyqlib 重且 Python 版本挑剔，獨立成 image，
+  # 與 backend 互不污染。離線讀 ./storage 的 parquet、寫 qlib_scores/qlib_meta.json 回去；
+  # serving(backend) 只讀 JSON、永不 import qlib。啟動跑一次 eval+score，之後每日 03:00 台北重跑。
+  # 不 depends_on backend（純離線、互不阻塞）。手動評估：docker compose run --rm qlib python run.py --eval
+  qlib:
+    build: ./qlib_offline
+    container_name: ai-market-qlib
+    env_file:
+      - .env
+    environment:
+      - LOCAL_STORAGE_PATH=/data
+      - CONFIGS_DIR=/app/configs
+    volumes:
+      - ./storage:/data
+      - ./configs:/app/configs
+    restart: unless-stopped
+
   # 反向代理：對齊既有 Cloudflare tunnel ingress（www.hank-finflow.com → http://caddy:80）
   caddy:
     image: caddy:2

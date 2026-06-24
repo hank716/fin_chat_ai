@@ -31,6 +31,10 @@ EDGE_META_PATH = STRATEGY_DIR / "edge_model_meta.json"
 RISK_META_PATH = STRATEGY_DIR / "risk_model_meta.json"
 RANK_META_PATH = STRATEGY_DIR / "rank_model_meta.json"
 EVAL_PATH = STRATEGY_DIR / "evaluation.json"
+# Qlib 離線 image（階段 3[8]）產出：方向分數 + meta（per-horizon rank_ic/risk_auc）。
+# serving 端只讀這兩個 JSON、永不 import qlib——pyqlib 重且 Python 版本挑剔，隔離在獨立 image。
+QLIB_META_PATH = STRATEGY_DIR / "qlib_meta.json"
+QLIB_SCORES_DIR = STRATEGY_DIR / "qlib_scores"
 
 # 成效量測：足以下定論所需的最少樣本與交易日數（跨多種行情才不被單一 regime 帶偏）
 EVAL_MIN_DATES = 10
@@ -211,6 +215,13 @@ def evaluate_effectiveness(lookback: int | None = None) -> dict[str, Any]:
         verdict += ("報酬 rank 模型 OOS rank-IC " + "、".join(
             f"{h}日 {rank_ics[h]}" for h in hs if rank_ics[h] is not None)
             + f"（≥{settings.rank_ic_gate} 才重排偏多；液態股方向多半不過＝符合效率牆）。")
+    qmeta = _load_json(QLIB_META_PATH) or {}
+    qper = qmeta.get("per_horizon") or {}
+    qics = {h: (qper.get(str(h)) or qper.get(h) or {}).get("rank_ic") for h in hs}
+    if any(v is not None for v in qics.values()):
+        verdict += ("Qlib Alpha158 OOS rank-IC " + "、".join(
+            f"{h}日 {qics[h]}" for h in hs if qics[h] is not None)
+            + f"（離線 image 算、≥{settings.rank_ic_gate} 才採用；測業界因子庫能否破方向牆）。")
     out = {
         "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
         "primary_horizon": ph,
@@ -754,6 +765,47 @@ def score_rank(candidates: list[dict[str, Any]]) -> dict[str, float]:
         return {sym: round(v / wsum, 4) for sym, v in agg.items()} if wsum > 0 else {}
     except Exception as exc:  # noqa: BLE001 — 打分失敗不可阻斷晨報
         logger.warning("rank 打分失敗: %s", exc)
+        return {}
+
+
+def _latest_qlib_scores() -> dict[str, float]:
+    """讀最近一份 qlib_scores/{date}.json → {symbol: 分數}；無檔/壞檔回空 dict。"""
+    if not QLIB_SCORES_DIR.exists():
+        return {}
+    files = sorted(QLIB_SCORES_DIR.glob("*.json"))
+    if not files:
+        return {}
+    data = _load_json(files[-1]) or {}
+    return {str(k): float(v) for k, v in (data.get("scores") or {}).items()}
+
+
+def score_qlib(candidates: list[dict[str, Any]]) -> dict[str, float]:
+    """Qlib 方向打分：讀離線 image 產的 JSON，過 rank_ic_gate 的窗才回，否則空 dict。
+
+    與 score_rank 同紀律（無 edge 不重排），差別是分數由獨立 qlib image 離線預算好寫檔，
+    serving 端**只讀 JSON、永不 import qlib**（pyqlib 隔離在獨立容器）。缺檔/未過 gate 回空。
+    """
+    if not settings.enable_qlib or not candidates:
+        return {}
+    try:
+        meta = _load_json(QLIB_META_PATH) or {}
+        per = meta.get("per_horizon") or {}
+        # 任一窗 rank-IC ≥ gate 才採用（沿用 rank 家族 gate）。
+        passes = any((per.get(str(h)) or per.get(h) or {}).get("rank_ic") is not None
+                     and (per.get(str(h)) or per.get(h) or {}).get("rank_ic") >= settings.rank_ic_gate
+                     for h in backtest.horizons())
+        if not passes:
+            rics = {h: (per.get(str(h)) or per.get(h) or {}).get("rank_ic") for h in backtest.horizons()}
+            logger.info("qlib 各窗 rank-IC=%s 皆未達 %.3f，本次不以 qlib 重排", rics, settings.rank_ic_gate)
+            return {}
+        scores = _latest_qlib_scores()
+        if not scores:
+            logger.info("qlib 過 gate 但無 scores 檔（離線 image 尚未產出），不重排")
+            return {}
+        wanted = {c["symbol"] for c in candidates}
+        return {sym: round(v, 6) for sym, v in scores.items() if sym in wanted}
+    except Exception as exc:  # noqa: BLE001 — 打分失敗不可阻斷晨報
+        logger.warning("qlib 打分失敗: %s", exc)
         return {}
 
 

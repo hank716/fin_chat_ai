@@ -207,6 +207,20 @@ def _apply_rank_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     return scores
 
 
+def _apply_qlib_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
+    """用 Qlib(Alpha158)離線方向分數重排偏多 watchlist；未過 rank-IC gate / 無離線檔則原序不動。
+
+    分數由獨立 qlib image 離線預算寫 JSON、serving 端只讀（見 strategy_calibration.score_qlib），
+    本函式永不 import qlib。仿 _apply_rank_scores。
+    """
+    from reports import strategy_calibration
+
+    scores = strategy_calibration.score_qlib(_candidate_list(result, feats))
+    if scores:
+        result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
+    return scores
+
+
 def _run_backtest_loop() -> dict[str, Any]:
     """回測迴圈（純本地、零 LLM 成本）：回測已到期晨報 → 重建校準 → 訓練 edge 模型。
 
@@ -295,6 +309,12 @@ def generate_morning_brief(
         rank_scores = _apply_rank_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("rank 打分/重排失敗（不影響晨報）: %s", exc)
+    # Qlib(Alpha158)離線方向分數：過 rank-IC gate 才重排偏多（guarded，無離線檔則不動）
+    qlib_scores: dict[str, float] = {}
+    try:
+        qlib_scores = _apply_qlib_scores(result, feats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("qlib 打分/重排失敗（不影響晨報）: %s", exc)
 
     # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
     backtest_summary = _run_backtest_loop()
@@ -309,6 +329,8 @@ def generate_morning_brief(
         report["risk_scores"] = risk_scores
     if rank_scores:
         report["rank_scores"] = rank_scores
+    if qlib_scores:
+        report["qlib_scores"] = qlib_scores
     if calibration_text:
         report["calibration_injected"] = calibration_text
     if backtest_summary:

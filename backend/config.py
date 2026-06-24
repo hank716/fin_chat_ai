@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     # 報酬 rank 模型（Phase 2[12]）：回歸因子中性化殘差報酬，以 rank-IC 評估、過門檻才重排偏多。
     enable_rank_model: bool = True                # 啟用本地報酬 rank 模型（殘差方向，learning-to-rank 取向）
     rank_ic_gate: float = 0.03                    # rank 模型 OOS rank-IC ≥ 此值才重排 watchlist（液態股方向多半不過＝正常）
+    # Qlib 離線因子/排序（階段 3[8]）：pyqlib 跑在獨立 image，離線寫 qlib_scores/qlib_meta.json；
+    # serving 端只讀 JSON、永不 import qlib。沿用 rank_ic_gate 守護（過 gate 才重排，無則回空、不動晨報）。
+    enable_qlib: bool = True                       # 啟用 Qlib 方向分數（讀離線 image 產的 JSON；缺檔/未過 gate 自動不動）
 
     # ── 歷史行情慢爬（把 parquet 歷史拉長，餵大 edge 訓練集；見 data_sources.history_crawl）──
     history_crawl_target_days: int = 730          # 回溯目標（天）：預設 2 年（落在 TWSE 2024+ schema）
