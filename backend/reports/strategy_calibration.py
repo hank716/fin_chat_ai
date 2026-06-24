@@ -1125,6 +1125,174 @@ def backtest_smallcap_sleeve(*, smallcap_min: float = 5_000_000, top_k: int = 3,
     return out
 
 
+SIZING_BACKTEST_PATH = STRATEGY_DIR / "sizing_backtest.json"
+_SIZING_SCHEMES = ("equal", "meta", "inv_risk", "combo", "vol_target")
+
+
+def _size_weights(items: list[dict[str, Any]], scheme: str, *, max_w: float = 0.30) -> list[float]:
+    """把分數合成 long-only 正規化部位權重（和=1、單檔上限 max_w）。共用於回測與 serving。
+
+    items=[{meta_p, risk_p, vol}]。方案：equal/meta(∝meta_p)/inv_risk(∝1−risk_p)/
+    combo(∝meta_p·(1−risk_p))/vol_target(∝1/vol)。缺值以中性值代入；全 0 退回等權。
+    """
+    import numpy as np  # noqa: PLC0415
+
+    n = len(items)
+    if n == 0:
+        return []
+
+    def _meta(it):
+        return max(float(it.get("meta_p") or 0.0), 0.0)
+
+    def _invrisk(it):
+        rp = it.get("risk_p")
+        return max(1.0 - (float(rp) if rp is not None else 0.5), 0.0)
+
+    def _vol(it):
+        v = it.get("vol")
+        return (1.0 / max(float(v), 1e-6)) if v not in (None, 0) and float(v) > 0 else np.nan
+
+    if scheme == "meta":
+        raw = np.array([_meta(it) for it in items])
+    elif scheme == "inv_risk":
+        raw = np.array([_invrisk(it) for it in items])
+    elif scheme == "combo":
+        raw = np.array([_meta(it) * _invrisk(it) for it in items])
+    elif scheme == "vol_target":
+        raw = np.array([_vol(it) for it in items])
+    else:                                              # equal / 未知
+        raw = np.ones(n)
+    raw = np.nan_to_num(raw, nan=0.0)
+    if raw.sum() <= 0:
+        raw = np.ones(n)
+    w = raw / raw.sum()
+    for _ in range(10):                                # 單檔上限 + 重正規化（迭代收斂）
+        over = w > max_w
+        if not over.any():
+            break
+        excess = float((w[over] - max_w).sum())
+        w[over] = max_w
+        under = ~over
+        pool = float(w[under].sum())
+        if pool <= 0:
+            break
+        w[under] += excess * w[under] / pool
+    s = float(w.sum())
+    return (w / s).tolist() if s > 0 else (np.ones(n) / n).tolist()
+
+
+def backtest_sizing(*, horizon: int | None = None,
+                    costs_pct: tuple[float, ...] = (0.4, 0.6, 0.9, 1.2),
+                    max_w: float | None = None) -> dict[str, Any]:
+    """部位 sizing 的「淨 P&L」回測（純離線、不存模型、不動晨報）。
+
+    OOS purged walk-forward：逐折用過去資料訓練 risk(risk_label)+meta(meta_label) 分類器→predict 未來
+    risk_p/meta_p；每 OOS 日對偏多候選用各 sizing 方案算權重 → 組合 h 日毛報酬，對比等權基準。
+    回答「把 risk×meta 分數拿來加權，扣成本後會不會贏等權」。mirror backtest_smallcap_sleeve。
+    """
+    import numpy as np  # noqa: PLC0415
+
+    from reports import training_set as T  # noqa: PLC0415
+
+    h = horizon or backtest.horizons()[0]
+    max_w = settings.sizing_max_weight if max_w is None else max_w
+    big = T._build_big([h])
+    if big is None or big.empty:
+        return {"ran": False, "reason": "no usable symbols"}
+    sc = T._emit_all(big, [h], min_amount=T.MIN_AMOUNT_TWD, max_amount=None)
+    df = sc[(sc["horizon"] == h) & (sc["side"] == "watchlist") & sc["fwd_return_pct"].notna()
+            & sc["meta_label"].notna() & sc["risk_label"].notna()].copy()
+    df = df.sort_values("as_of").reset_index(drop=True)
+    if len(df) < 500:
+        return {"ran": False, "reason": f"too few rows {len(df)}"}
+
+    dates = sorted(df["as_of"].unique().tolist())
+    nd = len(dates)
+    pos = {d: i for i, d in enumerate(dates)}
+    dpos = df["as_of"].map(pos).to_numpy()
+    wv = df["weight"].astype(float).to_numpy() if "weight" in df.columns else None
+    feats = {"meta": (df[META_FEATURE_COLUMNS].astype(float), df["meta_label"].astype(int).to_numpy()),
+             "risk": (df[FEATURE_COLUMNS].astype(float), df["risk_label"].astype(int).to_numpy())}
+    meta_p = np.full(len(df), np.nan)
+    risk_p = np.full(len(df), np.nan)
+
+    K = 5
+    edges = [round(nd * k / K) for k in range(K + 1)]
+    for k in range(1, K):
+        ts, te = edges[k], edges[k + 1]
+        if te <= ts:
+            continue
+        tr = dpos < (ts - h)                           # embargo h 天
+        tem = (dpos >= ts) & (dpos < te)
+        if tr.sum() < 50 or tem.sum() < 5:
+            continue
+        for name, (X, y) in feats.items():
+            if len(set(y[tr])) < 2:
+                continue
+            cols = [c for c in X.columns if X[c][tr].nunique(dropna=True) >= 2]
+            if not cols:
+                continue
+            m = _new_model()
+            m.fit(X[cols][tr], y[tr], sample_weight=(wv[tr] if wv is not None else None))
+            p = m.predict_proba(X[cols][tem])[:, 1]
+            (meta_p if name == "meta" else risk_p)[np.where(tem)[0]] = p
+
+    df["meta_p"], df["risk_p"] = meta_p, risk_p
+    oos = df[df["meta_p"].notna() & df["risk_p"].notna()]
+    daily: dict[str, list[float]] = {s: [] for s in _SIZING_SCHEMES}
+    n_per_day: list[int] = []
+    for _d, g in oos.groupby("as_of"):
+        if len(g) < 2:
+            continue
+        items = [{"meta_p": r.meta_p, "risk_p": r.risk_p, "vol": r.volatility_20d_pct}
+                 for r in g.itertuples()]
+        fwd = g["fwd_return_pct"].to_numpy(dtype=float)
+        n_per_day.append(len(g))
+        for s in _SIZING_SCHEMES:
+            w = np.array(_size_weights(items, s, max_w=max_w))
+            daily[s].append(float((w * fwd).sum()))
+    if len(n_per_day) < 20:
+        return {"ran": False, "reason": f"too few oos days {len(n_per_day)}"}
+
+    eq = np.array(daily["equal"])
+    res: dict[str, Any] = {}
+    for s in _SIZING_SCHEMES:
+        arr = np.array(daily[s])
+        gross = float(arr.mean())
+        sharpe = float(arr.mean() / arr.std()) if arr.std() > 0 else None
+        res[s] = {
+            "gross_mean_pct": round(gross, 3),
+            "alpha_vs_equal_pct": round(float((arr - eq).mean()), 4),
+            "sharpe_per_period": round(sharpe, 3) if sharpe is not None else None,
+            "hit_rate_vs_equal": round(float((arr > eq).mean()), 3),
+            "net_pct": {f"cost{c}": round(gross - c, 3) for c in costs_pct},
+        }
+    cand = {s: res[s]["alpha_vs_equal_pct"] for s in _SIZING_SCHEMES if s != "equal"}
+    best = max(cand, key=cand.get)
+    best_scheme = best if cand[best] > settings.sizing_min_alpha else None
+    out = {
+        "ran": True, "horizon": h, "oos_days": len(n_per_day),
+        "avg_candidates_per_day": round(float(np.mean(n_per_day)), 1),
+        "max_weight": max_w, "schemes": res, "best_scheme": best_scheme,
+        "note": ("alpha_vs_equal＝毛報酬−等權(同階成本相抵的頭條)；sharpe＝逐 h 日報酬 mean/std。"
+                 "best_scheme 須 alpha>sizing_min_alpha 才回(否則 None＝退回等權)。long-only 偏多書。"),
+        "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
+    }
+    STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+    SIZING_BACKTEST_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("sizing 回測：best_scheme=%s（各方案 alpha_vs_equal=%s）",
+                best_scheme, {s: res[s]["alpha_vs_equal_pct"] for s in _SIZING_SCHEMES})
+    return out
+
+
+def sizing_plan() -> str | None:
+    """serving 讀 gate：回最佳 sizing 方案名（回測證明淨贏等權才回），否則 None＝退回等權。"""
+    if not settings.enable_sizing:
+        return None
+    bt = _load_json(SIZING_BACKTEST_PATH) or {}
+    return bt.get("best_scheme") or None
+
+
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None

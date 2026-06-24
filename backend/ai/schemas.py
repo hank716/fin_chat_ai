@@ -66,6 +66,7 @@ class WatchItem(BaseModel):
     uncertainty: str | None = None  # 不確定性 / 需隔日驗證之處
     risk_score: float | None = None  # 本地回撤風險模型打的「未來深跌機率」（事後填，Gemini 不產）
     conviction_score: float | None = None  # meta-labeling 模型打的「這筆訊號會成功的機率」（事後填，供 sizing/標低把握）
+    size_weight: float | None = None  # 部位 sizing 建議權重（事後填；偏多書 risk×meta 合成、過回測 gate 才有值）
 
 
 class NewsDigestItem(BaseModel):

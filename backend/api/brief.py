@@ -208,6 +208,17 @@ async def post_smallcap_sleeve_backtest(top_k: int = Query(default=3),
         strategy_calibration.backtest_smallcap_sleeve, smallcap_min=smallcap_min, top_k=top_k)
 
 
+@router.post("/brief/sizing-backtest")
+async def post_sizing_backtest(horizon: int | None = Query(default=None)) -> dict:
+    """部位 sizing 的淨 P&L 回測（純本地、零 LLM）：比較 risk×meta 加權 vs 等權，扣成本。
+    結果存 storage/strategy/sizing_backtest.json，best_scheme 決定 serving 是否啟用 sizing。"""
+    from starlette.concurrency import run_in_threadpool
+
+    from reports import strategy_calibration
+
+    return await run_in_threadpool(strategy_calibration.backtest_sizing, horizon=horizon)
+
+
 @router.post("/brief/backfill-history")
 async def post_backfill_history(max_minutes: float | None = Query(default=None)) -> dict:
     """軌道 A：上市歷史慢爬（TWSE 單日端點，不打 FinMind）。背景執行、單例、立即回。"""

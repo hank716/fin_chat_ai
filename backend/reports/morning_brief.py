@@ -233,6 +233,29 @@ def _apply_meta_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     return scores
 
 
+def _apply_sizing(result: Any, feats: dict[str, Any]) -> dict[str, float]:
+    """把 risk_score×conviction_score 合成偏多書部位權重 → WatchItem.size_weight（long-only、和≈1）。
+
+    僅在離線回測證明某方案淨贏等權時啟用（strategy_calibration.sizing_plan 過 gate 才回方案名）；
+    否則不填＝前端退回等權。需先跑過 _apply_risk_scores/_apply_meta_scores（risk_score/conviction_score 已填）。
+    """
+    from reports import strategy_calibration
+
+    scheme = strategy_calibration.sizing_plan()
+    if not scheme or not result.tw_watchlist:
+        return {}
+    stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
+    wl = result.tw_watchlist
+    items = [{"meta_p": w.conviction_score, "risk_p": w.risk_score,
+              "vol": (stocks.get(w.symbol, {}) or {}).get("volatility_20d_pct")} for w in wl]
+    weights = strategy_calibration._size_weights(items, scheme)
+    out: dict[str, float] = {}
+    for w, wt in zip(wl, weights):
+        w.size_weight = round(float(wt), 4)
+        out[w.symbol] = w.size_weight
+    return out
+
+
 def _apply_qlib_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     """用 Qlib(Alpha158)離線方向分數重排偏多 watchlist；未過 rank-IC gate / 無離線檔則原序不動。
 
@@ -348,6 +371,12 @@ def generate_morning_brief(
         meta_scores = _apply_meta_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("meta 打分失敗（不影響晨報）: %s", exc)
+    # 部位 sizing：risk×meta 合成偏多書權重（guarded，需在 risk/meta 之後；未過回測 gate 則退回等權）
+    size_weights: dict[str, float] = {}
+    try:
+        size_weights = _apply_sizing(result, feats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sizing 失敗（不影響晨報）: %s", exc)
 
     # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
     backtest_summary = _run_backtest_loop()
@@ -366,6 +395,8 @@ def generate_morning_brief(
         report["qlib_scores"] = qlib_scores
     if meta_scores:
         report["meta_scores"] = meta_scores
+    if size_weights:
+        report["size_weights"] = size_weights
     if calibration_text:
         report["calibration_injected"] = calibration_text
     if backtest_summary:

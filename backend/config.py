@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     # P(成功) 做部位 sizing/過濾。歷史回放 bootstrap + 線上 scorecard 增量；過 gate 才啟用。
     enable_meta_model: bool = True                 # 啟用 meta-labeling 模型（sizing/過濾，不重排方向）
     meta_model_min_auc: float = 0.55              # meta 模型 OOS AUC ≥ 此值才用於 sizing（同 edge 噪音帶門檻）
+    # 部位 sizing：把 risk_score×conviction_score 合成 long-only 部位權重；唯有離線回測證明某方案淨贏等權
+    # （best_scheme 非 None）才套用，否則退回等權（no-op）。見 strategy_calibration.backtest_sizing/sizing_plan。
+    enable_sizing: bool = True                     # 啟用部位 sizing（過回測 gate 才實際加權，否則等權）
+    sizing_max_weight: float = 0.30               # 單檔權重上限（避免集中）
+    sizing_min_alpha: float = 0.0                 # 回測中某方案毛報酬贏等權 > 此值才採用（gate）
 
     # ── 歷史行情慢爬（把 parquet 歷史拉長，餵大 edge 訓練集；見 data_sources.history_crawl）──
     history_crawl_target_days: int = 730          # 回溯目標（天）：預設 2 年（落在 TWSE 2024+ schema）
