@@ -156,16 +156,25 @@ def _candidate_list(result: Any, feats: dict[str, Any]) -> list[dict[str, Any]]:
     """
     from reports import training_set
 
-    stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
+    tw = feats.get("tw", {}) or {}
+    stocks = tw.get("stocks", {}) or {}
+    movers = tw.get("movers", {}) or {}
+    # conviction[5]：候選命中幾個 movers 清單（對齊 training_set 的 component 清單）＝訊號共振數。
+    _bull_lists = ("top_gainers_5d", "top_foreign_buy_5d")
+    _bear_lists = ("top_losers_5d", "top_foreign_sell_5d", "top_short_margin_ratio", "top_below_index_20d")
+    bull_sets = [{it["symbol"] for it in (movers.get(k) or [])} for k in _bull_lists]
+    bear_sets = [{it["symbol"] for it in (movers.get(k) or [])} for k in _bear_lists]
     try:
         regime = {k: v for k, v in training_set.current_market_regime().items() if v is not None}
     except Exception:  # noqa: BLE001 — regime 取得失敗不阻斷打分（缺值 HistGBT 原生吃）
         regime = {}
     out: list[dict[str, Any]] = []
     for side, lst in (("watchlist", result.tw_watchlist), ("caution", result.tw_caution)):
+        sets = bull_sets if side == "watchlist" else bear_sets
         for w in lst:
             se = dict(stocks.get(w.symbol, {}))
             se.update(regime)
+            se["conviction"] = sum(1 for s in sets if w.symbol in s)
             out.append({"symbol": w.symbol, "side": side, "stock_entry": se})
     return out
 
@@ -207,6 +216,23 @@ def _apply_rank_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     return scores
 
 
+def _apply_meta_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
+    """meta-labeling 模型打「這筆訊號會成功的機率」→ sizing/過濾（不重排方向）。
+
+    把 P 寫進 WatchItem.conviction_score（前端標把握度/低把握降權）；未過 gate / 無模型則原序不動。
+    刻意不排序——meta 拚『該不該下手』，方向排序交給 edge/rank（目前皆撞牆關閉）。
+    """
+    from reports import strategy_calibration
+
+    scores = strategy_calibration.score_meta(_candidate_list(result, feats))
+    if scores:
+        for w in result.tw_watchlist:
+            w.conviction_score = scores.get(w.symbol)
+        for w in result.tw_caution:
+            w.conviction_score = scores.get(w.symbol)
+    return scores
+
+
 def _apply_qlib_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     """用 Qlib(Alpha158)離線方向分數重排偏多 watchlist；未過 rank-IC gate / 無離線檔則原序不動。
 
@@ -235,6 +261,7 @@ def _run_backtest_loop() -> dict[str, Any]:
         strategy_calibration.train_edge_model()        # 各窗(5/20)訓練→寫 edge_meta
         strategy_calibration.train_risk_model()        # 回撤風險模型（與方向並存）→寫 risk_meta
         strategy_calibration.train_rank_model()        # 報酬 rank 模型（殘差方向，rank-IC）→寫 rank_meta
+        strategy_calibration.train_meta_model()         # meta-labeling（該不該下手，triple-barrier）→寫 meta_meta
         summary = strategy_calibration.rebuild()       # 再彙整：calibration 才會帶到最新 edge 狀態
         strategy_calibration.evaluate_effectiveness()  # 成效量測（把「準不準」變數字）
     except Exception as exc:  # noqa: BLE001
@@ -315,6 +342,12 @@ def generate_morning_brief(
         qlib_scores = _apply_qlib_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("qlib 打分/重排失敗（不影響晨報）: %s", exc)
+    # Meta-labeling：標把握度（P 訊號成功）供 sizing/過濾，不重排方向（guarded，未過 gate 則不動）
+    meta_scores: dict[str, float] = {}
+    try:
+        meta_scores = _apply_meta_scores(result, feats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("meta 打分失敗（不影響晨報）: %s", exc)
 
     # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
     backtest_summary = _run_backtest_loop()
@@ -331,6 +364,8 @@ def generate_morning_brief(
         report["rank_scores"] = rank_scores
     if qlib_scores:
         report["qlib_scores"] = qlib_scores
+    if meta_scores:
+        report["meta_scores"] = meta_scores
     if calibration_text:
         report["calibration_injected"] = calibration_text
     if backtest_summary:

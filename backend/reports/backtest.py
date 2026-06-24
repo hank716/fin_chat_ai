@@ -172,6 +172,10 @@ FEATURE_COLUMNS = [
     "side_bull",
 ]
 
+# meta-labeling[5] 專用特徵集＝基準特徵 + conviction（訊號共振數，正交於上述價量/籌碼/基本面）。
+# 只給 meta 模型用；edge/risk/rank 維持原 FEATURE_COLUMNS 迴歸基準不變。
+META_FEATURE_COLUMNS = [*FEATURE_COLUMNS, "conviction"]
+
 # 基本面欄位：線上 stock_entry 把它們放在巢狀 "fundamentals"，歷史訓練集則是平面欄位。
 _FUNDAMENTAL_FEATURES = frozenset({
     "revenue_yoy_pct", "revenue_mom_pct", "eps_ttm",

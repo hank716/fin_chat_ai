@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from reports import backtest
-from reports.backtest import FEATURE_COLUMNS, featurize
+from reports.backtest import FEATURE_COLUMNS, META_FEATURE_COLUMNS, featurize
 
 logger = logging.getLogger("ai-market-backend.strategy_calibration")
 
@@ -30,6 +30,7 @@ EDGE_MODEL_PATH = STRATEGY_DIR / "edge_model.pkl"
 EDGE_META_PATH = STRATEGY_DIR / "edge_model_meta.json"
 RISK_META_PATH = STRATEGY_DIR / "risk_model_meta.json"
 RANK_META_PATH = STRATEGY_DIR / "rank_model_meta.json"
+META_META_PATH = STRATEGY_DIR / "meta_model_meta.json"   # meta-labeling[5]：「該不該下手」模型
 EVAL_PATH = STRATEGY_DIR / "evaluation.json"
 # Qlib 離線 image（階段 3[8]）產出：方向分數 + meta（per-horizon rank_ic/risk_auc）。
 # serving 端只讀這兩個 JSON、永不 import qlib——pyqlib 重且 Python 版本挑剔，隔離在獨立 image。
@@ -222,6 +223,19 @@ def evaluate_effectiveness(lookback: int | None = None) -> dict[str, Any]:
         verdict += ("Qlib Alpha158 OOS rank-IC " + "、".join(
             f"{h}日 {qics[h]}" for h in hs if qics[h] is not None)
             + f"（離線 image 算、≥{settings.rank_ic_gate} 才採用；測業界因子庫能否破方向牆）。")
+    meta_m = _load_json(META_META_PATH) or {}
+    meta_per = meta_m.get("per_horizon") or {}
+    meta_aucs = {h: (meta_per.get(str(h)) or {}).get("holdout_auc") for h in hs}
+    if any(v is not None for v in meta_aucs.values()):
+        segs = []
+        for h in hs:
+            pr = (meta_per.get(str(h)) or {})
+            if pr.get("holdout_auc") is not None:
+                pk, br = pr.get("precision_at_k"), pr.get("base_rate")
+                segs.append(f"{h}日 AUC {pr['holdout_auc']}"
+                            + (f"／命中前10%={pk}(基準{br})" if pk is not None else ""))
+        verdict += ("meta 下手模型 OOS " + "、".join(segs)
+                    + f"（≥{settings.meta_model_min_auc} 才用於 sizing/過濾；拚『該不該下手』非方向）。")
     out = {
         "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
         "primary_horizon": ph,
@@ -326,6 +340,11 @@ def _rank_model_path(h: int) -> Path:
     return STRATEGY_DIR / f"rank_model_{h}.pkl"
 
 
+def _meta_model_path(h: int) -> Path:
+    """每個時間窗各自一顆 meta-labeling 模型（meta_model_5.pkl / meta_model_20.pkl）。"""
+    return STRATEGY_DIR / f"meta_model_{h}.pkl"
+
+
 def _live_samples(h: int) -> tuple[list[dict[str, Any]], list[int], list[str]]:
     """從 scorecard 組某窗的『線上真選股』樣本：X=featurize、y=**超額方向**、date 供時間切分。
 
@@ -350,6 +369,31 @@ def _live_samples(h: int) -> tuple[list[dict[str, Any]], list[int], list[str]]:
     return X, y, dates
 
 
+def _live_meta_samples(h: int) -> tuple[list[dict[str, Any]], list[int], list[str]]:
+    """從 scorecard 組 meta-labeling 線上樣本：X=featurize+conviction、y=**交易是否成功**(outcome=target_hit)。
+
+    meta 標籤＝這筆訊號實際有沒有先觸目標(路徑感知，與歷史 fwd_tb 同精神)；conviction＝線上選股當下
+    幾個訊號桶共振(scorecard 存的 signal_tags 數)。outcome 仍 pending/open/no_data 的列略過。
+    """
+    X: list[dict[str, Any]] = []
+    y: list[int] = []
+    dates: list[str] = []
+    for sc in backtest.load_scorecards():
+        d = sc.get("as_of") or sc.get("report_date") or ""
+        for it in sc.get("items", []):
+            r = it.get("horizons", {}).get(str(h))
+            outcome = (r or {}).get("outcome")
+            if outcome not in ("target_hit", "stop_hit", "open"):
+                continue                           # 只取已有路徑結論的（pending/no_data 略過）
+            side = it.get("side", "watchlist")
+            feat = dict(it.get("features") or featurize({}, side))
+            feat["conviction"] = len(it.get("signal_tags") or [])
+            X.append({c: feat.get(c) for c in backtest.META_FEATURE_COLUMNS})
+            y.append(1 if outcome == "target_hit" else 0)
+            dates.append(d)
+    return X, y, dates
+
+
 # ── label-agnostic 共用核心：方向 edge / 回撤風險 / 後續(波動、殘差方向、meta) 都走它 ──
 
 def _new_model():
@@ -359,13 +403,13 @@ def _new_model():
     )
 
 
-def _fit_predict(Xtr, ytr, Xte, wtr=None):
+def _fit_predict(Xtr, ytr, Xte, wtr=None, feature_cols: list[str] = FEATURE_COLUMNS):
     """擬合一個 fold 並回 (model, used_cols, test 機率)。
 
     丟掉 train 子集裡少於 2 個相異非缺值的退化欄位（小 fold 易出現某特徵全 NaN／常數，
     HistGBT 分箱會炸 ValueError），並對 test 用同一組欄位預測。無可用欄位回 None。
     """
-    cols = [c for c in FEATURE_COLUMNS if Xtr[c].nunique(dropna=True) >= 2]
+    cols = [c for c in feature_cols if Xtr[c].nunique(dropna=True) >= 2]
     if not cols:
         return None
     m = _new_model()
@@ -373,7 +417,8 @@ def _fit_predict(Xtr, ytr, Xte, wtr=None):
     return m, cols, m.predict_proba(Xte[cols])[:, 1]
 
 
-def _evaluate_oos(ds, h: int, *, with_importance: bool = True) -> dict[str, Any]:
+def _evaluate_oos(ds, h: int, *, with_importance: bool = True,
+                  feature_cols: list[str] = FEATURE_COLUMNS) -> dict[str, Any]:
     """時間序 purged walk-forward + embargo 的 pooled OOS 評估（label-agnostic，支援樣本權重）。
 
     把唯一日期切成 K 段，逐段當 test、其前所有樣本當 train，並丟掉 train 中落在 test 起始日前
@@ -384,7 +429,7 @@ def _evaluate_oos(ds, h: int, *, with_importance: bool = True) -> dict[str, Any]
     from sklearn.inspection import permutation_importance  # noqa: PLC0415
     from sklearn.metrics import accuracy_score, roc_auc_score  # noqa: PLC0415
 
-    X = ds[FEATURE_COLUMNS]
+    X = ds[feature_cols]
     yv = ds["__y"].to_numpy()
     wv = ds["__w"].to_numpy() if "__w" in ds.columns else None
     dates = sorted(ds["__d"].unique().tolist())
@@ -410,7 +455,7 @@ def _evaluate_oos(ds, h: int, *, with_importance: bool = True) -> dict[str, Any]
                 continue
             wtr = wv[tr_mask] if wv is not None else None
             try:
-                res = _fit_predict(X[tr_mask], ytr, X[te_mask], wtr)
+                res = _fit_predict(X[tr_mask], ytr, X[te_mask], wtr, feature_cols)
             except Exception as exc:  # noqa: BLE001 — 單一 fold 退化不阻斷整體評估
                 logger.debug("fold 跳過(h=%s,k=%s): %s", h, k, exc)
                 continue
@@ -429,7 +474,7 @@ def _evaluate_oos(ds, h: int, *, with_importance: bool = True) -> dict[str, Any]
         if len(yte) >= 5 and len(set(yte)) == 2:
             wtr = wv[:split] if wv is not None else None
             try:
-                res = _fit_predict(X.iloc[:split], yv[:split], X.iloc[split:], wtr)
+                res = _fit_predict(X.iloc[:split], yv[:split], X.iloc[split:], wtr, feature_cols)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("單次切分失敗(h=%s): %s", h, exc)
         if res is None:
@@ -445,6 +490,7 @@ def _evaluate_oos(ds, h: int, *, with_importance: bool = True) -> dict[str, Any]
     auc = round(float(roc_auc_score(oos_y, oos_p)), 3)
     preds = [1 if p >= 0.5 else 0 for p in oos_p]
     acc = round(float(accuracy_score(oos_y, preds)), 3)
+    prec_k, base = _precision_at_k(oos_y, oos_p)
     top: list[str] = []
     if last_fold and with_importance:
         try:
@@ -455,7 +501,22 @@ def _evaluate_oos(ds, h: int, *, with_importance: bool = True) -> dict[str, Any]
         except Exception:  # noqa: BLE001
             top = []
     return {"auc": auc, "acc": acc, "top": top, "eval_method": method, "cv_folds": folds,
-            "oos_y": oos_y, "oos_p": oos_p}
+            "precision_at_k": prec_k, "base_rate": base, "oos_y": oos_y, "oos_p": oos_p}
+
+
+def _precision_at_k(oos_y: list[int], oos_p: list[float], frac: float = 0.1) -> tuple[float | None, float | None]:
+    """meta-labeling[5] 過濾才看的指標：取機率最高的前 frac 樣本，回 (其正類比率, 全體基準率)。
+
+    precision@K 明顯 > base_rate ＝『只下手高把握的』確實提升命中＝sizing/過濾有用（即使 AUC 平庸）。
+    """
+    n = len(oos_y)
+    if n < 20:
+        return None, None
+    k = max(1, int(n * frac))
+    order = sorted(range(n), key=lambda i: oos_p[i], reverse=True)[:k]
+    prec = sum(oos_y[i] for i in order) / k
+    base = sum(oos_y) / n
+    return round(float(prec), 3), round(float(base), 3)
 
 
 def _fit_calibrator(oos_y: list[int], oos_p: list[float]):
@@ -473,10 +534,12 @@ def _fit_calibrator(oos_y: list[int], oos_p: list[float]):
         return None
 
 
-def _build_dataset(h: int, label_col: str, *, use_live: bool):
-    """某窗的訓練集：回 ds(FEATURE_COLUMNS + __y + __d + __w)，按時間排序；無資料回 None。
+def _build_dataset(h: int, label_col: str, *, use_live: bool,
+                   feature_cols: list[str] = FEATURE_COLUMNS, live_fn=None):
+    """某窗的訓練集：回 ds(feature_cols + __y + __d + __w)，按時間排序；無資料回 None。
 
-    歷史回放集帶 `weight`（重疊去重[7]）；線上樣本（僅方向 edge 用）權重 1.0。缺標籤的列略過。
+    歷史回放集帶 `weight`（重疊去重[7]）；線上樣本權重 1.0。缺標籤的列略過。
+    live_fn＝取線上樣本的函式（預設 _live_samples 走超額方向；meta 走 _live_meta_samples）。
     """
     import pandas as pd  # noqa: PLC0415
 
@@ -484,8 +547,8 @@ def _build_dataset(h: int, label_col: str, *, use_live: bool):
 
     frames = []
     hist = training_set.load_training_set(h)
-    if not hist.empty and label_col in hist.columns:
-        hd = hist[FEATURE_COLUMNS].astype(float).copy()
+    if not hist.empty and label_col in hist.columns and all(c in hist.columns for c in feature_cols):
+        hd = hist[feature_cols].astype(float).copy()
         hd["__y"] = pd.to_numeric(hist[label_col], errors="coerce").to_numpy()
         hd["__d"] = hist["as_of"].astype(str).to_numpy()
         hd["__w"] = (hist["weight"].astype(float).to_numpy() if "weight" in hist.columns else 1.0)
@@ -493,9 +556,9 @@ def _build_dataset(h: int, label_col: str, *, use_live: bool):
         hd["__y"] = hd["__y"].astype(int)
         frames.append(hd)
     if use_live:
-        Xl, yl, dl = _live_samples(h)
+        Xl, yl, dl = (live_fn or _live_samples)(h)
         if Xl:
-            ld = pd.DataFrame(Xl, columns=FEATURE_COLUMNS).astype(float)
+            ld = pd.DataFrame(Xl, columns=feature_cols).astype(float)
             ld["__y"] = yl
             ld["__d"] = dl
             ld["__w"] = 1.0
@@ -506,7 +569,8 @@ def _build_dataset(h: int, label_col: str, *, use_live: bool):
 
 
 def _train_target(label_col: str, model_path_fn, meta_path: Path, *, use_live: bool,
-                  enabled: bool, name: str) -> dict[str, Any]:
+                  enabled: bool, name: str, feature_cols: list[str] = FEATURE_COLUMNS,
+                  live_fn=None) -> dict[str, Any]:
     """通用 per-horizon 訓練：吃指定標籤欄，各窗訓練 HistGBT + isotonic 校準，落地模型與 meta。"""
     if not enabled:
         return {"trained": False, "reason": "disabled"}
@@ -520,20 +584,20 @@ def _train_target(label_col: str, model_path_fn, meta_path: Path, *, use_live: b
     minimum = settings.edge_model_min_samples
 
     def _train_one(h: int) -> dict[str, Any]:
-        ds = _build_dataset(h, label_col, use_live=use_live)
+        ds = _build_dataset(h, label_col, use_live=use_live, feature_cols=feature_cols, live_fn=live_fn)
         n = 0 if ds is None else len(ds)
         if ds is None or n < minimum or ds["__y"].nunique() < 2:
             reason = (f"樣本不足 {n}/{minimum}" if (ds is None or n < minimum)
                       else f"標籤僅單一類別（n={n}）")
             return {"trained": False, "reason": reason, "n_samples": n,
                     "min_samples": minimum, "horizon": h}
-        ev = _evaluate_oos(ds, h)
+        ev = _evaluate_oos(ds, h, feature_cols=feature_cols)
         yv = ds["__y"].to_numpy()
         wv = ds["__w"].to_numpy() if "__w" in ds.columns else None
-        X = ds[FEATURE_COLUMNS]
+        X = ds[feature_cols]
         # 丟掉全 NaN／常數欄（如未爬到的基本面、全市場無值的 sector_rs）——HistGBT 分箱會在
         # 零非缺值欄炸 ValueError；存「實際用到的欄」供打分時對齊。
-        cols = [c for c in FEATURE_COLUMNS if X[c].nunique(dropna=True) >= 2]
+        cols = [c for c in feature_cols if X[c].nunique(dropna=True) >= 2]
         model = _new_model()
         model.fit(X[cols], yv, sample_weight=wv)   # 全資料重擬合上線
         calibrator = _fit_calibrator(ev["oos_y"], ev["oos_p"])
@@ -543,6 +607,7 @@ def _train_target(label_col: str, model_path_fn, meta_path: Path, *, use_live: b
         return {"trained": True, "n_samples": n, "min_samples": minimum, "horizon": h,
                 "holdout_accuracy": ev["acc"], "holdout_auc": ev["auc"], "top_features": ev["top"],
                 "eval_method": ev["eval_method"], "cv_folds": ev["cv_folds"],
+                "precision_at_k": ev.get("precision_at_k"), "base_rate": ev.get("base_rate"),
                 "calibrated": calibrator is not None,
                 "positive_rate": round(float(yv.mean()), 3)}
 
@@ -581,6 +646,18 @@ def train_risk_model() -> dict[str, Any]:
     """
     return _train_target("risk_label", _risk_model_path, RISK_META_PATH,
                          use_live=False, enabled=settings.enable_risk_model, name="risk")
+
+
+def train_meta_model() -> dict[str, Any]:
+    """訓練 meta-labeling 模型——標籤＝這筆訊號『該不該下手』(triple-barrier 是否先觸目標)，
+    特徵＝基準特徵 + conviction(訊號共振)。歷史回放 bootstrap + 線上 scorecard 增量。
+
+    不拚方向（那是 edge 模型的事、已撞牆）；拚『下手成功率』供 sizing/過濾。gate=meta_model_min_auc，
+    另回 precision@K（過濾才看的指標）。見 score_meta。
+    """
+    return _train_target("meta_label", _meta_model_path, META_META_PATH,
+                         use_live=True, enabled=settings.enable_meta_model, name="meta",
+                         feature_cols=META_FEATURE_COLUMNS, live_fn=_live_meta_samples)
 
 
 # ───────────────── 報酬 rank 模型（Phase 2[12]：回歸殘差報酬，rank-IC 評估）─────────────────
@@ -810,11 +887,12 @@ def score_qlib(candidates: list[dict[str, Any]]) -> dict[str, float]:
 
 
 def _score_with(candidates: list[dict[str, Any]], meta_path: Path, model_path_fn,
-                min_auc: float) -> dict[str, float]:
+                min_auc: float, enrich=None) -> dict[str, float]:
     """用**所有過 gate 的時間窗**模型替候選打機率（含 isotonic 校準），(auc−0.5) 加權平均成 symbol→prob。
 
     每窗各自一顆模型、各自 gate：只要某窗 OOS AUC ≥ 門檻就納入。全部都不過才回空 dict
     （維持「無預測力不啟用」的保護）。candidates=[{symbol, stock_entry, side}]。
+    enrich(candidate, row)＝可選的特徵補充（如 meta 注入 conviction，featurize 不產的欄）。
     """
     per = (_load_json(meta_path) or {}).get("per_horizon") or {}
     usable = []
@@ -830,6 +908,9 @@ def _score_with(candidates: list[dict[str, Any]], meta_path: Path, model_path_fn
     import numpy as np  # noqa: PLC0415
     import pandas as pd  # noqa: PLC0415
     rows = [featurize(c.get("stock_entry", {}), c.get("side", "watchlist")) for c in candidates]
+    if enrich is not None:
+        for c, r in zip(candidates, rows):
+            enrich(c, r)
     agg: dict[str, float] = {c["symbol"]: 0.0 for c in candidates}
     wsum = 0.0
     for h, auc in usable:
@@ -869,6 +950,26 @@ def score_risk(candidates: list[dict[str, Any]]) -> dict[str, float]:
         return _score_with(candidates, RISK_META_PATH, _risk_model_path, settings.risk_model_min_auc)
     except Exception as exc:  # noqa: BLE001 — 打分失敗不可阻斷晨報
         logger.warning("風險打分失敗: %s", exc)
+        return {}
+
+
+def score_meta(candidates: list[dict[str, Any]]) -> dict[str, float]:
+    """meta-labeling 打分：回 symbol→P(這筆訊號會成功)（過 meta_model_min_auc gate 才回，否則空 dict）。
+
+    用於 sizing/過濾（不重排方向）：高 P＝高把握可加重、低 P＝降權標「低把握」。candidate 的
+    stock_entry["conviction"] 由 morning_brief 注入（命中幾個選股清單），featurize 不產故在此補。
+    """
+    if not settings.enable_meta_model or not candidates:
+        return {}
+
+    def _enrich(c: dict[str, Any], row: dict[str, Any]) -> None:
+        row["conviction"] = (c.get("stock_entry", {}) or {}).get("conviction")
+
+    try:
+        return _score_with(candidates, META_META_PATH, _meta_model_path,
+                           settings.meta_model_min_auc, enrich=_enrich)
+    except Exception as exc:  # noqa: BLE001 — 打分失敗不可阻斷晨報
+        logger.warning("meta 打分失敗: %s", exc)
         return {}
 
 

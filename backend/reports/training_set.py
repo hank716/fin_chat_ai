@@ -43,6 +43,35 @@ TRAINING_SET_PATH = Path(settings.local_storage_path) / "strategy" / "training_s
 _MIN_ROWS = 25                                    # 至少要能算出 return_20d
 
 
+def _triple_barrier(close: np.ndarray, high: np.ndarray, low: np.ndarray,
+                    vol20_pct: np.ndarray, h: int, band: float = 1.0) -> np.ndarray:
+    """路徑感知 triple-barrier 首觸（side-agnostic，meta-labeling[5]）。
+
+    對每個 t，未來 [t+1, t+h] 逐日掃首觸：上界＝`+band·σ_h`、下界＝`−band·σ_h`，σ_h＝日波動×√h
+    （`vol20_pct` 是日報酬標準差×100）。回 {1 先觸上界, 0 兩界皆未觸, -1 先觸下界}；窗未滿留 NaN。
+    對稱上下界＝正負號對多空兩側都成立（watchlist 成功＝+1、caution 成功＝-1，由 _emit_samples 取號）。
+    同日同時觸 → 保守記下界優先（對齊 backtest.evaluate_item 的觸價優先序）。
+    """
+    n = len(close)
+    out = np.full(n, np.nan)
+    volh = vol20_pct * np.sqrt(h)
+    for t in range(n - h):                        # t 需有完整未來窗 [t+1, t+h]
+        v = volh[t]
+        if not np.isfinite(v) or v <= 0 or close[t] <= 0:
+            continue
+        up, dn = band * v, -band * v
+        res = 0
+        for i in range(t + 1, t + h + 1):
+            if (low[i] / close[t] - 1) * 100 <= dn:    # 下界優先（保守）
+                res = -1
+                break
+            if (high[i] / close[t] - 1) * 100 >= up:
+                res = 1
+                break
+        out[t] = res
+    return out
+
+
 def _signed_streak(values: list[float]) -> list[int]:
     """每個位置：到該日為止連續同向（買超正/賣超負）天數；0 或缺值歸 0。對齊 _net_streak 語意。"""
     out: list[int] = []
@@ -111,6 +140,7 @@ def _symbol_long(sym: str, hs: list[int]) -> pd.DataFrame | None:
     px = px.sort_values("trade_date").reset_index(drop=True)
     close = px["close"].astype(float)
     low = px["low"].astype(float) if "low" in px.columns else close
+    high = px["high"].astype(float) if "high" in px.columns else close
     ret1 = close.pct_change()
 
     amount = px["amount"].astype(float) if "amount" in px.columns else pd.Series(np.nan, index=px.index)
@@ -138,6 +168,10 @@ def _symbol_long(sym: str, hs: list[int]) -> pd.DataFrame | None:
         f[f"fwd_vol_{h}"] = fwd_ret_std * 100                      # 實現波動度（未來日報酬標準差）
         fwd_abs_max = ret1.abs()[::-1].rolling(h, min_periods=h).max()[::-1].shift(-1)
         f[f"fwd_absmove_{h}"] = fwd_abs_max * 100                  # 未來最大單日絕對波幅
+        # meta-labeling[5] 路徑感知 triple-barrier 首觸（watchlist 取向，caution 在 _emit_samples 反轉）。
+        f[f"fwd_tb_{h}"] = _triple_barrier(
+            close.to_numpy(), high.to_numpy(), low.to_numpy(),
+            f["volatility_20d_pct"].to_numpy(), h)
 
     # 籌碼：foreign/trust/dealer 連續買賣超 + 外資/自營 5 日合計（張）
     chip = local_store.read_chip(sym, TW_MARKET)
@@ -251,9 +285,14 @@ def _emit_samples(day_df: pd.DataFrame, hs: list[int], *,
         return set(s["symbol"])
 
     # 對齊線上：偏多＝漲幅榜∪外資買超榜；偏空＝跌幅榜∪外資賣超榜∪資券比榜∪弱於大盤榜
-    bull = _top("return_5d_pct", True) | _top("foreign_net_buy_5d_lots", True)
-    bear = (_top("return_5d_pct", False) | _top("foreign_net_buy_5d_lots", False)
-            | _top("short_margin_ratio_pct", True) | _top("vs_index_20d_pct", False))
+    bull_lists = [_top("return_5d_pct", True), _top("foreign_net_buy_5d_lots", True)]
+    bear_lists = [_top("return_5d_pct", False), _top("foreign_net_buy_5d_lots", False),
+                  _top("short_margin_ratio_pct", True), _top("vs_index_20d_pct", False)]
+    bull = set().union(*bull_lists)
+    bear = set().union(*bear_lists)
+    # conviction[5]：該檔同時命中幾個 component 選股清單（漲幅榜∩外資買超榜＝高把握）。
+    def _conviction(sym: str, lists: list[set[str]]) -> int:
+        return sum(1 for s in lists if sym in s)
 
     def _ok(v: Any) -> bool:
         return v is not None and not (isinstance(v, float) and np.isnan(v))
@@ -274,6 +313,7 @@ def _emit_samples(day_df: pd.DataFrame, hs: list[int], *,
             if row is None:
                 continue
             feat = featurize(row, side)
+            conv = _conviction(sym, bull_lists if side == "watchlist" else bear_lists)
             for h in hs:
                 fwd = row.get(f"fwd_return_{h}")
                 if not _ok(fwd):
@@ -293,6 +333,9 @@ def _emit_samples(day_df: pd.DataFrame, hs: list[int], *,
                 fwd_mae_pct, risk_label = _median_label(row.get(f"fwd_mae_{h}"), mae_med.get(h), higher_is_pos=False)
                 fwd_vol_pct, vol_label = _median_label(row.get(f"fwd_vol_{h}"), vol_med.get(h), higher_is_pos=True)
                 fwd_absmove_pct, absmove_label = _median_label(row.get(f"fwd_absmove_{h}"), abs_med.get(h), higher_is_pos=True)
+                # meta-labeling[5]：triple-barrier 首觸取號＝這筆「交易」是否成功（watchlist:+1 / caution:-1）。
+                tb = row.get(f"fwd_tb_{h}")
+                meta_label = (1 if (tb == 1 if side == "watchlist" else tb == -1) else 0) if _ok(tb) else None
                 sample = {
                     "as_of": pd.Timestamp(row["trade_date"]).date().isoformat(),
                     "symbol": sym, "side": side, "horizon": h,
@@ -302,6 +345,7 @@ def _emit_samples(day_df: pd.DataFrame, hs: list[int], *,
                     "risk_label": risk_label, "fwd_mae_pct": fwd_mae_pct,
                     "vol_label": vol_label, "fwd_vol_pct": fwd_vol_pct,
                     "absmove_label": absmove_label, "fwd_absmove_pct": fwd_absmove_pct,
+                    "meta_label": meta_label, "conviction": conv,    # meta-labeling[5]：成功標籤 + 訊號共振數
                     "days_since_earnings": (round(float(row["days_since_earnings"]), 1)
                                             if _ok(row.get("days_since_earnings")) else None),
                 }

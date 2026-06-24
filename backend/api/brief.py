@@ -129,6 +129,7 @@ async def post_backtest() -> dict:
         edge = strategy_calibration.train_edge_model()   # 先訓練→寫 edge_meta
         risk = strategy_calibration.train_risk_model()   # 回撤風險模型（與方向並存）→寫 risk_meta
         rank = strategy_calibration.train_rank_model()   # 報酬 rank 模型（殘差方向，rank-IC）→寫 rank_meta
+        meta = strategy_calibration.train_meta_model()   # meta-labeling（該不該下手，triple-barrier）→寫 meta_meta
         summary = strategy_calibration.rebuild()          # 再彙整，帶到最新 edge 狀態
         evaluation = strategy_calibration.evaluate_effectiveness()
         return {
@@ -140,6 +141,7 @@ async def post_backtest() -> dict:
             "edge_model": edge,
             "risk_model": risk,
             "rank_model": rank,
+            "meta_model": meta,
             "evaluation": evaluation,
         }
 
@@ -171,9 +173,11 @@ async def post_build_training_set() -> dict:
         edge = strategy_calibration.train_edge_model()
         risk = strategy_calibration.train_risk_model()
         rank = strategy_calibration.train_rank_model()
+        meta = strategy_calibration.train_meta_model()
         strategy_calibration.rebuild()                 # 讓 calibration.json 帶到最新 edge 狀態（供首頁）
         strategy_calibration.evaluate_effectiveness()
-        return {"training_set": stats, "edge_model": edge, "risk_model": risk, "rank_model": rank}
+        return {"training_set": stats, "edge_model": edge, "risk_model": risk,
+                "rank_model": rank, "meta_model": meta}
 
     return await run_in_threadpool(_run)
 

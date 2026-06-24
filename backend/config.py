@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # Qlib 離線因子/排序（階段 3[8]）：pyqlib 跑在獨立 image，離線寫 qlib_scores/qlib_meta.json；
     # serving 端只讀 JSON、永不 import qlib。沿用 rank_ic_gate 守護（過 gate 才重排，無則回空、不動晨報）。
     enable_qlib: bool = True                       # 啟用 Qlib 方向分數（讀離線 image 產的 JSON；缺檔/未過 gate 自動不動）
+    # Meta-labeling（階段 2[5]）：不拚方向、拚「這個訊號該不該下手」(triple-barrier 是否先觸目標) →
+    # P(成功) 做部位 sizing/過濾。歷史回放 bootstrap + 線上 scorecard 增量；過 gate 才啟用。
+    enable_meta_model: bool = True                 # 啟用 meta-labeling 模型（sizing/過濾，不重排方向）
+    meta_model_min_auc: float = 0.55              # meta 模型 OOS AUC ≥ 此值才用於 sizing（同 edge 噪音帶門檻）
 
     # ── 歷史行情慢爬（把 parquet 歷史拉長，餵大 edge 訓練集；見 data_sources.history_crawl）──
     history_crawl_target_days: int = 730          # 回溯目標（天）：預設 2 年（落在 TWSE 2024+ schema）

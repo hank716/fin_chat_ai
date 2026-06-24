@@ -65,6 +65,7 @@ class WatchItem(BaseModel):
     stop_loss: str | None = None  # 技術面止損價（參考，非保證）
     uncertainty: str | None = None  # 不確定性 / 需隔日驗證之處
     risk_score: float | None = None  # 本地回撤風險模型打的「未來深跌機率」（事後填，Gemini 不產）
+    conviction_score: float | None = None  # meta-labeling 模型打的「這筆訊號會成功的機率」（事後填，供 sizing/標低把握）
 
 
 class NewsDigestItem(BaseModel):
