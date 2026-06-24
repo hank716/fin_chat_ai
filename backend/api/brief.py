@@ -174,10 +174,11 @@ async def post_build_training_set() -> dict:
         risk = strategy_calibration.train_risk_model()
         rank = strategy_calibration.train_rank_model()
         meta = strategy_calibration.train_meta_model()
+        regime = strategy_calibration.backtest_market_regime()   # 市場恐慌 regime gate
         strategy_calibration.rebuild()                 # 讓 calibration.json 帶到最新 edge 狀態（供首頁）
         strategy_calibration.evaluate_effectiveness()
         return {"training_set": stats, "edge_model": edge, "risk_model": risk,
-                "rank_model": rank, "meta_model": meta}
+                "rank_model": rank, "meta_model": meta, "market_regime": regime}
 
     return await run_in_threadpool(_run)
 
@@ -271,6 +272,16 @@ async def post_backfill_fundamentals(max_calls: int | None = Query(default=None)
 
     threading.Thread(target=_run, name="history-fund", daemon=True).start()
     return {"started": True, "track": "fundamentals", "background": True}
+
+
+@router.post("/brief/backfill-taifex")
+async def post_backfill_taifex(years: int = Query(default=2)) -> dict:
+    """回填台期交所選擇權 Put/Call Ratio（~years 年，市場恐慌 gauge 來源）。純本地、零 LLM。"""
+    from starlette.concurrency import run_in_threadpool
+
+    from data_sources import taifex_loader
+
+    return await run_in_threadpool(taifex_loader.backfill, years)
 
 
 @router.get("/brief/history-status")

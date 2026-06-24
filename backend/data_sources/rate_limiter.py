@@ -46,6 +46,8 @@ QUOTAS: dict[str, Quota] = {
     "twse": Quota(rate_per_sec=0.4, burst=3),
     "tpex": Quota(rate_per_sec=0.4, burst=3),
     "yahoo": Quota(rate_per_sec=2.0, burst=10),
+    # TAIFEX 公開資料（OpenAPI + pcRatio CSV）：量極小（市場級單一序列、一天 1 call），保守 1/s。
+    "taifex": Quota(rate_per_sec=1.0, burst=5),
 }
 
 

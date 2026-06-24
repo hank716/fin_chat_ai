@@ -19,6 +19,10 @@
 
 <div class="card summary"><strong>今日簡短結論</strong><br>{{ report.headline }}</div>
 
+{% if report.market_fear and report.market_fear.elevated %}
+<div class="gr warn">⚠ 市場恐慌偏高（避險強度位於歷史 {{ (report.market_fear.fear_pct * 100) | round | int }} 百分位）：建議降低總曝險至約 {{ (report.market_fear.exposure_scalar * 100) | round | int }}%（其餘留現金）。</div>
+{% endif %}
+
 {% if report.guardrail %}
 {% set gr = report.guardrail %}
 <div class="gr {{ 'ok' if gr.passed and gr.warning_count == 0 else 'warn' }}">

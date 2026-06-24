@@ -1293,6 +1293,119 @@ def sizing_plan() -> str | None:
     return bt.get("best_scheme") or None
 
 
+# ───────────── 市場恐慌 regime 回測 + 總曝險覆蓋（TAIFEX P/C）─────────────
+
+MARKET_REGIME_PATH = STRATEGY_DIR / "market_regime_backtest.json"
+
+
+def backtest_market_regime() -> dict[str, Any]:
+    """市場恐慌 gauge 條件式回測（純離線）：歷史日按 point-in-time 恐慌分位切 tercile，
+    報各 tercile 的『未來 TWII h 日最大回撤 + 實現波動』。gate＝高恐慌 tercile 回撤明顯深於低恐慌。
+
+    市場時序樣本小（~500 日），刻意用透明分位 + 條件平均（非小樣本硬擬 ML）；誠實標注低統計力。
+    """
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    from processor import market_regime  # noqa: PLC0415
+    from storage import local_store  # noqa: PLC0415
+
+    pc = market_regime.pc_feature_frame()
+    pc = pc.dropna(subset=["pc_oi_z20"]) if not pc.empty else pc
+    if pc.empty or len(pc) < 60:
+        return {"ran": False, "reason": f"too few pc days {0 if pc.empty else len(pc)}"}
+    pc = pc.sort_values("trade_date").reset_index(drop=True)
+    # point-in-time 恐慌分位（expanding rank，不看未來）。
+    pc["fear"] = pc["pc_oi_z20"].expanding(min_periods=30).apply(
+        lambda s: float((s <= s.iloc[-1]).mean()), raw=False)
+    pc = pc.dropna(subset=["fear"])
+
+    idx = local_store.read_prices("TWII", "tw")
+    if idx.empty:
+        return {"ran": False, "reason": "no TWII prices"}
+    idx = idx.copy()
+    idx["trade_date"] = pd.to_datetime(idx["trade_date"])
+    idx = idx.sort_values("trade_date").reset_index(drop=True)
+    close = idx["close"].astype(float).to_numpy()
+    low = idx["low"].astype(float).to_numpy() if "low" in idx.columns else close
+    ret1 = pd.Series(close).pct_change().to_numpy()
+    dpos = {d: i for i, d in enumerate(idx["trade_date"])}
+
+    hs = backtest.horizons()
+    rows: list[dict[str, Any]] = []
+    for r in pc.itertuples():
+        i = dpos.get(r.trade_date)
+        if i is None:
+            continue
+        rec: dict[str, Any] = {"fear": r.fear}
+        for h in hs:
+            if i + h >= len(close):
+                continue
+            fwd_low = float(np.min(low[i + 1:i + h + 1]))
+            rec[f"dd_{h}"] = (fwd_low / close[i] - 1) * 100              # 未來最大回撤(%)
+            rec[f"vol_{h}"] = float(np.nanstd(ret1[i + 1:i + h + 1])) * 100
+        rows.append(rec)
+    bt = pd.DataFrame(rows)
+    if len(bt) < 60:
+        return {"ran": False, "reason": f"too few aligned days {len(bt)}"}
+
+    bt["bucket"] = pd.qcut(bt["fear"], 3, labels=["low", "mid", "high"], duplicates="drop")
+    per_h: dict[str, Any] = {}
+    gate_passed = False
+    for h in hs:
+        ddc, volc = f"dd_{h}", f"vol_{h}"
+        if ddc not in bt.columns:
+            continue
+        g = bt.groupby("bucket", observed=True)
+        dd_mean, vol_mean = g[ddc].mean(), g[volc].mean()
+        lo_dd = float(dd_mean.get("low", float("nan")))
+        hi_dd = float(dd_mean.get("high", float("nan")))
+        gap = round(lo_dd - hi_dd, 3)                                    # >0＝高恐慌回撤更深（gauge 有效）
+        passed = gap >= settings.market_regime_min_gap
+        per_h[str(h)] = {
+            "low_fear_dd_pct": round(lo_dd, 3), "high_fear_dd_pct": round(hi_dd, 3),
+            "dd_gap_pct": gap, "low_fear_vol": round(float(vol_mean.get("low", float("nan"))), 3),
+            "high_fear_vol": round(float(vol_mean.get("high", float("nan"))), 3),
+            "gate_passed": passed,
+        }
+        if str(h) == str(hs[-1]):                                        # 以較長窗（regime 相關）為主 gate
+            gate_passed = passed
+    out = {
+        "ran": True, "n_days": len(bt), "horizons": hs, "per_horizon": per_h,
+        "gate_passed": gate_passed, "min_gap": settings.market_regime_min_gap,
+        "note": ("高恐慌 tercile 未來 TWII 回撤是否深於低恐慌（dd_gap>0 且 ≥min_gap＝gauge 有效→啟用曝險覆蓋）。"
+                 "市場時序樣本小、統計力低，僅供 regime 傾向參考。"),
+        "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
+    }
+    STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+    MARKET_REGIME_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("市場 regime 回測：gate_passed=%s（dd_gap=%s）",
+                gate_passed, {h: per_h.get(str(h), {}).get("dd_gap_pct") for h in hs})
+    return out
+
+
+def market_exposure_scalar() -> tuple[float, dict[str, Any]]:
+    """serving：回 (總多頭曝險係數∈[1−max_reduction,1], 說明)。過回測 gate 才縮放，否則 1.0（no-op）。
+
+    高恐慌→降總曝險（線性：fear 分位 0→1.0、1→1−max_reduction）。說明供晨報橫幅。
+    """
+    if not settings.enable_taifex:
+        return 1.0, {}
+    bt = _load_json(MARKET_REGIME_PATH) or {}
+    if not bt.get("gate_passed"):
+        return 1.0, {}
+    try:
+        from processor import market_regime  # noqa: PLC0415
+        fear = market_regime.market_fear_score()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("market_fear_score 失敗: %s", exc)
+        return 1.0, {}
+    if fear is None:
+        return 1.0, {}
+    scalar = round(1.0 - settings.sizing_max_reduction * float(fear), 3)
+    return scalar, {"fear_pct": round(float(fear), 3), "exposure_scalar": scalar, "elevated": fear >= 0.7}
+
+
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None

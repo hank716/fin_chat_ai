@@ -124,10 +124,16 @@ def current_market_regime() -> dict[str, float | None]:
     close = idx["close"].astype(float)
     trend = (close.iloc[-1] / close.iloc[-21] - 1) * 100
     vol = close.pct_change().tail(20).std() * 100
-    return {
+    out = {
         "mkt_trend_20d_pct": round(float(trend), 2) if pd.notna(trend) else None,
         "mkt_vol_20d_pct": round(float(vol), 2) if pd.notna(vol) else None,
     }
+    try:                                              # 市場恐慌/避險特徵（最新一日；缺檔則略過）
+        from processor import market_regime  # noqa: PLC0415
+        out.update(market_regime.latest_pc_features())
+    except Exception as exc:  # noqa: BLE001 — regime 取得失敗不阻斷打分
+        logger.debug("latest_pc_features 失敗: %s", exc)
+    return out
 
 
 def _symbol_long(sym: str, hs: list[int]) -> pd.DataFrame | None:
@@ -414,6 +420,16 @@ def _build_big(hs: list[int]) -> pd.DataFrame | None:
     # regime[9]：大盤趨勢/波動狀態（同日對所有股相同；serve 端走 current_market_regime 注入）。
     big["mkt_trend_20d_pct"] = big["trade_date"].map(idx.get("trend_20", pd.Series(dtype=float))).round(2)
     big["mkt_vol_20d_pct"] = big["trade_date"].map(idx.get("vol_20", pd.Series(dtype=float))).round(2)
+    # 市場恐慌/避險（TAIFEX P/C ratio）：map-by-trade_date，市場級同日對所有股同值（缺檔→欄全 NaN，HistGBT 原生吃）。
+    from processor import market_regime  # noqa: PLC0415
+    pc = market_regime.pc_feature_frame()
+    if not pc.empty:
+        pc = pc.copy()
+        pc["trade_date"] = pd.to_datetime(pc["trade_date"])
+        big = big.merge(pc, on="trade_date", how="left")
+    else:
+        for c in market_regime.PC_FEATURES:
+            big[c] = np.nan
     return big
 
 

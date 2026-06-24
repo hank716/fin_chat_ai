@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     enable_sizing: bool = True                     # 啟用部位 sizing（過回測 gate 才實際加權，否則等權）
     sizing_max_weight: float = 0.30               # 單檔權重上限（避免集中）
     sizing_min_alpha: float = 0.0                 # 回測中某方案毛報酬贏等權 > 此值才採用（gate）
+    sizing_max_reduction: float = 0.5             # 市場恐慌極端時最多降的總曝險比例（fear=1→曝險×(1−此值)）
+    # TAIFEX 選擇權 P/C ratio（市場恐慌/避險 gauge）：橫斷面 ~0（誠實量測），真正用於市場 regime/總曝險覆蓋。
+    enable_taifex: bool = True                     # 啟用 TAIFEX P/C 抓取與市場 regime 曝險覆蓋
+    market_regime_min_gap: float = 0.5            # 高恐慌 vs 低恐慌 tercile 未來回撤差(%) ≥ 此值才啟用曝險覆蓋（gate）
 
     # ── 歷史行情慢爬（把 parquet 歷史拉長，餵大 edge 訓練集；見 data_sources.history_crawl）──
     history_crawl_target_days: int = 730          # 回溯目標（天）：預設 2 年（落在 TWSE 2024+ schema）

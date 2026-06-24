@@ -169,6 +169,9 @@ FEATURE_COLUMNS = [
     # regime[9]：大盤趨勢/波動狀態（同日對所有股相同；歷史走 _symbol_long 旁的 big 欄、
     # 線上走 stock_entry 注入 current_market_regime）。讓模型學「行情依賴」型態。
     "mkt_trend_20d_pct", "mkt_vol_20d_pct",
+    # 市場恐慌/避險（TAIFEX 選擇權 P/C ratio；市場級同日對所有股同值）。橫斷面預期 ~0、誠實量測；
+    # 真正價值在 regime/總曝險（見 processor.market_regime / strategy_calibration.backtest_market_regime）。
+    "pc_oi_ratio", "pc_oi_z20", "pc_vol_ratio", "pc_oi_chg5",
     "side_bull",
 ]
 

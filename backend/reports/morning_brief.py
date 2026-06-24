@@ -242,18 +242,20 @@ def _apply_sizing(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     from reports import strategy_calibration
 
     scheme = strategy_calibration.sizing_plan()
-    if not scheme or not result.tw_watchlist:
-        return {}
-    stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
+    scalar, market_info = strategy_calibration.market_exposure_scalar()
     wl = result.tw_watchlist
+    # 兩道 gate 都不動（無 sizing 方案 + 無曝險縮放）→ 維持今日行為。
+    if not wl or (not scheme and scalar >= 0.999):
+        return {}, market_info
+    stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
     items = [{"meta_p": w.conviction_score, "risk_p": w.risk_score,
               "vol": (stocks.get(w.symbol, {}) or {}).get("volatility_20d_pct")} for w in wl]
-    weights = strategy_calibration._size_weights(items, scheme)
+    base = strategy_calibration._size_weights(items, scheme or "equal")  # 無方案則等權，僅供曝險縮放
     out: dict[str, float] = {}
-    for w, wt in zip(wl, weights):
-        w.size_weight = round(float(wt), 4)
+    for w, wt in zip(wl, base):
+        w.size_weight = round(float(wt) * scalar, 4)                     # 乘市場曝險係數（Σ=scalar、其餘現金）
         out[w.symbol] = w.size_weight
-    return out
+    return out, market_info
 
 
 def _apply_qlib_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
@@ -279,12 +281,18 @@ def _run_backtest_loop() -> dict[str, Any]:
 
     summary: dict[str, Any] = {}
     try:
+        from data_sources import taifex_loader        # TAIFEX P/C 日常增量（市場恐慌 gauge；guarded）
+        taifex_loader.refresh_recent()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TAIFEX 增量失敗（不影響晨報）: %s", exc)
+    try:
         backtest.run_due_evaluations()
         training_set.build_if_stale()                  # 歷史回放訓練集（過舊才重建，便宜）
         strategy_calibration.train_edge_model()        # 各窗(5/20)訓練→寫 edge_meta
         strategy_calibration.train_risk_model()        # 回撤風險模型（與方向並存）→寫 risk_meta
         strategy_calibration.train_rank_model()        # 報酬 rank 模型（殘差方向，rank-IC）→寫 rank_meta
         strategy_calibration.train_meta_model()         # meta-labeling（該不該下手，triple-barrier）→寫 meta_meta
+        strategy_calibration.backtest_market_regime()    # 市場恐慌 regime 回測（TAIFEX P/C）→寫 market_regime gate
         summary = strategy_calibration.rebuild()       # 再彙整：calibration 才會帶到最新 edge 狀態
         strategy_calibration.evaluate_effectiveness()  # 成效量測（把「準不準」變數字）
     except Exception as exc:  # noqa: BLE001
@@ -371,12 +379,13 @@ def generate_morning_brief(
         meta_scores = _apply_meta_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("meta 打分失敗（不影響晨報）: %s", exc)
-    # 部位 sizing：risk×meta 合成偏多書權重（guarded，需在 risk/meta 之後；未過回測 gate 則退回等權）
+    # 部位 sizing + 市場曝險覆蓋：risk×meta 合成偏多書權重 ×市場恐慌曝險係數（guarded；兩道 gate 不過則不動）
     size_weights: dict[str, float] = {}
+    market_fear: dict[str, Any] = {}
     try:
-        size_weights = _apply_sizing(result, feats)
+        size_weights, market_fear = _apply_sizing(result, feats)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("sizing 失敗（不影響晨報）: %s", exc)
+        logger.warning("sizing/曝險失敗（不影響晨報）: %s", exc)
 
     # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
     backtest_summary = _run_backtest_loop()
@@ -397,6 +406,8 @@ def generate_morning_brief(
         report["meta_scores"] = meta_scores
     if size_weights:
         report["size_weights"] = size_weights
+    if market_fear:
+        report["market_fear"] = market_fear
     if calibration_text:
         report["calibration_injected"] = calibration_text
     if backtest_summary:
