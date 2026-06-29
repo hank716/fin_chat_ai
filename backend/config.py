@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     enable_tpex: bool = True
     enable_finmind: bool = True
     enable_yahoo: bool = True
+    # Google Finance 個股頁新聞作第二來源（與 FinMind 並行、去重合併；無 API 靠爬 HTML，預設關灰度上線）
+    enable_google_finance_news: bool = False
 
     # ── 基本面磁碟快取 TTL（落地後晨報大多讀磁碟，只補過期→省 FinMind 額度）──
     # 註：季報/月營收改走「日曆感知略過」（依申報截止日判斷有無新一期），下列 TTL 僅

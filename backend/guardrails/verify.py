@@ -153,6 +153,7 @@ def run_guardrails(result: BriefResult, features: dict[str, Any]) -> tuple[Brief
         if not nd.url:                                # 模型沒帶 url 時用比對到的來源回填，頁面才有連結
             nd.url = match.get("url")
         nd.tier = match.get("tier", "authoritative")  # 由原始資料回填分層
+        nd.provider = match.get("provider")            # 回填新聞來源管線出處（finmind / google）
         kept_news.append(nd)
     cleaned.news_digest = kept_news
 

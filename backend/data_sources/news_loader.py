@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from typing import Any
 
 import universe
+from config import settings
 
 from . import finmind_loader
 
@@ -69,12 +71,27 @@ def _fetch_symbol_news(symbol: str, days: list[str], per_symbol: int) -> list[Ne
     return items[:per_symbol]
 
 
+def _dedup_key(item: dict[str, Any]) -> str:
+    """去重鍵：優先 URL（去 query/scheme），退回正規化標題（去空白/標點）。
+
+    Google 與 FinMind 同一則新聞 URL 常帶不同 query、標題偶有微差 → 兩道防線。
+    """
+    url = (item.get("url") or "").strip().lower()
+    if url:
+        url = re.sub(r"^https?://(www\.)?", "", url).split("?")[0].rstrip("/")
+        if url:
+            return "u:" + url
+    title = re.sub(r"[\s\W_]+", "", (item.get("title") or "").lower())
+    return "t:" + title
+
+
 def fetch_news(
     symbols: list[str], *, as_of: str | None = None, per_symbol: int = 2
 ) -> list[dict[str, Any]]:
     """抓 symbols 最新新聞（資料日 as_of 與 today 兩天，取最新），回 JSON-safe dict list。
 
-    單檔失敗不阻斷其他。回傳依日期新到舊排序。
+    FinMind 為主來源；若開 enable_google_finance_news，並行補上 Google Finance 第二來源並去重
+    （FinMind 優先，Google 只補沒見過的）。單檔失敗不阻斷其他。回傳依日期新到舊排序。
     """
     today = date.today().isoformat()
     days = sorted({d for d in (as_of, today) if d}, reverse=True)
@@ -85,8 +102,30 @@ def fetch_news(
         except Exception as exc:  # noqa: BLE001 — 單檔新聞失敗不阻斷
             logger.warning("news fetch %s failed: %s", sym, exc)
     out.sort(key=lambda x: x.date, reverse=True)
-    return [
+    merged = [
         {"symbol": n.symbol, "name": n.name, "date": n.date,
-         "title": n.title, "source": n.source, "url": n.url, "tier": n.tier}
+         "title": n.title, "source": n.source, "url": n.url, "tier": n.tier,
+         "provider": "finmind"}
         for n in out
     ]
+
+    if settings.enable_google_finance_news:
+        seen = {_dedup_key(it) for it in merged}
+        try:
+            from . import google_finance_loader  # 延後匯入避免循環（該模組 top-level 匯入本模組）
+            google = google_finance_loader.fetch_news(symbols, per_symbol=per_symbol)
+        except Exception as exc:  # noqa: BLE001 — 第二來源整體失敗不可拖垮 FinMind 主來源
+            logger.warning("google finance news source failed: %s", exc)
+            google = []
+        added = 0
+        for it in google:
+            key = _dedup_key(it)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(it)
+            added += 1
+        logger.info("google finance news: +%d (deduped from %d fetched)", added, len(google))
+        merged.sort(key=lambda x: x["date"], reverse=True)
+
+    return merged

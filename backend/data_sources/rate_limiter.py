@@ -48,6 +48,9 @@ QUOTAS: dict[str, Quota] = {
     "yahoo": Quota(rate_per_sec=2.0, burst=10),
     # TAIFEX 公開資料（OpenAPI + pcRatio CSV）：量極小（市場級單一序列、一天 1 call），保守 1/s。
     "taifex": Quota(rate_per_sec=1.0, burst=5),
+    # Google Finance 個股頁爬取（無 API、違反 ToS）：用最保守速率 + acquire 內建 jitter 打散規律
+    # 高頻、避開封鎖；量小（晨報 top-12 檔），不設 hourly_budget。
+    "google_finance": Quota(rate_per_sec=0.3, burst=3),
 }
 
 

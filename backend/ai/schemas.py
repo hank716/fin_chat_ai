@@ -77,6 +77,7 @@ class NewsDigestItem(BaseModel):
     takeaway: str  # AI 解讀（inference）
     uncertainty: str | None = None
     tier: str | None = None  # guardrail 由 features.news 比對後填：authoritative / social
+    provider: str | None = None  # guardrail 比對後填：finmind / google（新聞來源管線出處）
 
 
 class BriefResult(BaseModel):

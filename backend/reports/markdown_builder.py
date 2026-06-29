@@ -82,9 +82,14 @@ def build_markdown(
 
     if result.news_digest:
         lines = ["## 重要新聞與事件", ""]
+        _PROVIDER_LABEL = {"finmind": "FinMind", "google": "Google Finance"}
         for n in result.news_digest:
             title = f"[{n.title}]({n.url})" if n.url else n.title
-            lines.append(f"- **{title}**　_{n.source}・{n.date}_")
+            meta = f"{n.source}・{n.date}"
+            via = _PROVIDER_LABEL.get(n.provider or "")
+            if via:
+                meta += f"・via {via}"
+            lines.append(f"- **{title}**　_{meta}_")
             lines.append(f"  - 解讀：{n.takeaway}")
             if n.uncertainty:
                 lines.append(f"  - 不確定性：{n.uncertainty}")
