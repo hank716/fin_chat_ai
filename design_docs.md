@@ -1,5 +1,10 @@
 # AI 多市場研究助理 Design Docs v1.1
 
+> ⚠️ **規格已遷移至 Spec Kit**（2026-07-03）。本檔為**背景/歷史規格來源**。
+> 單一真相來源為 [`specs/`](specs/README.md)（逐功能 spec/plan/tasks），開發原則見
+> [`.specify/memory/constitution.md`](.specify/memory/constitution.md)。**兩者衝突時以 `specs/` 為準。**
+> 本檔章節（§0–§33）仍作為各 feature spec 的來源交叉引用。
+
 ## 0. 文件目的
 
 本文件定義一套供家庭內部使用的 AI 多市場研究助理。

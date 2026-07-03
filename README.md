@@ -3,8 +3,21 @@
 家庭內部使用的 AI 多市場研究助理：每日市場晨報 → Discord 摘要 + Web Report。
 資料整理員 + 市場研究助理 + AI 分析師 + 跨市場觀察員，**非**自動交易 / 保證獲利系統。
 
-- 規格：[`design_docs.md`](design_docs.md)
-- 架構決策（衝突時以此為準）：[`ARCHITECTURE.md`](ARCHITECTURE.md)
+- **規格（單一真相來源）**：[`specs/`](specs/README.md) — 逐功能 spec/plan/tasks（Spec Kit）
+- 開發憲章：[`.specify/memory/constitution.md`](.specify/memory/constitution.md)
+- 背景/歷史規格：[`design_docs.md`](design_docs.md)（衝突時以 `specs/` 為準）
+- 架構決策 / 平台層：[`ARCHITECTURE.md`](ARCHITECTURE.md)
+
+## 開發流程（Spec-Driven / Spec Kit）
+
+新功能一律走 Spec Kit 流程（指令為 Claude Code skills）：
+
+```text
+/speckit-specify → /speckit-clarify → /speckit-plan → /speckit-tasks → /speckit-analyze → /speckit-implement
+```
+
+既有 M0–M9 功能採「回溯補規格」建立基線（狀態見 [`specs/README.md`](specs/README.md)）。
+commit 遵循 Conventional Commits，並引用對應 `specs/NNN`。
 
 ## 技術重點
 
