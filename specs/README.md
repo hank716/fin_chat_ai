@@ -20,7 +20,7 @@
 | 001 | data-ingestion | §14 | `backend/data_sources/` | ⬜ |
 | 002 | storage-manager | §10–§12 | `backend/storage/` | ⬜ |
 | 003 | feature-processing | §5, §15 | `backend/processor/` | ⬜ |
-| 004 | guardrails-symbol-guard | §30 | `backend/guardrails/` | ⬜ |
+| 004 | guardrails-symbol-guard | §30 | `backend/guardrails/` | ✅ |
 | 005 | ai-gemini-layer | §5, §16, §20 | `backend/ai/`, `backend/router/` | ⬜ |
 | 006 | morning-brief | §6 | `backend/reports/morning_brief.py` | ⬜ |
 | 007 | web-report | §7 | `backend/reports/web_renderer.py`, `templates/` | ⬜ |
