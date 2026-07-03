@@ -17,9 +17,9 @@
 
 | NNN | Feature | 來源 §/commit | 對應路徑 | 狀態 |
 |-----|---------|----------------|----------|:----:|
-| 001 | data-ingestion | §14 | `backend/data_sources/` | ⬜ |
-| 002 | storage-manager | §10–§12 | `backend/storage/` | ⬜ |
-| 003 | feature-processing | §5, §15 | `backend/processor/` | ⬜ |
+| 001 | data-ingestion | §14 | `backend/data_sources/` | ✅ |
+| 002 | storage-manager | §10–§12 | `backend/storage/` | ✅ |
+| 003 | feature-processing | §5, §15 | `backend/processor/` | ✅ |
 | 004 | guardrails-symbol-guard | §30 | `backend/guardrails/` | ✅ |
 | 005 | ai-gemini-layer | §5, §16, §20 | `backend/ai/`, `backend/router/` | ✅ |
 | 006 | morning-brief | §6 | `backend/reports/morning_brief.py` | ✅ |
