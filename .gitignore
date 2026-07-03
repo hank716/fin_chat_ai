@@ -30,5 +30,8 @@ logs/
 # Claude Code runtime 產生的鎖檔
 .claude/scheduled_tasks.lock
 
+# Spec Kit 當前 feature 指標（工作狀態，會頻繁變動）
+.specify/feature.json
+
 # 動態產生的全台股 universe 快取（由 FinMind 重建）
 configs/universe/tw_all.json
