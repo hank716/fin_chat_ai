@@ -22,11 +22,11 @@
 | 003 | feature-processing | §5, §15 | `backend/processor/` | ⬜ |
 | 004 | guardrails-symbol-guard | §30 | `backend/guardrails/` | ✅ |
 | 005 | ai-gemini-layer | §5, §16, §20 | `backend/ai/`, `backend/router/` | ✅ |
-| 006 | morning-brief | §6 | `backend/reports/morning_brief.py` | ⬜ |
+| 006 | morning-brief | §6 | `backend/reports/morning_brief.py` | ✅ |
 | 007 | web-report | §7 | `backend/reports/web_renderer.py`, `templates/` | ⬜ |
-| 008 | ask-chat | §20 | `backend/api/ask.py`, `backend/chat/` | ⬜ |
+| 008 | ask-chat | §20 | `backend/api/ask.py`, `backend/chat/` | ✅ |
 | 009 | cost-control | §25 | `backend/cost/` | ✅ |
-| 010 | scheduler | §13 | `scheduler/` | ⬜ |
+| 010 | scheduler | §13 | `scheduler/` | ✅ |
 | 011 | discord-bot-notify | §6, §20 | `bot/`, `backend/notify/` | ⬜ |
 | 012 | strategy-eval-backtest | `6b6b851`,`81dc142` | `backend/reports/backtest.py`,`strategy_calibration.py` | ⬜ |
 | 013 | edge-training-set | `e67f8ea` | `backend/reports/training_set.py` | ⬜ |
