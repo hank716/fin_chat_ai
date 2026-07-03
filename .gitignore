@@ -27,5 +27,8 @@ logs/
 .idea/
 .vscode/
 
+# Claude Code runtime 產生的鎖檔
+.claude/scheduled_tasks.lock
+
 # 動態產生的全台股 universe 快取（由 FinMind 重建）
 configs/universe/tw_all.json
