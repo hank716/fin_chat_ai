@@ -25,7 +25,7 @@
 | 006 | morning-brief | §6 | `backend/reports/morning_brief.py` | ⬜ |
 | 007 | web-report | §7 | `backend/reports/web_renderer.py`, `templates/` | ⬜ |
 | 008 | ask-chat | §20 | `backend/api/ask.py`, `backend/chat/` | ⬜ |
-| 009 | cost-control | §25 | `backend/cost/` | ⬜ |
+| 009 | cost-control | §25 | `backend/cost/` | ✅ |
 | 010 | scheduler | §13 | `scheduler/` | ⬜ |
 | 011 | discord-bot-notify | §6, §20 | `bot/`, `backend/notify/` | ⬜ |
 | 012 | strategy-eval-backtest | `6b6b851`,`81dc142` | `backend/reports/backtest.py`,`strategy_calibration.py` | ⬜ |
