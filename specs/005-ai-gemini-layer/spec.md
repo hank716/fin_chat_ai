@@ -1,131 +1,118 @@
-# Feature Specification: [FEATURE NAME]
+# Feature Specification: AI 層 — Gemini 結構化生成、grounding、快取
 
-**Feature Branch**: `[###-feature-name]`
+**Feature Branch**: `005-ai-gemini-layer`
 
-**Created**: [DATE]
+**Created**: 2026-07-03
 
-**Status**: Draft
+**Status**: Baseline（回溯補規格 — 描述已實作之現況行為）
 
-**Input**: User description: "$ARGUMENTS"
+**來源交叉引用**: `design_docs.md` §16、§17、§20；`ARCHITECTURE.md` §4.1；憲章 I（Gemini-only）、
+II（成本紀律）、III（不輸出 raw CoT）；實作 `backend/ai/`（`gemini_client.py`、`llm_client.py`、
+`schemas.py`、`prompts.py`、`gemini_cache.py`）；相關 commit `0e2ce49`、`2e4fc93`。
+
+> 本規格以「現況行為」反寫，作為基線。與 `design_docs.md` 衝突時以本檔為準。此 feature 為 LLM 呼叫
+> 原語層，被 [006-morning-brief]、[008-ask-chat] 消費；計費由 [009-cost-control] 承接。
 
 ## User Scenarios & Testing *(mandatory)*
 
-<!--
-  IMPORTANT: User stories should be PRIORITIZED as user journeys ordered by importance.
-  Each user story/journey must be INDEPENDENTLY TESTABLE - meaning if you implement just ONE of them,
-  you should still have a viable MVP (Minimum Viable Product) that delivers value.
+### User Story 1 - 結構化 JSON 輸出（schema 強制） (Priority: P1)
 
-  Assign priorities (P1, P2, P3, etc.) to each story, where P1 is the most critical.
-  Think of each story as a standalone slice of functionality that can be:
-  - Developed independently
-  - Tested independently
-  - Deployed independently
-  - Demonstrated to users independently
--->
+所有分析輸出以 `responseMimeType=application/json` + `responseSchema` 強制為結構化 JSON，
+parse 成 pydantic 模型（`BriefResult` / `AnalysisResult`），供 guardrail 與頁面消費。
 
-### User Story 1 - [Brief Title] (Priority: P1)
+**Why this priority**: 結構化輸出是 guardrail（004）與頁面渲染的前提；非 JSON 即無法驗證/呈現。
 
-[Describe this user journey in plain language]
-
-**Why this priority**: [Explain the value and why it has this priority level]
-
-**Independent Test**: [Describe how this can be tested independently - e.g., "Can be fully tested by [specific action] and delivers [specific value]"]
+**Independent Test**: 對 `_generate_json` 餵入 mock 200 回應（合法 JSON），得到 dict + usage；
+餵非 JSON 文字則 raise `GeminiError`。
 
 **Acceptance Scenarios**:
 
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
-2. **Given** [initial state], **When** [action], **Then** [expected outcome]
+1. **Given** Gemini 回合法 JSON，**When** `analyze_full_brief(features)`，**Then** 回 `(BriefResult, usage)`。
+2. **Given** 回應非合法 JSON，**When** `_generate_json`，**Then** raise `GeminiError`（含 head 片段）。
+3. **Given** 回應無 candidates 或空內容，**When** `_generate_json`，**Then** raise `GeminiError`。
 
 ---
 
-### User Story 2 - [Brief Title] (Priority: P2)
+### User Story 2 - 兩段式即時連網晨報 (Priority: P1)
 
-[Describe this user journey in plain language]
+突破「responseSchema 不能與 tool 並用」限制：① PRO + Google 搜尋寫分析稿（主推理連網）→
+② Flash 純格式化成 `BriefResult`。回研究/格式化兩段 usage 供分別計費。
 
-**Why this priority**: [Explain the value and why it has this priority level]
+**Why this priority**: 兼顧「即時連網品質」與「結構化可驗證」；是晨報主推理路徑。
 
-**Independent Test**: [Describe how this can be tested independently]
+**Independent Test**: `analyze_full_brief_grounded(features)` 回 `(BriefResult, research_usage, struct_usage)`，
+研究段用 `gemini_model_brief`+search、格式化段用 `gemini_model_qa`。
 
 **Acceptance Scenarios**:
 
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
+1. **Given** features，**When** grounded 晨報，**Then** 先 `generate_text(use_search=True)` 再 `_generate_json` 格式化。
+2. **Given** 傳入 `calibration` 提示，**When** 研究段，**Then** 注入 prompt 讓模型依過去準確度自我修正。
 
 ---
 
-### User Story 3 - [Brief Title] (Priority: P3)
+### User Story 3 - 意圖分類 + 明確快取省 token (Priority: P2)
 
-[Describe this user journey in plain language]
+問答前用最便宜模型（flash-lite）判斷是否財務相關（**fail-open**：出錯一律當財務題）；當日 QA
+靜態 context 存進 Gemini 明確快取（`cachedContents`，綁 report_id+model），命中部分以 cache 價計。
 
-**Why this priority**: [Explain the value and why it has this priority level]
+**Why this priority**: 直接降成本（憲章 II）；但兩者都不得成為問答單點故障（皆優雅降級）。
 
-**Independent Test**: [Describe how this can be tested independently]
+**Independent Test**: `classify_finance_intent` 於 HTTP/解析失敗時回 `(True, {})`；
+`get_or_create_qa_cache` 於門檻不足/API 拒絕/redis 故障時回 `None`（呼叫端走完整 prompt）。
 
 **Acceptance Scenarios**:
 
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
+1. **Given** 分類器呼叫失敗，**When** `classify_finance_intent`，**Then** 回 `(True, {})`（fail-open）。
+2. **Given** context 未達快取門檻（HTTP 400），**When** `get_or_create_qa_cache`，**Then** 回 `None` 並降級。
+3. **Given** 引用明確快取的 generateContent，**When** 帶 `cachedContent`，**Then** MUST NOT 再送 tools（否則 400）。
 
 ---
-
-[Add more user stories as needed, each with an assigned priority]
 
 ### Edge Cases
 
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right edge cases.
--->
-
-- What happens when [boundary condition]?
-- How does system handle [error scenario]?
+- **HTTP 狀態分流**：503→`GeminiUnavailable`（tenacity 重試，指數退避）；429→`GeminiQuotaExceeded`
+  （fail-fast 不重試）；400→`GeminiBadRequest`（不重試，呼叫端降級）。
+- **usage 口徑**：`input_tokens`=promptTokenCount（已含 cached）；`output_tokens` 含 thoughtsTokenCount
+  （thinking，否則嚴重低估）；`cached_tokens`、`tool_tokens` 分開回傳（對齊 009 計費）。
+- 明確快取 key 版本化（`_KEY_VERSION`）：快取結構改變時 bump，避免沿用舊結構名稱。
+- redis 快取名稱 TTL 比 cachedContents ttl 早 2 分鐘過期，避免引用剛過期的快取。
+- `GEMINI_API_KEY` 未設定 → `_generate_json`/`generate_text` raise `GeminiError`。
 
 ## Requirements *(mandatory)*
 
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right functional requirements.
--->
-
 ### Functional Requirements
 
-- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
-- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]
-- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
-- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
-- **FR-005**: System MUST [behavior, e.g., "log all security events"]
+- **FR-001**: 系統 MUST 以 `responseMimeType=application/json`+`responseSchema` 產生結構化輸出並 parse 成 pydantic 模型。
+- **FR-002**: 系統 MUST 提供兩段式 grounded 晨報（PRO+search 研究 → Flash 格式化），回兩段 usage。
+- **FR-003**: 系統 MUST 依 HTTP 狀態分流例外：503 可重試、429/400 fail-fast，並由對應例外型別表達。
+- **FR-004**: 系統 MUST 為唯一 LLM 供應商（Gemini）；`llm_client` 保留薄 Protocol 但 MUST NOT 接 Claude API（憲章 I、ARCHITECTURE §4.1）。
+- **FR-005**: 意圖分類器 MUST fail-open（任何錯誤回 True），MUST NOT 成為問答單點故障。
+- **FR-006**: 明確快取建立失敗（門檻不足/API 拒絕/redis 故障）MUST 優雅降級回 None，問答不中斷。
+- **FR-007**: 引用明確快取的請求 MUST NOT 重送 tools（tools 已放進 cachedContent）。
+- **FR-008**: `_usage_of` MUST 輸出 input/output(含 thinking)/cached/tool 四欄，對齊 [009-cost-control] 計費口徑。
+- **FR-009**: 系統 MUST NOT 輸出 raw chain-of-thought（憲章 III、design_docs §16.3）；只輸出結構化結論與 evidence。
+- **FR-010**: 模型選擇 MUST 可由設定調整（brief=PRO、qa=Flash、classifier=Flash-Lite；`.env` 可覆寫）。
 
-*Example of marking unclear requirements:*
+### Key Entities
 
-- **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
-- **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
-
-### Key Entities *(include if feature involves data)*
-
-- **[Entity 1]**: [What it represents, key attributes without implementation]
-- **[Entity 2]**: [What it represents, relationships to other entities]
+- **BriefResult / BriefSection / Evidence / WatchItem / NewsDigestItem**（`schemas.py`）：晨報結構化結果。
+- **GEMINI_BRIEF_SCHEMA / GEMINI_INTENT_SCHEMA / GEMINI_RESPONSE_SCHEMA**：對應 responseSchema。
+- **usage dict**：`{input_tokens, output_tokens, cached_tokens, tool_tokens}`。
+- **cachedContent 名稱**：`gemini:cache:{ver}:{model}:{report_id}`（redis）→ Gemini cachedContents 資源。
+- **SEARCH_TOOLS**：`google_search` / `url_context` / `code_execution`。
 
 ## Success Criteria *(mandatory)*
 
-<!--
-  ACTION REQUIRED: Define measurable success criteria.
-  These must be technology-agnostic and measurable.
--->
-
 ### Measurable Outcomes
 
-- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
-- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
-- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
-- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
+- **SC-001**: 分析輸出 100% 為通過 schema 的結構化 JSON（可被 004 guardrail 與頁面消費）。
+- **SC-002**: 分類器/明確快取任一故障時，問答成功率不受影響（皆降級續行）。
+- **SC-003**: usage 口徑與 009 計費一致（含 thinking tokens、cache 分離），估算不低估。
+- **SC-004**: 503 暫時過載可自動恢復（重試）；429/400 立即回清楚錯誤，不空等。
 
 ## Assumptions
 
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right assumptions based on reasonable defaults
-  chosen when the feature description did not specify certain details.
--->
-
-- [Assumption about target users, e.g., "Users have stable internet connectivity"]
-- [Assumption about scope boundaries, e.g., "Mobile support is out of scope for v1"]
-- [Assumption about data/environment, e.g., "Existing authentication system will be reused"]
-- [Dependency on existing system/service, e.g., "Requires access to the existing user profile API"]
+- Gemini v1beta generateContent + `X-goog-api-key`（對齊使用者驗證過的 curl）。
+- `*-latest` 別名指向的版本由 009 費率表對應；別名改指時兩處需同步。
+- 家用規模；httpx 同步呼叫、tenacity 重試即可，無需 async 佇列。
+- prompts 由 `prompts.py` 組裝（static/variable 分塊以配合明確快取）。
