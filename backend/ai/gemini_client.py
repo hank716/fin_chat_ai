@@ -107,7 +107,7 @@ def _grounding_sources(candidate: dict) -> list[tuple[str, str]]:
 @_gemini_retry
 def _generate_json(
     prompt: str, response_schema: dict, model: str | None = None,
-    *, cached_content: str | None = None,
+    *, cached_content: str | None = None, temperature: float = 0.4,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
@@ -117,7 +117,7 @@ def _generate_json(
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": response_schema,
-            "temperature": 0.4,
+            "temperature": temperature,
         },
     }
     if cached_content:
@@ -200,6 +200,7 @@ def analyze_full_brief_grounded(
         build_brief_structuring_prompt(analysis, features),
         GEMINI_BRIEF_SCHEMA,
         model=settings.gemini_model_qa,
+        temperature=0.1,     # 第②段純格式化：趨近確定性，降低『新增事實/數字』的幻覺風險
     )
     return BriefResult.model_validate(raw), research_usage, struct_usage
 

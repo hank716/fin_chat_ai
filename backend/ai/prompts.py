@@ -6,8 +6,69 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
+
+# ── features 送進晨報 prompt 前的預算/截斷保護 ──
+# tw_features 已把 stocks 聚焦到 movers 涉及之標的(~40 檔)、news 只帶 title，正常不會過長；
+# 下列為**防護性**上限，避免病態輸入（異常多新聞/標的）把 prompt 撐爆、增加成本與截斷風險。
+MAX_BRIEF_STOCKS = 120        # tw.stocks 防護上限（優先保留 movers 涉及標的，guardrail 會 resolve）
+MAX_BRIEF_NEWS = 40           # news 則數上限
+NEWS_TEXT_MAX = 200           # 單則新聞文字欄位截斷長度
+
+
+def _movers_symbols(movers: Any) -> set[str]:
+    """收集 movers 各排行清單涉及的 symbol（這些標的的 stocks 明細必須保留給 guardrail 對照）。"""
+    out: set[str] = set()
+    if isinstance(movers, dict):
+        for lst in movers.values():
+            if isinstance(lst, list):
+                for it in lst:
+                    if isinstance(it, dict) and it.get("symbol"):
+                        out.add(it["symbol"])
+    return out
+
+
+def _cap_stocks(stocks: dict[str, Any], protected: set[str], cap: int) -> dict[str, Any]:
+    """保留 protected（movers 涉及）標的，其餘按成交金額(amount)由大到小補到 cap 為止。"""
+    kept = {s: v for s, v in stocks.items() if s in protected}
+    rest = [(s, v) for s, v in stocks.items() if s not in protected]
+    rest.sort(key=lambda kv: (kv[1] or {}).get("amount") or 0, reverse=True)
+    for s, v in rest:
+        if len(kept) >= cap:
+            break
+        kept[s] = v
+    return kept
+
+
+def _truncate_news_item(item: Any) -> Any:
+    """截斷單則新聞的長文字欄位（title 等）到 NEWS_TEXT_MAX；url/date/source/tier 等短欄保留。"""
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+    for k, v in out.items():
+        if k != "url" and isinstance(v, str) and len(v) > NEWS_TEXT_MAX:
+            out[k] = v[:NEWS_TEXT_MAX] + "…"
+    return out
+
+
+def _budget_features(features: dict[str, Any]) -> dict[str, Any]:
+    """回傳套用預算後的 features 深拷貝：截 news、防護性 cap tw.stocks（保留 movers 涉及標的）。
+
+    純函式、不改動傳入物件；正常輸入下多為 no-op（tw_features 已聚焦），僅在異常大時生效。
+    """
+    f = copy.deepcopy(features)
+    news = f.get("news")
+    if isinstance(news, list) and (len(news) > MAX_BRIEF_NEWS
+                                   or any(isinstance(n, dict) for n in news)):
+        f["news"] = [_truncate_news_item(n) for n in news[:MAX_BRIEF_NEWS]]
+    tw = f.get("tw")
+    if isinstance(tw, dict):
+        stocks = tw.get("stocks")
+        if isinstance(stocks, dict) and len(stocks) > MAX_BRIEF_STOCKS:
+            tw["stocks"] = _cap_stocks(stocks, _movers_symbols(tw.get("movers")), MAX_BRIEF_STOCKS)
+    return f
 
 SYSTEM_RULES = """你是一個多市場研究助理，協助家庭使用者理解美股與加密貨幣的盤勢與跨市場連動。
 
@@ -168,7 +229,7 @@ def _calibration_block(calibration: str | None) -> str:
 
 def build_full_brief_prompt(features: dict[str, Any], calibration: str | None = None) -> str:
     """組出餵 Gemini 的完整晨報 prompt（rules + 合併 features JSON + 選用回測校準）。"""
-    features_json = json.dumps(features, ensure_ascii=False, indent=2)
+    features_json = json.dumps(_budget_features(features), ensure_ascii=False, indent=2)
     return (
         f"{FULL_BRIEF_RULES}\n\n"
         f"以下是今日所有可引用的 features（唯一資料來源；不得引用以外的任何資訊）：\n"
@@ -184,7 +245,7 @@ def build_brief_research_prompt(features: dict[str, Any], calibration: str | Non
     calibration：選用的回測校準提示（由 strategy_calibration 依過去預估準確度歸納），
     注入後讓模型自我修正選股傾向（策略自動修正迴圈的回灌端）。
     """
-    features_json = json.dumps(features, ensure_ascii=False, indent=2)
+    features_json = json.dumps(_budget_features(features), ensure_ascii=False, indent=2)
     return (
         f"{FULL_BRIEF_RULES}\n\n"
         f"【本次為『分析稿』階段】：請**主動用 Google 搜尋**查證今日最新事件、新聞、報價與總經/央行/"
@@ -199,7 +260,7 @@ def build_brief_research_prompt(features: dict[str, Any], calibration: str | Non
 
 def build_brief_structuring_prompt(analysis: str, features: dict[str, Any]) -> str:
     """把分析稿整理成 BriefResult JSON（純格式化，不新增事實）。"""
-    features_json = json.dumps(features, ensure_ascii=False)
+    features_json = json.dumps(_budget_features(features), ensure_ascii=False)
     return (
         "把下面這份『今日市場分析稿』整理成符合 schema 的結構化晨報 JSON。\n"
         "**只能忠實萃取分析稿與 features 的內容，不得新增任何事實、數字或新聞**。\n"
