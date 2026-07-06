@@ -218,20 +218,49 @@ def _pivot_by_date(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     return by_date
 
 
+# FinMind 各 dataset 版本間 type 字串偶有差異；用**顯式別名對照表**取代危險的「子字串 fallback」。
+# 舊版子字串比對會讓 "Liabilities" 誤命中 "CurrentLiabilities"/"NoncurrentLiabilities" 等**部分**科目、
+# 讓 "Revenue" 誤命中含該字串的其他細項，據以算出的負債比/三率會取到錯的分子分母。別名一律是
+# **同概念**的整體科目，不含部分科目。真遇到未收錄的版本字串時走 warn-once（見下）浮出、由人補進表。
+_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "Revenue": ("Revenue", "OperatingRevenue", "NetSales", "TotalOperatingRevenue"),
+    "GrossProfit": ("GrossProfit", "GrossProfitLoss"),
+    "OperatingIncome": ("OperatingIncome", "OperatingIncomeLoss", "OperatingProfit"),
+    "TotalAssets": ("TotalAssets", "Total assets"),
+    "TotalLiabilities": ("TotalLiabilities", "Liabilities", "Total liabilities"),
+}
+_PICK_WARNED: set[str] = set()   # warn-once：已為某 candidate 簽章示警過就不再重複（降噪）
+
+
 def _pick(items: dict[str, float], *candidates: str) -> float | None:
-    """從一季的 {type: value} 取值；先精確比對，再 case-insensitive 子字串 fallback
-    （FinMind type 字串偶有版本差異，做寬鬆比對較穩）。"""
+    """從一季的 {type: value} 取值：精確 → case-insensitive 精確 → 顯式別名（無子字串猜測）。
+
+    每個傳入 candidate 會連同 `_TYPE_ALIASES` 的同概念別名一起嘗試（保序去重）。全數未精確命中時：
+    若存在「子字串疑似同義」的科目，warn-once 浮出以便補進別名表，但**不採用**其值（寧缺勿錯）。
+    """
+    expanded: list[str] = []
     for c in candidates:
+        for name in (c, *_TYPE_ALIASES.get(c, ())):
+            if name not in expanded:
+                expanded.append(name)
+
+    for c in expanded:                       # 1) 精確
         if c in items:
             return items[c]
     low = {k.lower(): v for k, v in items.items()}
-    for c in candidates:
-        cl = c.lower()
-        if cl in low:
-            return low[cl]
-        for k, v in low.items():
-            if cl in k:
-                return v
+    for c in expanded:                       # 2) case-insensitive 精確
+        if c.lower() in low:
+            return low[c.lower()]
+
+    if items and candidates:                 # 3) 未命中：浮出疑似同義（不採用）
+        sig = candidates[0]
+        if sig not in _PICK_WARNED:
+            near = [k for k in items if any(e.lower() in k.lower() for e in expanded)]
+            if near:
+                logger.warning(
+                    "財報科目 %s 未精確命中；疑似同義（未採用，如同概念請補進 _TYPE_ALIASES）：%s",
+                    list(candidates), near[:3])
+                _PICK_WARNED.add(sig)
     return None
 
 
