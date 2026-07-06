@@ -88,12 +88,15 @@ def _signed_streak(values: list[float]) -> list[int]:
     return out
 
 
-def _index_trailing() -> dict[str, pd.Series]:
+def _index_trailing(max_date: pd.Timestamp | None = None) -> dict[str, pd.Series]:
     """大盤往回 5/20 日報酬（%），index＝trade_date，供個股相對強弱 vs_index_{5,20}d_pct。
 
     註：TWII 指數 parquet 目前僅近月（未隨個股回補 2 年），故此特徵在較舊日期多為 NaN；
     HistGBT 原生吃 NaN 不受影響，且標籤改用『同日橫斷面中位數』超額（見 _emit_samples），
     不再依賴 TWII 覆蓋度。
+
+    max_date：資料截止日（含）。給定時只用 trade_date <= max_date 的列，讓 A/B 評估
+    對照固定在同一份資料快照上（見 eval_snapshot 的 D1 歸因方法論）。
     """
     idx = local_store.read_prices(INDEX_SYMBOL, TW_MARKET)
     if idx.empty:
@@ -101,6 +104,8 @@ def _index_trailing() -> dict[str, pd.Series]:
     idx = idx.copy()
     idx["trade_date"] = pd.to_datetime(idx["trade_date"])
     idx = idx.sort_values("trade_date")
+    if max_date is not None:
+        idx = idx[idx["trade_date"] <= max_date]
     close = idx["close"].astype(float)
     idx_ret1 = close.pct_change()
     td = idx["trade_date"].values
@@ -136,14 +141,22 @@ def current_market_regime() -> dict[str, float | None]:
     return out
 
 
-def _symbol_long(sym: str, hs: list[int]) -> pd.DataFrame | None:
-    """單檔 → 每日 point-in-time 特徵 + 前瞻標籤的長表（含排行所需指標）。資料太短回 None。"""
+def _symbol_long(sym: str, hs: list[int], max_date: pd.Timestamp | None = None) -> pd.DataFrame | None:
+    """單檔 → 每日 point-in-time 特徵 + 前瞻標籤的長表（含排行所需指標）。資料太短回 None。
+
+    max_date：資料截止日（含）。給定時特徵與前瞻標籤都只由 trade_date <= max_date 的行情
+    衍生（＝『假設今天是 max_date』的 point-in-time 快照），使評估可歸因、可重現（D1）。
+    """
     px = local_store.read_prices(sym, TW_MARKET)
     if px.empty or len(px) < _MIN_ROWS:
         return None
     px = px.copy()
     px["trade_date"] = pd.to_datetime(px["trade_date"])
     px = px.sort_values("trade_date").reset_index(drop=True)
+    if max_date is not None:
+        px = px[px["trade_date"] <= max_date].reset_index(drop=True)
+        if len(px) < _MIN_ROWS:
+            return None
     close = px["close"].astype(float)
     low = px["low"].astype(float) if "low" in px.columns else close
     high = px["high"].astype(float) if "high" in px.columns else close
@@ -383,17 +396,21 @@ def _overlap_weights(ds: pd.DataFrame) -> pd.Series:
     return w.round(4)
 
 
-def _build_big(hs: list[int]) -> pd.DataFrame | None:
-    """掃全市場 parquet → 每檔長表 concat + 衍生欄（vs_index/sector_rs/regime）。最貴的一步。"""
+def _build_big(hs: list[int], max_date: pd.Timestamp | None = None) -> pd.DataFrame | None:
+    """掃全市場 parquet → 每檔長表 concat + 衍生欄（vs_index/sector_rs/regime）。最貴的一步。
+
+    max_date：資料截止日（含），一路傳進 _symbol_long/_index_trailing，讓整份 big 只由
+    trade_date <= max_date 的資料衍生（固定資料快照，供 eval_snapshot 的 A/B 對照）。
+    """
     price_dir = PARQUET_ROOT / TW_MARKET
     if not price_dir.exists():
         return None
-    idx = _index_trailing()
+    idx = _index_trailing(max_date)
     frames: list[pd.DataFrame] = []
     syms = [p.stem for p in price_dir.glob("*.parquet") if p.stem != INDEX_SYMBOL]
     for sym in syms:
         try:
-            fr = _symbol_long(sym, hs)
+            fr = _symbol_long(sym, hs, max_date)
         except Exception as exc:  # noqa: BLE001 — 單檔壞資料不阻斷
             logger.debug("training_set 略過 %s: %s", sym, exc)
             continue
@@ -447,16 +464,22 @@ def _emit_all(big: pd.DataFrame, hs: list[int], *, min_amount: float, max_amount
 
 def build_training_set(hs: list[int] | None = None, *, min_amount: float = MIN_AMOUNT_TWD,
                        max_amount: float | None = None, out_path: Path = TRAINING_SET_PATH,
-                       big: pd.DataFrame | None = None) -> dict[str, Any]:
+                       big: pd.DataFrame | None = None,
+                       max_date: pd.Timestamp | str | None = None) -> dict[str, Any]:
     """掃全市場 parquet，回放選股規則產出歷史訓練集，落地 out_path。回統計。
 
     流動性帶預設＝主池（>=50M、無上限）；改戰場實驗傳中小型帶與另一 out_path（見 run_battlefield_experiment）。
     可傳已建好的 big 重用（省去重複掃描）。
+
+    max_date：資料截止日（含）。給定時整份訓練集只由 trade_date <= max_date 的資料衍生，
+    讓改動前後在同一份快照上對照（eval_snapshot 的 D1 歸因方法論）。
     """
     hs = hs or horizons()
     t0 = time.monotonic()
+    if max_date is not None:
+        max_date = pd.Timestamp(max_date)
     if big is None:
-        big = _build_big(hs)
+        big = _build_big(hs, max_date)
     if big is None or big.empty:
         return {"built": False, "reason": "no usable symbols"}
     ds = _emit_all(big, hs, min_amount=min_amount, max_amount=max_amount)
@@ -473,6 +496,7 @@ def build_training_set(hs: list[int] | None = None, *, min_amount: float = MIN_A
         "symbols_used": big.attrs.get("symbols_used"),
         "distinct_days": int(big["trade_date"].nunique()),
         "date_range": [ds["as_of"].min(), ds["as_of"].max()],
+        "max_date": (max_date.date().isoformat() if max_date is not None else None),
         "samples_per_horizon": per_h,
         "band": [min_amount, max_amount],
         "elapsed_sec": round(time.monotonic() - t0, 1),

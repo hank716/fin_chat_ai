@@ -35,3 +35,7 @@ logs/
 
 # 動態產生的全台股 universe 快取（由 FinMind 重建）
 configs/universe/tw_all.json
+
+# 本機測試：universe 快取 symlink（Docker 內為掛載目錄）
+backend/configs/universe/
+scratch_logs/
