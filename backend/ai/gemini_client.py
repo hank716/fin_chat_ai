@@ -64,12 +64,17 @@ class GeminiBadRequest(GeminiError):
     """請求被拒（400）→ 不 retry。明確快取與 tools 不相容等情況會回 400，呼叫端據此降級。"""
 
 
-@retry(
+# 對外 HTTP 呼叫的共用重試策略：只重試暫時性過載(503→GeminiUnavailable)與連線類錯誤
+# (httpx.RequestError)；429/400 由各函式 fail-fast、不進 retry。套在**真正發 HTTP 的**
+# _generate_json / generate_text（純資料整理的 _usage_of 不該套）。stop=4＝最多 4 次嘗試。
+_gemini_retry = retry(
     retry=retry_if_exception_type((httpx.RequestError, GeminiUnavailable)),
     stop=stop_after_attempt(4),
     wait=wait_exponential(multiplier=1, min=2, max=20),
     reraise=True,
 )
+
+
 def _usage_of(body: dict) -> dict[str, int]:
     """整理 usageMetadata 成計費所需欄位（對齊 cost.tracker.cost_of_usage）。
 
@@ -99,6 +104,7 @@ def _grounding_sources(candidate: dict) -> list[tuple[str, str]]:
     return out
 
 
+@_gemini_retry
 def _generate_json(
     prompt: str, response_schema: dict, model: str | None = None,
     *, cached_content: str | None = None,
@@ -198,18 +204,7 @@ def analyze_full_brief_grounded(
     return BriefResult.model_validate(raw), research_usage, struct_usage
 
 
-@retry(
-    retry=retry_if_exception_type((httpx.RequestError, GeminiUnavailable)),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=20),
-    reraise=True,
-)
-@retry(
-    retry=retry_if_exception_type((httpx.RequestError, GeminiUnavailable)),
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=1, min=2, max=20),
-    reraise=True,
-)
+@_gemini_retry
 def generate_text(
     prompt: str, model: str | None = None, *, use_search: bool = False,
     cached_content: str | None = None,
