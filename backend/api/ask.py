@@ -170,6 +170,14 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",
                 req.user_id, usage, cost, day_total)
     core_answer = answer or "（無回應）"
+    # Q&A 輕量 guardrail（WP3.2）：禁語 redact + 疑似不存在代號標注。允許集＝universe∪晨報已知∪即時查。
+    import universe
+    from guardrails import qa_guard
+    allowed_symbols = set(universe.watchlist_symbols()) | known | set(on_demand.keys())
+    core_answer, qa_report = qa_guard.scan_answer(core_answer, allowed_symbols)
+    if not qa_report["clean"]:
+        logger.warning("ask guardrail 攔截 user=%s 禁語=%s 疑似代號=%s",
+                       req.user_id, qa_report["banned_phrases"], qa_report["unknown_symbols"])
     if req.conversation_id:           # 討論串才寫記憶；存乾淨答案（不含免責句）
         history.append(req.conversation_id, req.question, core_answer)
     answer = core_answer + \
