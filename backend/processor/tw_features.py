@@ -84,19 +84,25 @@ def _net_streak(series: pd.Series) -> int | None:
     return streak * sign
 
 
-def _price_block(df: pd.DataFrame) -> dict[str, Any] | None:
+def _price_block(df: pd.DataFrame, df_adj: pd.DataFrame | None = None) -> dict[str, Any] | None:
+    """個股/大盤價格特徵。df=原始名目價（顯示用 close/amount）；df_adj=除權息還原價（spec 017），
+    供 return/volatility/dist_ma——跨除息日連續。df_adj 缺則退回原始（與訓練端 adjusted=True 對齊）。"""
     if df.empty:
         return None
     df = df.sort_values("trade_date").reset_index(drop=True)
-    close = df["close"]
     last = df.iloc[-1]
+    last_close = float(last["close"])            # 顯示用：原始名目價（D2：顯示/觸價一律原始）
+    # 報酬/波動/MA 用還原價（最新一根還原倍率恆為 1 → 還原 last close == 原始 last close）
+    src = df_adj.sort_values("trade_date").reset_index(drop=True) if (
+        df_adj is not None and not df_adj.empty) else df
+    close = src["close"]
     ret = close.pct_change()
     ma20 = close.tail(20).mean()
     ma60 = close.tail(60).mean()
-    last_close = float(last["close"])
+    adj_last = float(src.iloc[-1]["close"])
     # 與選股規則較不共線的連續特徵：離均線距離(%)取代布林 above_maNN；量能異常 turnover_surge。
-    dist_ma20 = round((last_close / ma20 - 1) * 100, 2) if not pd.isna(ma20) and ma20 else None
-    dist_ma60 = round((last_close / ma60 - 1) * 100, 2) if not pd.isna(ma60) and ma60 else None
+    dist_ma20 = round((adj_last / ma20 - 1) * 100, 2) if not pd.isna(ma20) and ma20 else None
+    dist_ma60 = round((adj_last / ma60 - 1) * 100, 2) if not pd.isna(ma60) and ma60 else None
     turnover_surge = None
     if "amount" in df.columns:
         amt = df["amount"].astype(float)
@@ -166,7 +172,7 @@ def _margin_block(df: pd.DataFrame) -> dict[str, Any]:
 def build_tw_features(window: int = 20) -> dict[str, Any]:
     # 大盤
     index_df = local_store.read_prices(INDEX_SYMBOL, TW_MARKET)
-    index_block = _price_block(index_df)
+    index_block = _price_block(index_df, local_store.read_prices(INDEX_SYMBOL, TW_MARKET, adjusted=True))
     index_ret20 = index_block["_ret20_raw"] if index_block else None
     index_ret5 = index_block.get("_ret5_raw") if index_block else None
     if index_block:
@@ -180,7 +186,8 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
     for sym in _available_symbols():
         if sym == INDEX_SYMBOL:
             continue
-        price = _price_block(local_store.read_prices(sym, TW_MARKET))
+        price = _price_block(local_store.read_prices(sym, TW_MARKET),
+                             local_store.read_prices(sym, TW_MARKET, adjusted=True))
         if price is None:
             continue
         ret20 = price.pop("_ret20_raw", None)
@@ -363,11 +370,12 @@ def build_adhoc_symbol(symbol: str) -> dict[str, Any] | None:
     if _is_stale(df):
         _fetch_and_land(symbol)
         df = local_store.read_prices(symbol, TW_MARKET)
-    price = _price_block(df)
+    price = _price_block(df, local_store.read_prices(symbol, TW_MARKET, adjusted=True))
     if price is None:
         return None
     ret20 = price.pop("_ret20_raw", None)
-    index_block = _price_block(local_store.read_prices(INDEX_SYMBOL, TW_MARKET))
+    index_block = _price_block(local_store.read_prices(INDEX_SYMBOL, TW_MARKET),
+                               local_store.read_prices(INDEX_SYMBOL, TW_MARKET, adjusted=True))
     index_ret20 = index_block.get("_ret20_raw") if index_block else None
     vs_index = (
         round(ret20 - index_ret20, 2)

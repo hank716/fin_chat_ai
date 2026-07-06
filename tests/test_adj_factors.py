@@ -118,6 +118,88 @@ def test_read_missing_returns_empty(tmp_adj_path):
     assert list(df.columns) == local_store.ADJ_FACTORS_COLUMNS
 
 
+# ── 讀取端還原（WP1.2 / US2）──
+
+def _raw(dates, closes):
+    d = pd.to_datetime(dates)
+    return pd.DataFrame({
+        "trade_date": d, "open": closes, "high": closes, "low": closes,
+        "close": [float(c) for c in closes],
+        "volume": [1] * len(closes), "amount": [1e8] * len(closes), "source": "t",
+    })[local_store.PRICE_COLUMNS]
+
+
+def test_apply_adjustment_removes_ex_gap(tmp_adj_path):
+    """已知除息日：原始 -10% 假跳空 → 還原後跨除息日報酬連續（≈0）（SC-003）。"""
+    local_store.write_adj_factors(_df([
+        {"symbol": "X", "ex_date": pd.Timestamp("2024-01-04"), "adj_factor": 0.9, "source": "finmind"},
+    ]))
+    raw = _raw(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"], [100, 100, 90, 90])
+    adj = local_store._apply_adjustment(raw, "X")
+    # ex_date 前 ×0.9、ex_date 當日及之後維持原始 → 全部 90，跨除息日連續
+    assert [round(c, 6) for c in adj["close"]] == [90.0, 90.0, 90.0, 90.0]
+    r = adj["close"].pct_change()
+    assert abs(r.iloc[2]) < 1e-9                 # 原始 90/100-1=-10% 假跳空 → 還原後 0
+    assert list(adj["volume"]) == list(raw["volume"])   # volume 不還原
+
+
+def test_apply_adjustment_multi_ex_cumulative(tmp_adj_path):
+    """多次除權息：ex_date 前累乘所有後續因子（backward 累積）。"""
+    local_store.write_adj_factors(_df([
+        {"symbol": "X", "ex_date": pd.Timestamp("2024-01-04"), "adj_factor": 0.9, "source": "finmind"},
+        {"symbol": "X", "ex_date": pd.Timestamp("2024-01-08"), "adj_factor": 0.8, "source": "finmind"},
+    ]))
+    raw = _raw(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09"],
+               [100, 100, 90, 90, 72, 72])
+    adj = local_store._apply_adjustment(raw, "X")
+    # d0/d1 ×(0.9·0.8)=0.72、d2/d3 ×0.8、d4/d5 ×1 → 全部 72，跨兩除息日皆連續
+    assert [round(c, 4) for c in adj["close"]] == [72.0, 72.0, 72.0, 72.0, 72.0, 72.0]
+
+
+def test_read_prices_adjusted_flag(tmp_adj_path, tmp_path, monkeypatch):
+    """read_prices(adjusted=True) 套用還原；預設 False 回原始價。"""
+    monkeypatch.setattr(local_store, "PARQUET_ROOT", tmp_path)
+    (tmp_path / "tw").mkdir()
+    raw = _raw(["2024-01-02", "2024-01-03", "2024-01-04"], [100, 100, 90])
+    raw.to_parquet(tmp_path / "tw" / "X.parquet", index=False)
+    local_store.write_adj_factors(_df([
+        {"symbol": "X", "ex_date": pd.Timestamp("2024-01-04"), "adj_factor": 0.9, "source": "finmind"},
+    ]))
+    assert list(local_store.read_prices("X", "tw")["close"]) == [100.0, 100.0, 90.0]          # 原始
+    assert [round(c, 4) for c in local_store.read_prices("X", "tw", adjusted=True)["close"]] == [90.0, 90.0, 90.0]
+
+
+def test_apply_adjustment_no_factors_noop(tmp_adj_path):
+    """無因子（指數/ETF/不配息）→ 原樣返回。"""
+    raw = _raw(["2024-01-02", "2024-01-03"], [100, 101])
+    adj = local_store._apply_adjustment(raw, "NOFACTOR")
+    assert list(adj["close"]) == [100.0, 101.0]
+
+
+# ── serving 端雙軌：顯示 close 原始、報酬/波動用還原（WP1.2 / T012, T015）──
+
+def test_price_block_display_raw_return_adjusted():
+    """_price_block：顯示 close = 原始名目價；return_1d 用還原價（除息日不再假跳空）。"""
+    from processor import tw_features
+
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"]
+    raw = _raw(dates, [100, 100, 100, 100, 90])          # 最後一日除息 -10% 假跳空
+    adj = _raw(dates, [90, 90, 90, 90, 90])              # read_prices(adjusted=True) 的等效結果
+    block = tw_features._price_block(raw, adj)
+    assert block["close"] == 90.0                        # 顯示＝原始名目最後收盤
+    assert block["return_1d_pct"] == 0.0                 # 還原後跨除息日連續（非原始 -10%）
+
+
+def test_price_block_no_adj_uses_raw():
+    """df_adj=None → 退回原始（向後相容，與訓練端 adjusted=True 缺因子時一致）。"""
+    from processor import tw_features
+
+    raw = _raw(["2024-01-02", "2024-01-03"], [100, 110])
+    block = tw_features._price_block(raw)
+    assert block["close"] == 110.0
+    assert block["return_1d_pct"] == 10.0
+
+
 # ── build() 斷點續跑 + 遇 backoff 停手 ──
 
 def test_build_resumable_and_backoff_stop(tmp_adj_path, tmp_path, monkeypatch):

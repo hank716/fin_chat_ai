@@ -98,7 +98,7 @@ def _index_trailing(max_date: pd.Timestamp | None = None) -> dict[str, pd.Series
     max_date：資料截止日（含）。給定時只用 trade_date <= max_date 的列，讓 A/B 評估
     對照固定在同一份資料快照上（見 eval_snapshot 的 D1 歸因方法論）。
     """
-    idx = local_store.read_prices(INDEX_SYMBOL, TW_MARKET)
+    idx = local_store.read_prices(INDEX_SYMBOL, TW_MARKET, adjusted=True)
     if idx.empty:
         return {}
     idx = idx.copy()
@@ -120,7 +120,7 @@ def _index_trailing(max_date: pd.Timestamp | None = None) -> dict[str, pd.Series
 
 def current_market_regime() -> dict[str, float | None]:
     """serve 端用：以最新 TWII 算當前 regime 特徵，供晨報把它注入每檔候選（與訓練端定義一致）。"""
-    idx = local_store.read_prices(INDEX_SYMBOL, TW_MARKET)
+    idx = local_store.read_prices(INDEX_SYMBOL, TW_MARKET, adjusted=True)
     if idx.empty or len(idx) < 21:
         return {"mkt_trend_20d_pct": None, "mkt_vol_20d_pct": None}
     idx = idx.copy()
@@ -147,7 +147,7 @@ def _symbol_long(sym: str, hs: list[int], max_date: pd.Timestamp | None = None) 
     max_date：資料截止日（含）。給定時特徵與前瞻標籤都只由 trade_date <= max_date 的行情
     衍生（＝『假設今天是 max_date』的 point-in-time 快照），使評估可歸因、可重現（D1）。
     """
-    px = local_store.read_prices(sym, TW_MARKET)
+    px = local_store.read_prices(sym, TW_MARKET, adjusted=True)   # 除權息還原（spec 017）：報酬/波動/標籤跨除息日連續
     if px.empty or len(px) < _MIN_ROWS:
         return None
     px = px.copy()

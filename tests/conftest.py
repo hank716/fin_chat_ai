@@ -61,7 +61,8 @@ def install_symbol(monkeypatch):
     funds: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     sectors: dict[str, str] = {}
 
-    def fake_read_prices(symbol, market):
+    def fake_read_prices(symbol, market, *, adjusted=False):
+        # 合成測試無除權息因子；adjusted 與否回同一 frame（訓練端 adjusted=True 走此路徑）
         return prices.get(symbol, pd.DataFrame(columns=PRICE_COLUMNS)).copy()
 
     def fake_read_chip(symbol, market):

@@ -16,6 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
 
 from config import settings
@@ -113,12 +114,44 @@ def write_margin(rows: Iterable[Any], market: str) -> dict[str, Any]:
     return _write_by_symbol(rows, MARGIN_COLUMNS, PARQUET_ROOT / market / "_margin")
 
 
-def read_prices(symbol: str, market: str) -> pd.DataFrame:
-    """讀回單檔 OHLCV（不存在回空 DataFrame）。"""
+def read_prices(symbol: str, market: str, *, adjusted: bool = False) -> pd.DataFrame:
+    """讀回單檔 OHLCV（不存在回空 DataFrame）。
+
+    adjusted=True：對 OHLC 做除權息 backward 累積還原（spec 017 / WP1.2），使 return/波動/MA/
+    標籤跨除權息日連續（消除假跳空）。**顯示價/觸價判定應用 adjusted=False 的原始名目價**（D2）。
+    """
     path = PARQUET_ROOT / market / f"{symbol}.parquet"
     if not path.exists():
         return pd.DataFrame(columns=PRICE_COLUMNS)
-    return pd.read_parquet(path)
+    df = pd.read_parquet(path)
+    if adjusted and not df.empty:
+        df = _apply_adjustment(df, symbol)
+    return df
+
+
+def _apply_adjustment(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """OHLC 除權息 backward 累積還原：`adj[t] = raw[t] × ∏{ex_date > t} factor`。
+
+    ex_date 當日及之後的價維持原始（該日已是 after_price）；ex_date 之前的價往回累乘各後續因子，
+    讓跨除權息日的報酬連續。volume/amount 不還原（報酬/波動運算不需）。無因子（指數/ETF/不配息）
+    原樣返回。
+    """
+    factors = read_adj_factors(symbol)
+    if factors.empty:
+        return df
+    df = df.copy()
+    td = pd.to_datetime(df["trade_date"]).to_numpy()
+    f = factors.sort_values("ex_date")
+    ex = pd.to_datetime(f["ex_date"]).to_numpy()
+    cum = np.cumprod(f["adj_factor"].astype(float).to_numpy())
+    total = float(cum[-1]) if len(cum) else 1.0
+    idx = np.searchsorted(ex, td, side="right")           # ∏{ex_date <= t} 的項數
+    prev_cum = np.where(idx > 0, cum[np.clip(idx - 1, 0, len(cum) - 1)], 1.0)
+    mult = total / prev_cum                                # = ∏{ex_date > t} factor
+    for col in ("open", "high", "low", "close"):
+        if col in df.columns:
+            df[col] = df[col].astype(float) * mult
+    return df
 
 
 def read_chip(symbol: str, market: str) -> pd.DataFrame:

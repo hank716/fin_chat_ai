@@ -92,15 +92,33 @@ def _entry_close(report: dict[str, Any], sym: str, as_of: pd.Timestamp) -> float
     return float(val) if pd.notna(val) else None
 
 
-def _forward_window(sym: str, as_of: pd.Timestamp, n: int) -> pd.DataFrame:
-    """資料日之後的前 n 個交易日 OHLC（trade_date > as_of，嚴防未來洩漏）。"""
-    df = local_store.read_prices(sym, TW_MARKET)
+def _forward_window(sym: str, as_of: pd.Timestamp, n: int, *, adjusted: bool = False) -> pd.DataFrame:
+    """資料日之後的前 n 個交易日 OHLC（trade_date > as_of，嚴防未來洩漏）。
+
+    adjusted=True：除權息還原價（spec 017），供 forward_return/mfe/mae——含息、跨除息日連續；
+    adjusted=False（預設）：原始名目價，供 target_hit/stop_hit 觸價判定（顯示的目標/止損為名目價）。
+    """
+    df = local_store.read_prices(sym, TW_MARKET, adjusted=adjusted)
     if df.empty:
         return df
     df = df.copy()
     df["trade_date"] = pd.to_datetime(df["trade_date"])
     fwd = df[df["trade_date"] > as_of].sort_values("trade_date").head(n)
     return fwd.reset_index(drop=True)
+
+
+def _entry_close_adj(sym: str, as_of: pd.Timestamp) -> float | None:
+    """進場價（除權息還原基準）：parquet 中 <= as_of 的最後還原收盤，供 forward_return 與 fwd 還原窗同基準。"""
+    df = local_store.read_prices(sym, TW_MARKET, adjusted=True)
+    if df.empty:
+        return None
+    df = df.copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    past = df[df["trade_date"] <= as_of].sort_values("trade_date")
+    if past.empty:
+        return None
+    val = past.iloc[-1]["close"]
+    return float(val) if pd.notna(val) else None
 
 
 def _index_forward_return(as_of: pd.Timestamp, n: int) -> float | None:
@@ -219,19 +237,31 @@ def featurize(stock_entry: dict[str, Any], side: str) -> dict[str, float | None]
 
 def evaluate_item(
     side: str, entry: float, target: float | None, stop: float | None, fwd: pd.DataFrame,
-    index_ret: float | None,
+    index_ret: float | None, *, entry_adj: float | None = None, fwd_adj: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    """單檔單一窗的回測結果。bullish(watchlist)：目標在上、止損在下；caution：方向對=下跌。"""
+    """單檔單一窗的回測結果。bullish(watchlist)：目標在上、止損在下；caution：方向對=下跌。
+
+    雙軌（spec 017 / D2）：forward_return/mfe/mae 用**還原價**（entry_adj/fwd_adj，含息、跨除息日連續）；
+    target_hit/stop_hit 觸價判定與 implied_target 用**原始名目價**（fwd/entry）。缺 adj 則退回原始。
+    """
     if fwd.empty or not entry or entry <= 0:
         return {"outcome": "no_data", "n_days": 0}
 
+    # 原始價：觸價判定 + implied_target（顯示的目標/止損為名目價）
     highs = fwd["high"].astype(float).tolist()
     lows = fwd["low"].astype(float).tolist()
-    closes = fwd["close"].astype(float).tolist()
-    final_close = closes[-1]
-    forward_return_pct = round((final_close - entry) / entry * 100, 2)
-    mfe_pct = round((max(highs) - entry) / entry * 100, 2)
-    mae_pct = round((min(lows) - entry) / entry * 100, 2)
+
+    # 還原價：報酬/MFE/MAE（缺 adj 或長度不齊則退回原始，保守）
+    use_adj = (fwd_adj is not None and not fwd_adj.empty and len(fwd_adj) == len(fwd)
+               and entry_adj is not None and entry_adj > 0)
+    src = fwd_adj if use_adj else fwd
+    ea = entry_adj if use_adj else entry
+    highs_a = src["high"].astype(float).tolist()
+    lows_a = src["low"].astype(float).tolist()
+    closes_a = src["close"].astype(float).tolist()
+    forward_return_pct = round((closes_a[-1] - ea) / ea * 100, 2)
+    mfe_pct = round((max(highs_a) - ea) / ea * 100, 2)
+    mae_pct = round((min(lows_a) - ea) / ea * 100, 2)
 
     bull = side == "watchlist"
     direction_correct = forward_return_pct > 0 if bull else forward_return_pct < 0
@@ -302,7 +332,11 @@ def evaluate_report(report: dict[str, Any], hs: list[int] | None = None) -> dict
                     per_h[str(h)] = {"outcome": "pending", "n_days": 0}
                     continue
                 fwd = _forward_window(sym, as_of, h)
-                per_h[str(h)] = evaluate_item(side, entry or 0.0, target, stop, fwd, index_ret[h])
+                fwd_adj = _forward_window(sym, as_of, h, adjusted=True)
+                per_h[str(h)] = evaluate_item(
+                    side, entry or 0.0, target, stop, fwd, index_ret[h],
+                    entry_adj=_entry_close_adj(sym, as_of), fwd_adj=fwd_adj,
+                )
             items.append({
                 "symbol": sym,
                 "name": it.get("name") or stock_entry.get("name") or sym,
@@ -323,6 +357,7 @@ def evaluate_report(report: dict[str, Any], hs: list[int] | None = None) -> dict
         "as_of": as_of_str,
         "generated_at": report.get("generated_at"),
         "horizons": hs,
+        "price_basis": "adjusted",   # spec 017：報酬/MFE/MAE 用除權息還原價（觸價/顯示維持原始）；舊 scorecard 不重算
         "matured": {str(h): matured[h] for h in hs},
         # 該晨報是否曾注入策略校準（供成效量測比較「校準前/後」兩個世代，免再載 report.json）
         "calibration_injected": bool(report.get("calibration_injected")),
