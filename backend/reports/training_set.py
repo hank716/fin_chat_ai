@@ -437,17 +437,28 @@ def _build_big(hs: list[int], max_date: pd.Timestamp | None = None) -> pd.DataFr
     # regime[9]：大盤趨勢/波動狀態（同日對所有股相同；serve 端走 current_market_regime 注入）。
     big["mkt_trend_20d_pct"] = big["trade_date"].map(idx.get("trend_20", pd.Series(dtype=float))).round(2)
     big["mkt_vol_20d_pct"] = big["trade_date"].map(idx.get("vol_20", pd.Series(dtype=float))).round(2)
-    # 市場恐慌/避險（TAIFEX P/C ratio）：map-by-trade_date，市場級同日對所有股同值（缺檔→欄全 NaN，HistGBT 原生吃）。
+    # 市場恐慌/避險（TAIFEX P/C ratio）：市場級同日對所有股同值（缺檔→欄全 NaN，HistGBT 原生吃）。
     from processor import market_regime  # noqa: PLC0415
-    pc = market_regime.pc_feature_frame()
-    if not pc.empty:
-        pc = pc.copy()
-        pc["trade_date"] = pd.to_datetime(pc["trade_date"])
-        big = big.merge(pc, on="trade_date", how="left")
-    else:
+    return _attach_pc_features(big, market_regime.pc_feature_frame())
+
+
+def _attach_pc_features(big: pd.DataFrame, pc: pd.DataFrame) -> pd.DataFrame:
+    """把市場級 P/C 特徵接到 big：merge_asof backward + **不允許同日匹配**。
+
+    P/C 為當日盤後(~15:00)公布，date-D 樣本在 D 收盤進場時尚不知 D 的 P/C（用了＝洩漏半天）；
+    故每個 date-D 取「trade_date 嚴格早於 D 的最近一筆」（＝D-1 的盤後值）。與 serve 端
+    market_regime.latest_pc_features 的「known_date < 今日」同一規則，杜絕 train/serve skew。
+    """
+    from processor import market_regime  # noqa: PLC0415
+    if pc is None or pc.empty:
         for c in market_regime.PC_FEATURES:
             big[c] = np.nan
-    return big
+        return big
+    pc = pc[["trade_date", *market_regime.PC_FEATURES]].copy()
+    pc["trade_date"] = pd.to_datetime(pc["trade_date"])
+    pc = pc.sort_values("trade_date").reset_index(drop=True)
+    big = big.sort_values("trade_date").reset_index(drop=True)
+    return pd.merge_asof(big, pc, on="trade_date", direction="backward", allow_exact_matches=False)
 
 
 def _emit_all(big: pd.DataFrame, hs: list[int], *, min_amount: float, max_amount: float | None) -> pd.DataFrame:

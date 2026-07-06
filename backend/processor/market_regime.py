@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import logging
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from config import settings
 from data_sources import taifex_loader
 
 logger = logging.getLogger("ai-market-backend.market_regime")
@@ -34,23 +36,36 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def pc_feature_frame() -> pd.DataFrame:
-    """回 DataFrame[trade_date + PC_FEATURES]（供 training_set._build_big merge）；無資料回空。"""
+    """回 DataFrame[trade_date, known_date, PC_FEATURES]（供 training_set 對齊 + serve 過濾）；無資料回空。"""
     raw = taifex_loader.read_pcr()
     if raw.empty:
-        return pd.DataFrame(columns=["trade_date", *PC_FEATURES])
+        return pd.DataFrame(columns=["trade_date", "known_date", *PC_FEATURES])
     df = _enrich(raw)
-    return df[["trade_date", *PC_FEATURES]]
+    if "known_date" not in df.columns:
+        df["known_date"] = df["trade_date"]
+    return df[["trade_date", "known_date", *PC_FEATURES]]
 
 
-def latest_pc_features() -> dict[str, float]:
-    """serve 端：最新一日的 P/C 市場特徵（缺值略過）；無資料回空 dict。"""
+def latest_pc_features(now: "str | pd.Timestamp | None" = None) -> dict[str, float]:
+    """serve 端：進場當日**盤前**可用的最新 P/C 市場特徵（缺值略過）；無資料回空 dict。
+
+    P/C 為當日盤後公布，故盤前只能用 known_date **嚴格早於今日**的最近一筆（＝昨日盤後值）；
+    這也對齊訓練端「date-D 樣本用 D-1 的 P/C」，避免 train/serve skew 與半天前視。
+    now＝現在時點（預設台北此刻；測試可注入）。
+    """
     df = pc_feature_frame()
     if df.empty:
         return {}
-    last = df.dropna(subset=["pc_oi_ratio"]).tail(1)
-    if last.empty:
+    df = df.dropna(subset=["pc_oi_ratio"]).copy()
+    if df.empty:
         return {}
-    row = last.iloc[0]
+    cutoff = (pd.Timestamp(now) if now is not None
+              else pd.Timestamp.now(ZoneInfo(settings.tz)).replace(tzinfo=None)).normalize()
+    kd = pd.to_datetime(df["known_date"])
+    df = df[kd < cutoff]                                   # 盤前：只用今日之前已公布者
+    if df.empty:
+        return {}
+    row = df.tail(1).iloc[0]
     return {f: round(float(row[f]), 4) for f in PC_FEATURES if pd.notna(row[f])}
 
 

@@ -26,7 +26,10 @@ logger = logging.getLogger("ai-market-backend.taifex")
 
 _DIR = Path(settings.local_storage_path) / "local_parquet" / "tw" / "_taifex"
 PCR_PATH = _DIR / "pcr.parquet"
-COLUMNS = ["trade_date", "pc_vol_ratio", "pc_oi_ratio", "put_vol", "call_vol", "put_oi", "call_oi"]
+# known_date＝該列資料「可被使用的日期」。TAIFEX P/C 為**當日盤後(~15:00)公布**，故 known_date
+# 語意上等於 trade_date（當天收盤後才知）；下游一律用「entry_day 進場時只能用 known_date < entry_day
+# 的最近一筆」對齊，杜絕『用當日盤後資料預測當日收盤進場』的半天洩漏（見 market_regime / training_set）。
+COLUMNS = ["trade_date", "known_date", "pc_vol_ratio", "pc_oi_ratio", "put_vol", "call_vol", "put_oi", "call_oi"]
 
 _OPENAPI_URL = "https://openapi.taifex.com.tw/v1/PutCallRatio"
 _PCRATIO_URL = "https://www.taifex.com.tw/cht/3/pcRatio"   # POST 日期區間→回含資料表的 HTML
@@ -44,6 +47,7 @@ def _row(d: date, pv, cv, pcv, po, co) -> dict[str, Any]:
     """組標準列：量比/OI比 + 原始量（OI 比是恐慌主訊號）。"""
     return {
         "trade_date": pd.Timestamp(d),
+        "known_date": pd.Timestamp(d),                   # 當日盤後公布：known_date = trade_date
         "pc_vol_ratio": _num(pcv), "pc_oi_ratio": None,  # OI 比下面填
         "put_vol": _num(pv), "call_vol": _num(cv),
         "put_oi": _num(po), "call_oi": _num(co),
@@ -160,7 +164,10 @@ def backfill(years: int = 2) -> dict[str, Any]:
 
 
 def read_pcr() -> pd.DataFrame:
-    """讀回 P/C 序列（不存在回空）。"""
+    """讀回 P/C 序列（不存在回空）。舊 parquet 缺 known_date 欄時回填為 trade_date（同語意）。"""
     if not PCR_PATH.exists():
         return pd.DataFrame(columns=COLUMNS)
-    return pd.read_parquet(PCR_PATH)
+    df = pd.read_parquet(PCR_PATH)
+    if "known_date" not in df.columns:                   # 相容既有無 known_date 的落地檔
+        df["known_date"] = pd.to_datetime(df["trade_date"])
+    return df
