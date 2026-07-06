@@ -18,9 +18,14 @@
 | 3.4 prompt 預算+降溫 | ✅ | |
 | 3.5 高風險測試 | ✅ | cost/guardrail/local_store |
 | 3.3 narrative 數字驗證 | ⏸ 待規格 | 需 /speckit-specify 定容忍度/策略 |
-| 1.1/1.2 除權息因子表 | ⛔ 阻塞 | 需 live FinMind + redis(本機無) |
-| 1.3 TWII 回補 | ⛔ 阻塞 | 需 live 抓取 |
-| 2.1–2.4 模型重分配 | ⛔ 阻塞 | 需 qlib 容器/補深資料/前置 WP |
+| 1.1 除權息因子表 | ✅ | spec 017；`adj_factors.py` + 表 upsert + 斷點回補；14 測試綠、live 驗證 2330/0056；全市場回補背景跑 |
+| 1.2 讀取端還原+重訓 | ⏳ 進行 | spec 017 US2–US3；待因子表回補完成後接 read_prices(adjusted) |
+| 1.3 TWII 回補 | ✅(此機) | Jay 機 TWII 已 497 列（≥480）；非空率待 WP1.2 重建後確認 |
+| 2.1–2.4 模型重分配 | ⛔ 阻塞 | 需 Phase 1 完成後重定基線 |
+
+> **機器差異（2026-07-06）**：上表「阻塞」多為 hank Linux 機（無 redis/docker、資料 3 個月）之限；
+> **Jay Windows 機 docker 6 服務全在跑、資料已 ~2 年、憑證齊 → Phase 1 可執行**。baseline 已於此機
+> 重跑並釘 `max_date=2026-07-03`（`eval_history/20260706_162137_baseline.json`）。
 
 **環境**:測試用 `.venv`(見 `EVAL_BASELINE.md`);本機無 redis/docker→live 抓取全部無法跑。
 **最大前置**:parquet 僅 ~3 個月深度,h20 統計力不足;Phase 1/2 準確度改動前須先把 history_crawl

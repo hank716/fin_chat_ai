@@ -286,6 +286,11 @@ def _run_backtest_loop() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("TAIFEX 增量失敗（不影響晨報）: %s", exc)
     try:
+        from processor import adj_factors             # 除權息因子表增量（分桶輪替；spec 017；guarded）
+        adj_factors.refresh_recent()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("除權息因子增量失敗（不影響晨報）: %s", exc)
+    try:
         backtest.run_due_evaluations()
         training_set.build_if_stale()                  # 歷史回放訓練集（過舊才重建，便宜）
         strategy_calibration.train_edge_model()        # 各窗(5/20)訓練→寫 edge_meta

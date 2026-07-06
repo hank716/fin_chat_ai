@@ -36,6 +36,12 @@ PRICE_COLUMNS = ["trade_date", "open", "high", "low", "close", "volume", "amount
 CHIP_COLUMNS = ["trade_date", "foreign_net_buy", "trust_net_buy", "dealer_net_buy", "source"]
 MARGIN_COLUMNS = ["trade_date", "margin_balance", "short_balance", "source"]
 
+# 除權息事件因子表（spec 017 / WP1.1）：市場級單檔，key=(symbol, ex_date)。刻意放在
+# local_parquet 根目錄（非 tw/ 內），才不會被 training_set._build_big 的 tw/*.parquet glob
+# 誤當成一檔個股掃到。schema：symbol / ex_date / adj_factor / source。
+ADJ_FACTORS_COLUMNS = ["symbol", "ex_date", "adj_factor", "source"]
+ADJ_FACTORS_PATH = PARQUET_ROOT / "tw_adj_factors.parquet"
+
 
 def _to_native(v: Any) -> Any:
     if isinstance(v, Decimal):
@@ -129,6 +135,37 @@ def read_margin(symbol: str, market: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=MARGIN_COLUMNS)
     return pd.read_parquet(path)
+
+
+def read_adj_factors(symbol: str | None = None) -> pd.DataFrame:
+    """讀回除權息因子表（不存在回空 DataFrame）。給 symbol 則只回該檔、依 ex_date 排序。"""
+    if not ADJ_FACTORS_PATH.exists():
+        return pd.DataFrame(columns=ADJ_FACTORS_COLUMNS)
+    df = pd.read_parquet(ADJ_FACTORS_PATH)
+    if symbol is not None:
+        df = df[df["symbol"] == symbol].sort_values("ex_date").reset_index(drop=True)
+    return df
+
+
+def write_adj_factors(df_new: pd.DataFrame) -> int:
+    """依 (symbol, ex_date) upsert 除權息因子表，回傳落地後總列數。"""
+    if df_new is None or df_new.empty:
+        return len(read_adj_factors())
+    df_new = df_new[ADJ_FACTORS_COLUMNS].copy()
+    df_new["ex_date"] = pd.to_datetime(df_new["ex_date"])
+    ADJ_FACTORS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if ADJ_FACTORS_PATH.exists():
+        df = pd.concat([pd.read_parquet(ADJ_FACTORS_PATH), df_new], ignore_index=True)
+    else:
+        df = df_new
+    df["ex_date"] = pd.to_datetime(df["ex_date"])
+    df = (
+        df.drop_duplicates(subset=["symbol", "ex_date"], keep="last")
+        .sort_values(["symbol", "ex_date"])
+        .reset_index(drop=True)
+    )
+    df.to_parquet(ADJ_FACTORS_PATH, engine="pyarrow", index=False)
+    return len(df)
 
 
 def purge_future_rows(market: str | None = None) -> dict[str, Any]:

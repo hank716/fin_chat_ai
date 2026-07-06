@@ -205,6 +205,22 @@ def get_dividend(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     )
 
 
+def get_dividend_result(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔除權息結果表（每個除權息交易日的參考價，供還原因子計算）。
+
+    對應 TaiwanStockDividendResult：每列 date（除權息日）/ stock_id / before_price（除權息前
+    參考價）/ after_price（除權息參考價）/ reference_price / stock_and_cache_dividend。
+    還原因子 = after_price / before_price（見 processor/adj_factors）。
+
+    注意：免費 tier 僅支援 per-stock（帶 data_id）；不帶 data_id 的市場級查詢需付費 level
+    （回 HTTP 400 `Your level is register`）→ 回補只能逐檔走 rate_limiter。
+    """
+    return _request(
+        "TaiwanStockDividendResult",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
 def get_taiwan_stock_news(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     """單檔近期新聞（date / stock_id / link / source / title）。"""
     return _request("TaiwanStockNews", {"data_id": stock_id, "start_date": start_date})

@@ -36,6 +36,7 @@
 | 014 | meta-labeling-sizing | `2ecb82a`,`892c129` | `backend/processor/`, `backend/reports/` | ✅ |
 | 015 | qlib-offline | `271bf6f` | `qlib_offline/` | ✅ |
 | 016 | market-regime-taifex | `8772d76` | `backend/data_sources/taifex_loader.py`,`processor/market_regime.py` | ✅ |
+| 017 | adjusted-prices | `OPTIMIZATION_PLAN` WP1.1+1.2 | `backend/processor/adj_factors.py`,`storage/local_store.py` | 🟡 US1✅/US2–3⏳ |
 
 **回溯歷程（風險優先）**：第一批 004/009/005 → 第二批 006/008/010 → 第三批 001/003/002 →
 最終批 007/011/012/013/014/015/016。全部完成。後續重點轉向落實各 tasks 的「測試基線」Phase。
