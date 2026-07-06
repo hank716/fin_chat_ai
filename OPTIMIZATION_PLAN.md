@@ -4,6 +4,30 @@
 > **不得自行做架構判斷**——所有架構決策已在「全域決策」定案。
 > 一次只做一個 WP,完成驗收後才進下一個。
 
+## 執行進度(2026-07-06,分支 feat/optimization-phase0)
+
+| WP | 狀態 | 備註 |
+|----|------|------|
+| 0.1 防洩漏測試 | ✅ | 7 組 + break-proof |
+| 0.2 eval_snapshot + baseline | ✅ | 真實數字見 `EVAL_BASELINE.md` |
+| 0.3 TAIFEX P/C 對齊 | ✅ | P/C 缺檔→零 delta |
+| 0.4 fundamentals._pick | ✅ | live 驗證 2330 |
+| 1.4 survivorship 稽核 | ✅ | 0%,`SURVIVORSHIP_AUDIT.md` |
+| 3.1 gemini retry | ✅ | |
+| 3.2 ask.py guardrail | ✅ | |
+| 3.4 prompt 預算+降溫 | ✅ | |
+| 3.5 高風險測試 | ✅ | cost/guardrail/local_store |
+| 3.3 narrative 數字驗證 | ⏸ 待規格 | 需 /speckit-specify 定容忍度/策略 |
+| 1.1/1.2 除權息因子表 | ⛔ 阻塞 | 需 live FinMind + redis(本機無) |
+| 1.3 TWII 回補 | ⛔ 阻塞 | 需 live 抓取 |
+| 2.1–2.4 模型重分配 | ⛔ 阻塞 | 需 qlib 容器/補深資料/前置 WP |
+
+**環境**:測試用 `.venv`(見 `EVAL_BASELINE.md`);本機無 redis/docker→live 抓取全部無法跑。
+**最大前置**:parquet 僅 ~3 個月深度,h20 統計力不足;Phase 1/2 準確度改動前須先把 history_crawl
+跑到 ~2 年(需 redis + FinMind 額度),否則 h20 的 A/B delta 不可歸因。共 59 測試綠。
+
+---
+
 ## Context
 
 fin_chat_ai 是台股為主的晨報選股系統:規則式選股 + sklearn HistGradientBoosting(edge/risk/rank/meta 四類模型)+ qlib_offline 隔離容器(Alpha158+LightGBM),已有 purged walk-forward + embargo、triple-barrier、事後回測閉環等嚴謹設計。本計畫目標:**提升預測準確度**(首要)+ 清工程債(次要)。
