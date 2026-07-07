@@ -19,6 +19,7 @@ log = logging.getLogger("qlib-offline")
 # ── 路徑（對齊 backend local_store / training_set 慣例）──
 STORAGE = Path(os.environ.get("LOCAL_STORAGE_PATH", "/data"))
 PARQUET_TW = STORAGE / "local_parquet" / "tw"
+ADJ_FACTORS_PATH = STORAGE / "local_parquet" / "tw_adj_factors.parquet"   # 除權息因子表（spec 017）
 QLIB_DATA = STORAGE / "qlib_data"            # Qlib provider_uri（dump 落地處）
 STRATEGY_DIR = STORAGE / "strategy"
 EVAL_PATH = STRATEGY_DIR / "qlib_eval.json"
@@ -82,6 +83,30 @@ def available_symbols() -> list[str]:
     syms = sorted(have & uni) if uni else sorted(have)
     log.info("可用代號：%d 檔（parquet ∩ universe）", len(syms))
     return syms
+
+
+def load_adj_index() -> dict:
+    """讀除權息因子表 → {sym: (ex_dates np.datetime64 排序, cumprod, total)}；缺檔回 {}。
+
+    供 dump 做讀取端還原（spec 017 / WP2.1）：adj[t]=raw[t]×∏{ex_date>t}factor。隔離 image
+    刻意複製此邏輯（不 import backend），與 backend local_store._apply_adjustment 同定義。
+    """
+    import numpy as np
+    import pandas as pd
+
+    if not ADJ_FACTORS_PATH.exists():
+        log.warning("除權息因子表不存在: %s（qlib dump 退回原始價）", ADJ_FACTORS_PATH)
+        return {}
+    df = pd.read_parquet(ADJ_FACTORS_PATH)
+    if df.empty:
+        return {}
+    df["ex_date"] = pd.to_datetime(df["ex_date"])
+    out: dict = {}
+    for sym, g in df.sort_values("ex_date").groupby("symbol"):
+        cum = np.cumprod(g["adj_factor"].astype(float).to_numpy())
+        out[str(sym)] = (g["ex_date"].to_numpy(), cum, float(cum[-1]) if len(cum) else 1.0)
+    log.info("除權息因子表：%d 檔有股利（qlib dump 用還原價）", len(out))
+    return out
 
 
 def write_json(path: Path, obj) -> None:

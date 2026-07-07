@@ -18,15 +18,26 @@ from common import (
     PARQUET_TW,
     QLIB_DATA,
     available_symbols,
+    load_adj_index,
     log,
 )
 
 # Alpha158 會用到的欄位：$open/$high/$low/$close/$volume/$vwap。
 _FIELDS = ["open", "high", "low", "close", "volume", "vwap"]
+# 價格欄位（除權息還原對象；volume 不還原）。vwap 一併還原以與 close 同基準。
+_PRICE_FIELDS = ("open", "high", "low", "close", "vwap")
 
 
-def _load_symbol(sym: str) -> pd.DataFrame | None:
-    """讀單檔 parquet → 以日期(normalized)為 index 的 OHLCV+vwap；資料太短回 None。"""
+def _adj_mult(dates: pd.DatetimeIndex, adj: tuple) -> np.ndarray:
+    """該檔各 trade_date 的還原倍率 = ∏{ex_date > t} factor = total / ∏{ex_date <= t}。"""
+    ex, cum, total = adj
+    idx = np.searchsorted(ex, dates.to_numpy(), side="right")
+    prev = np.where(idx > 0, cum[np.clip(idx - 1, 0, len(cum) - 1)], 1.0)
+    return total / prev
+
+
+def _load_symbol(sym: str, adj_index: dict) -> pd.DataFrame | None:
+    """讀單檔 parquet → 以日期(normalized)為 index 的 OHLCV+vwap（除權息還原）；資料太短回 None。"""
     path = PARQUET_TW / f"{sym}.parquet"
     if not path.exists():
         return None
@@ -44,16 +55,23 @@ def _load_symbol(sym: str) -> pd.DataFrame | None:
         out[f] = df[f].astype(float) if f in df.columns else np.nan
     out["volume"] = vol
     out["vwap"] = np.where(vol > 0, amt / vol, np.nan)   # 成交均價≈成交金額/股數
+    # 除權息 backward 還原（spec 017 / WP2.1）：對 OHLC+vwap 套倍率，消除除息跳空；volume 不動。
+    adj = adj_index.get(sym)
+    if adj is not None:
+        mult = _adj_mult(out.index, adj)
+        for f in _PRICE_FIELDS:
+            out[f] = out[f].to_numpy(dtype="float64") * mult
     return out if len(out) >= 25 else None                # 至少能算 Alpha158 的 20 日窗
 
 
 def dump() -> dict:
     """掃 available_symbols → 寫 Qlib bin store 到 QLIB_DATA。回統計。"""
     syms = available_symbols()
+    adj_index = load_adj_index()
     frames: dict[str, pd.DataFrame] = {}
     for sym in syms:
         try:
-            sd = _load_symbol(sym)
+            sd = _load_symbol(sym, adj_index)
         except Exception as exc:  # noqa: BLE001 — 單檔壞資料不阻斷
             log.debug("dump 略過 %s: %s", sym, exc)
             continue

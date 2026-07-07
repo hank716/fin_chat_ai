@@ -206,6 +206,7 @@ def _eval_per_horizon(liquid: pd.DataFrame, fc: list[str], hs: list[int],
         "feature_count": len(fc),
         "date_range": info["date_range"],
         "horizons": hs,
+        "price_basis": "adjusted",   # spec 017 / WP2.1：dump 已做除權息還原（消除除息跳空）
         "per_horizon": per,
         "breaks_direction_wall": any_break,
         "note": ("rank-IC＝流動性全池(amount>=50M)逐日橫斷面 Spearman，非 sector-neutral 殘差，"
