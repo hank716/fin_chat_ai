@@ -30,6 +30,12 @@ EDGE_MODEL_PATH = STRATEGY_DIR / "edge_model.pkl"
 EDGE_META_PATH = STRATEGY_DIR / "edge_model_meta.json"
 RISK_META_PATH = STRATEGY_DIR / "risk_model_meta.json"
 RANK_META_PATH = STRATEGY_DIR / "rank_model_meta.json"
+# WP2.3 小型股帶 rank 模型（spec 019）：候選 amount∈[5M,50M) 走此帶模型（OOS rank-IC 遠強於主池，
+# baseline 實測小型股 h5 ~0.076 vs 主池 ~0.034）。routing 在 score_rank 依候選 _amount 分流。
+SMALLCAP_MIN_TWD = 5_000_000
+SMALLCAP_MAX_TWD = 50_000_000                            # = training_set.MIN_AMOUNT_TWD（主池下界）
+SMALLCAP_TRAINING_SET_PATH = STRATEGY_DIR / "training_set_smallcap.parquet"
+RANK_META_SMALLCAP_PATH = STRATEGY_DIR / "rank_model_meta_smallcap.json"
 META_META_PATH = STRATEGY_DIR / "meta_model_meta.json"   # meta-labeling[5]：「該不該下手」模型
 EVAL_PATH = STRATEGY_DIR / "evaluation.json"
 # Qlib 離線 image（階段 3[8]）產出：方向分數 + meta（per-horizon rank_ic/risk_auc）。
@@ -335,9 +341,14 @@ def _risk_model_path(h: int) -> Path:
     return STRATEGY_DIR / f"risk_model_{h}.pkl"
 
 
-def _rank_model_path(h: int) -> Path:
-    """每個時間窗各自一顆報酬 rank 模型（rank_model_5.pkl / rank_model_20.pkl）。"""
-    return STRATEGY_DIR / f"rank_model_{h}.pkl"
+def _rank_model_path(h: int, band: str | None = None) -> Path:
+    """每個時間窗各自一顆報酬 rank 模型。band="smallcap" → rank_model_smallcap_{h}.pkl（WP2.3）。"""
+    suffix = f"_{band}" if band else ""
+    return STRATEGY_DIR / f"rank_model{suffix}_{h}.pkl"
+
+
+def _rank_meta_path(band: str | None = None) -> Path:
+    return RANK_META_SMALLCAP_PATH if band == "smallcap" else RANK_META_PATH
 
 
 def _meta_model_path(h: int) -> Path:
@@ -669,13 +680,17 @@ def _new_regressor():
     )
 
 
-def _build_rank_dataset(h: int):
-    """rank 模型訓練集：X=FEATURE_COLUMNS、__t=因子中性化殘差報酬(連續)、__d 日期、__w 權重。"""
+def _build_rank_dataset(h: int, path: Path | None = None):
+    """rank 模型訓練集：X=FEATURE_COLUMNS、__t=因子中性化殘差報酬(連續)、__d 日期、__w 權重。
+
+    path＝訓練集 parquet（預設主池 TRAINING_SET_PATH；band 模型傳 SMALLCAP_TRAINING_SET_PATH）。
+    """
     import pandas as pd  # noqa: PLC0415
 
     from reports import training_set  # noqa: PLC0415
 
-    hist = training_set.load_training_set(h)
+    hist = (training_set.load_training_set(h, path) if path is not None
+            else training_set.load_training_set(h))
     if hist.empty or "resid_return_pct" not in hist.columns:
         return None
     ds = hist[FEATURE_COLUMNS].astype(float).copy()
@@ -760,11 +775,25 @@ def _evaluate_rank_oos(ds, h: int) -> dict[str, Any]:
             "eval_method": "purged_walk_forward", "cv_folds": folds, "n_days_ic": len(daily)}
 
 
-def train_rank_model() -> dict[str, Any]:
+def _ensure_smallcap_training_set(max_age_days: float = 3.0) -> None:
+    """建/更新小型股帶訓練集（amount∈[5M,50M)）；過舊或不存在才重建（掃全 parquet，較貴）。"""
+    import time  # noqa: PLC0415
+
+    from reports import training_set as T  # noqa: PLC0415
+
+    p = SMALLCAP_TRAINING_SET_PATH
+    fresh = p.exists() and (time.time() - p.stat().st_mtime) / 86400 <= max_age_days
+    if fresh:
+        return
+    T.build_training_set(min_amount=SMALLCAP_MIN_TWD, max_amount=SMALLCAP_MAX_TWD, out_path=p)
+
+
+def train_rank_model(band: str | None = None) -> dict[str, Any]:
     """訓練報酬 rank 模型——每窗各一顆，回歸因子中性化殘差報酬，以 rank-IC 評估。
 
     learning-to-rank 取向（比二元分類更貼合「排序多頭」）。液態股 5–20 日方向多半 rank-IC<門檻、
-    不會啟用重排（與效率牆一致＝預期且正確）。
+    不會啟用重排（與效率牆一致＝預期且正確）。band="smallcap"（WP2.3）：用小型股帶訓練集（[5M,50M)）
+    訓練另一組模型 + meta，供 score_rank 依候選 amount 分流（小型股帶 OOS rank-IC 遠強於主池）。
     """
     if not settings.enable_rank_model:
         return {"trained": False, "reason": "disabled"}
@@ -776,9 +805,12 @@ def train_rank_model() -> dict[str, Any]:
         return {"trained": False, "reason": f"import failed: {exc}"}
 
     minimum = settings.edge_model_min_samples
+    ts_path = SMALLCAP_TRAINING_SET_PATH if band == "smallcap" else None
+    if band == "smallcap":
+        _ensure_smallcap_training_set()
 
     def _one(h: int) -> dict[str, Any]:
-        ds = _build_rank_dataset(h)
+        ds = _build_rank_dataset(h, ts_path)
         n = 0 if ds is None else len(ds)
         if ds is None or n < minimum:
             return {"trained": False, "reason": f"樣本不足 {n}/{minimum}", "n_samples": n, "horizon": h}
@@ -787,7 +819,7 @@ def train_rank_model() -> dict[str, Any]:
         model = _new_regressor()
         model.fit(ds[cols], ds["__t"].to_numpy(), sample_weight=ds["__w"].to_numpy())
         STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
-        joblib.dump({"model": model, "columns": cols}, _rank_model_path(h))
+        joblib.dump({"model": model, "columns": cols}, _rank_model_path(h, band))
         return {"trained": True, "n_samples": n, "horizon": h,
                 "rank_ic": ev["rank_ic"], "icir": ev["icir"], "pooled_ic": ev.get("pooled_ic"),
                 "eval_method": ev["eval_method"], "cv_folds": ev["cv_folds"]}
@@ -797,33 +829,29 @@ def train_rank_model() -> dict[str, Any]:
     ph = _primary_h()
     meta = {
         **per.get(ph, {"trained": False, "n_samples": 0}),
+        "band": band or "main",
         "trained_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
         "primary_horizon": ph, "horizons": hs,
         "per_horizon": {str(h): per[h] for h in hs},
     }
     STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
-    RANK_META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("rank 模型訓練：各窗 rank-IC %s",
+    _rank_meta_path(band).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("rank 模型訓練[%s]：各窗 rank-IC %s", band or "main",
                 {h: (per[h].get("rank_ic") if per[h].get("trained") else per[h].get("reason")) for h in hs})
     return meta
 
 
-def score_rank(candidates: list[dict[str, Any]]) -> dict[str, float]:
-    """報酬 rank 打分：回 symbol→預測殘差報酬分數（過 rank_ic_gate 的窗才納入，否則空 dict）。
-
-    多窗以 rank-IC 為權重加權平均；用於重排偏多 watchlist（高分在前）。液態股多半不過 gate＝不重排。
-    """
-    if not settings.enable_rank_model or not candidates:
+def _score_rank_band(candidates: list[dict[str, Any]], band: str | None) -> dict[str, float]:
+    """單一流動性帶的 rank 打分：過該帶 rank_ic_gate 的窗以 rank-IC 加權平均；未過/無模型回空。"""
+    if not candidates:
         return {}
-    per = (_load_json(RANK_META_PATH) or {}).get("per_horizon") or {}
+    per = (_load_json(_rank_meta_path(band)) or {}).get("per_horizon") or {}
     usable = []
     for h in backtest.horizons():
         ric = (per.get(str(h)) or {}).get("rank_ic")
-        if ric is not None and ric >= settings.rank_ic_gate and _rank_model_path(h).exists():
+        if ric is not None and ric >= settings.rank_ic_gate and _rank_model_path(h, band).exists():
             usable.append((h, ric))
     if not usable:
-        rics = {h: (per.get(str(h)) or {}).get("rank_ic") for h in backtest.horizons()}
-        logger.info("rank 各窗 rank-IC=%s 皆未達 %.3f，本次不以 rank 重排", rics, settings.rank_ic_gate)
         return {}
     try:
         import joblib  # noqa: PLC0415
@@ -832,7 +860,7 @@ def score_rank(candidates: list[dict[str, Any]]) -> dict[str, float]:
         agg: dict[str, float] = {c["symbol"]: 0.0 for c in candidates}
         wsum = 0.0
         for h, ric in usable:
-            bundle = joblib.load(_rank_model_path(h))
+            bundle = joblib.load(_rank_model_path(h, band))
             model, cols = bundle["model"], bundle["columns"]
             X = pd.DataFrame([{c: r.get(c) for c in cols} for r in rows], columns=cols).astype(float)
             preds = model.predict(X)
@@ -841,8 +869,29 @@ def score_rank(candidates: list[dict[str, Any]]) -> dict[str, float]:
                 agg[c["symbol"]] += ric * float(p)
         return {sym: round(v / wsum, 4) for sym, v in agg.items()} if wsum > 0 else {}
     except Exception as exc:  # noqa: BLE001 — 打分失敗不可阻斷晨報
-        logger.warning("rank 打分失敗: %s", exc)
+        logger.warning("rank[%s] 打分失敗: %s", band or "main", exc)
         return {}
+
+
+def score_rank(candidates: list[dict[str, Any]]) -> dict[str, float]:
+    """報酬 rank 打分（WP2.3 帶分流）：候選 amount<50M 走小型股帶模型、其餘走主池，各過各自 gate。
+
+    小型股帶 OOS rank-IC 遠強於主池（baseline ~0.076 vs ~0.034），分流讓小型股候選吃到更強的排序
+    訊號。缺 _amount 的候選預設走主池。全帶皆不過 gate＝不重排（維持效率牆保護）。
+    """
+    if not settings.enable_rank_model or not candidates:
+        return {}
+    main: list[dict[str, Any]] = []
+    small: list[dict[str, Any]] = []
+    for c in candidates:
+        amt = (c.get("stock_entry", {}) or {}).get("_amount")
+        (small if (amt is not None and float(amt) < SMALLCAP_MAX_TWD) else main).append(c)
+    out: dict[str, float] = {}
+    out.update(_score_rank_band(main, None))
+    out.update(_score_rank_band(small, "smallcap"))
+    if not out:
+        logger.info("rank 主池/小型股帶各窗 rank-IC 皆未達 %.3f，本次不以 rank 重排", settings.rank_ic_gate)
+    return out
 
 
 def _latest_qlib_scores() -> dict[str, float]:
@@ -884,6 +933,67 @@ def score_qlib(candidates: list[dict[str, Any]]) -> dict[str, float]:
     except Exception as exc:  # noqa: BLE001 — 打分失敗不可阻斷晨報
         logger.warning("qlib 打分失敗: %s", exc)
         return {}
+
+
+def _meta_margin(meta_path: Path, gate: float, key: str) -> float:
+    """該模型『最佳過 gate 窗的 (metric − gate)』；沒過回 0。供 fuse_scores 當融合權重。"""
+    per = (_load_json(meta_path) or {}).get("per_horizon") or {}
+    best = 0.0
+    for h in backtest.horizons():
+        v = (per.get(str(h)) or per.get(h) or {}).get(key)
+        if v is not None and float(v) >= gate:
+            best = max(best, float(v) - gate)
+    return best
+
+
+def fuse_scores(candidates: list[dict[str, Any]]) -> tuple[dict[str, float], dict[str, float], dict[str, dict[str, float]]]:
+    """方向分數融合（WP2.2 / spec 019）：把**通過各自 gate** 的方向模型(edge/rank/qlib)分數
+    z-score 標準化後，以『OOS 指標超出 gate 的幅度』為權重加權平均 → 單一 fused 排序分數。
+
+    取代原本 edge→rank→qlib 逐一 sort 的 last-writer-wins：融合只發生一次、歸因明確。
+    回 (fused, weights, components)：
+      fused      = {symbol: 融合分數}（全不過 gate → {}，呼叫端不重排）
+      weights    = {model: 正規化權重}（和=1；空＝無模型過 gate）
+      components = {model: 原始分數 dict}（供 report JSON 向後相容保留個別欄位）
+    """
+    components = {
+        "edge": score_candidates(candidates),
+        "rank": score_rank(candidates),
+        "qlib": score_qlib(candidates),
+    }
+    if not candidates:
+        return {}, {}, components
+    margins = {
+        "edge": _meta_margin(EDGE_META_PATH, EDGE_MIN_AUC, "holdout_auc"),
+        # rank 取主池/小型股帶較強者（WP2.3 分流下，rank 分數可能來自任一帶）
+        "rank": max(_meta_margin(RANK_META_PATH, settings.rank_ic_gate, "rank_ic"),
+                    _meta_margin(RANK_META_SMALLCAP_PATH, settings.rank_ic_gate, "rank_ic")),
+        "qlib": _meta_margin(QLIB_META_PATH, settings.rank_ic_gate, "rank_ic"),
+    }
+    # 只納入「有分數（過 gate）且 margin>0」的方向模型
+    active = {m: s for m, s in components.items() if s and margins.get(m, 0.0) > 0.0}
+    if not active:
+        return {}, {}, components
+
+    import numpy as np  # noqa: PLC0415
+    syms = [c["symbol"] for c in candidates]
+    fused = {s: 0.0 for s in syms}
+    raw_w: dict[str, float] = {}
+    for m, scores in active.items():
+        vals = np.array([scores.get(s, np.nan) for s in syms], dtype=float)
+        mu, sd = np.nanmean(vals), np.nanstd(vals)
+        z = (vals - mu) / sd if sd > 0 else np.zeros_like(vals)
+        w = margins[m]
+        raw_w[m] = w
+        for s, zz in zip(syms, z):
+            fused[s] += w * (0.0 if np.isnan(zz) else float(zz))
+    wsum = sum(raw_w.values())
+    if wsum <= 0:
+        return {}, {}, components
+    fused = {s: round(v / wsum, 4) for s, v in fused.items()}
+    weights = {m: round(w / wsum, 4) for m, w in raw_w.items()}
+    logger.info("方向融合：過 gate 模型 %s、權重 %s", list(active), weights)
+    return fused, weights, components
 
 
 def _score_with(candidates: list[dict[str, Any]], meta_path: Path, model_path_fn,

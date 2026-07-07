@@ -179,17 +179,6 @@ def _candidate_list(result: Any, feats: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _apply_edge_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
-    """用本地 edge 模型替候選打成功機率並重排（高機率在前）；無模型則原序不動。"""
-    from reports import strategy_calibration
-
-    scores = strategy_calibration.score_candidates(_candidate_list(result, feats))
-    if scores:
-        result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
-        result.tw_caution.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
-    return scores
-
-
 def _apply_risk_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     """用本地回撤風險模型打「未來深跌機率」：標記偏多高風險 + 強化避雷側排序（與方向分離）。
 
@@ -203,16 +192,6 @@ def _apply_risk_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
         for w in result.tw_watchlist:
             w.risk_score = scores.get(w.symbol)        # 標記用，不重排偏多
         result.tw_caution.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
-    return scores
-
-
-def _apply_rank_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
-    """用報酬 rank 模型(殘差方向)重排偏多 watchlist（高分在前）；未過 rank-IC gate 則原序不動。"""
-    from reports import strategy_calibration
-
-    scores = strategy_calibration.score_rank(_candidate_list(result, feats))
-    if scores:
-        result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
     return scores
 
 
@@ -258,18 +237,6 @@ def _apply_sizing(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     return out, market_info
 
 
-def _apply_qlib_scores(result: Any, feats: dict[str, Any]) -> dict[str, float]:
-    """用 Qlib(Alpha158)離線方向分數重排偏多 watchlist；未過 rank-IC gate / 無離線檔則原序不動。
-
-    分數由獨立 qlib image 離線預算寫 JSON、serving 端只讀（見 strategy_calibration.score_qlib），
-    本函式永不 import qlib。仿 _apply_rank_scores。
-    """
-    from reports import strategy_calibration
-
-    scores = strategy_calibration.score_qlib(_candidate_list(result, feats))
-    if scores:
-        result.tw_watchlist.sort(key=lambda w: scores.get(w.symbol, 0.0), reverse=True)
-    return scores
 
 
 def _run_backtest_loop() -> dict[str, Any]:
@@ -296,6 +263,7 @@ def _run_backtest_loop() -> dict[str, Any]:
         strategy_calibration.train_edge_model()        # 各窗(5/20)訓練→寫 edge_meta
         strategy_calibration.train_risk_model()        # 回撤風險模型（與方向並存）→寫 risk_meta
         strategy_calibration.train_rank_model()        # 報酬 rank 模型（殘差方向，rank-IC）→寫 rank_meta
+        strategy_calibration.train_rank_model(band="smallcap")  # WP2.3 小型股帶 rank 模型（[5M,50M)，rank-IC 較強）
         strategy_calibration.train_meta_model()         # meta-labeling（該不該下手，triple-barrier）→寫 meta_meta
         strategy_calibration.backtest_market_regime()    # 市場恐慌 regime 回測（TAIFEX P/C）→寫 market_regime gate
         summary = strategy_calibration.rebuild()       # 再彙整：calibration 才會帶到最新 edge 狀態
@@ -354,36 +322,36 @@ def generate_morning_brief(
     logger.info("guardrail passed=%s errors=%s warnings=%s",
                 guardrail["passed"], guardrail["error_count"], guardrail["warning_count"])
 
-    # 策略自動修正（打分端）：本地 edge 模型替候選打成功機率並重排（guarded，無模型則不動）
+    # 策略自動修正（打分端）：risk 標記/避雷排序、meta 標把握度、方向 edge/rank/qlib 融合後重排一次。
     edge_scores: dict[str, float] = {}
+    rank_scores: dict[str, float] = {}
+    qlib_scores: dict[str, float] = {}
     risk_scores: dict[str, float] = {}
-    try:
-        edge_scores = _apply_edge_scores(result, feats)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("edge 打分/重排失敗（不影響晨報）: %s", exc)
+    meta_scores: dict[str, float] = {}
+    fused_scores: dict[str, float] = {}
+    fusion_weights: dict[str, float] = {}
     # 回撤風險：標記偏多高風險 + 強化避雷側排序（guarded，無模型則不動）
     try:
         risk_scores = _apply_risk_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("風險打分/標記失敗（不影響晨報）: %s", exc)
-    # 報酬 rank：殘差方向重排偏多 watchlist（guarded，未過 rank-IC gate 則不動）
-    rank_scores: dict[str, float] = {}
-    try:
-        rank_scores = _apply_rank_scores(result, feats)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("rank 打分/重排失敗（不影響晨報）: %s", exc)
-    # Qlib(Alpha158)離線方向分數：過 rank-IC gate 才重排偏多（guarded，無離線檔則不動）
-    qlib_scores: dict[str, float] = {}
-    try:
-        qlib_scores = _apply_qlib_scores(result, feats)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("qlib 打分/重排失敗（不影響晨報）: %s", exc)
-    # Meta-labeling：標把握度（P 訊號成功）供 sizing/過濾，不重排方向（guarded，未過 gate 則不動）
-    meta_scores: dict[str, float] = {}
+    # Meta-labeling：標把握度（供 sizing/過濾，不重排方向；guarded）
     try:
         meta_scores = _apply_meta_scores(result, feats)
     except Exception as exc:  # noqa: BLE001
         logger.warning("meta 打分失敗（不影響晨報）: %s", exc)
+    # 方向融合（WP2.2 / spec 019）：edge/rank/qlib 過各自 gate → z-score 加權平均 → 只重排偏多一次
+    # （取代原 edge→rank→qlib 逐一 sort 的 last-writer-wins；全不過 gate 則不動）。
+    try:
+        from reports import strategy_calibration as _sc
+        fused_scores, fusion_weights, _components = _sc.fuse_scores(_candidate_list(result, feats))
+        edge_scores = _components.get("edge", {})
+        rank_scores = _components.get("rank", {})
+        qlib_scores = _components.get("qlib", {})
+        if fused_scores:
+            result.tw_watchlist.sort(key=lambda w: fused_scores.get(w.symbol, 0.0), reverse=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("方向融合/重排失敗（不影響晨報）: %s", exc)
     # 部位 sizing + 市場曝險覆蓋：risk×meta 合成偏多書權重 ×市場恐慌曝險係數（guarded；兩道 gate 不過則不動）
     size_weights: dict[str, float] = {}
     market_fear: dict[str, Any] = {}
@@ -409,6 +377,10 @@ def generate_morning_brief(
         report["qlib_scores"] = qlib_scores
     if meta_scores:
         report["meta_scores"] = meta_scores
+    if fused_scores:
+        report["fused_scores"] = fused_scores       # WP2.2：方向融合後的排序分數
+    if fusion_weights:
+        report["fusion_weights"] = fusion_weights   # 各方向模型的正規化融合權重（超 gate 幅度）
     if size_weights:
         report["size_weights"] = size_weights
     if market_fear:
