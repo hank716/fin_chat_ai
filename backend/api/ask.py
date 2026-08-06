@@ -13,8 +13,10 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from ai import gemini_cache, gemini_client
-from ai.gemini_client import GeminiBadRequest, GeminiError, GeminiQuotaExceeded
-from ai.prompts import build_qa_static_block, build_qa_variable_block
+from ai.errors import LLMError, LLMQuotaExceeded
+from ai.gemini_client import GeminiBadRequest
+from ai.llm_client import get_decision_llm
+from ai.prompts import build_chat_system, build_qa_static_block, build_qa_variable_block
 from cost import tracker
 from processor import tw_features
 from reports import morning_brief
@@ -43,6 +45,28 @@ def _ondemand_symbols(question: str, known: set[str], limit: int = 3) -> dict:
 logger = logging.getLogger("ai-market-backend.ask")
 
 router = APIRouter(tags=["ask"])
+
+
+def _ask_gemini(rid: str, report: dict, variable_block: str) -> tuple[str, dict]:
+    """Gemini 問答路徑（降級 / `LLM_DECISION_PROVIDER=gemini` 時用）。
+
+    保留原本的明確快取（cachedContents）邏輯——那是 Gemini 專屬機制，與 Anthropic 的
+    `cache_control` 完全不同（前者按存放時間計費、後者按讀寫次數），不能互換。
+    """
+    from config import settings
+
+    static_block = build_qa_static_block(report)
+    cache_name = gemini_cache.get_or_create_qa_cache(rid, static_block, settings.gemini_model_qa)
+    if cache_name:
+        try:
+            # 明確快取命中：contents 只送變動尾段，靜態前綴已在快取內。
+            return gemini_client.generate_text(
+                variable_block, use_search=True, cached_content=cache_name
+            )
+        except GeminiBadRequest as exc:
+            # 明確快取與本次請求（如 google_search tools）不相容 → 降級為完整 prompt（仍吃隱式快取）。
+            logger.warning("明確快取不相容，降級為完整 prompt：%s", exc)
+    return gemini_client.generate_text(static_block + variable_block, use_search=True)
 
 
 class AskRequest(BaseModel):
@@ -134,37 +158,34 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     # 討論串記憶（一般頻道 conversation_id=None → 無記憶）
     from chat import history
     hist = history.load(req.conversation_id) if req.conversation_id else None
-    # 穩定前綴（規則+晨報+features，對同一 report 逐字不變）+ 每題變動尾段。前綴可吃隱式快取，
-    # 並可整塊放進明確快取（cachedContents）讓同日多題重用、命中部分以較低 cache 價計。
-    static_block = build_qa_static_block(report)
+    # 每題變動尾段（即時標的 + 基本面 + 討論串記憶 + 問題）。與之相對的「當日穩定前綴」
+    # （規則+晨報+features）由各 provider 自行處理：Claude 放 system（可選 cache_control）、
+    # Gemini 走 cachedContents。兩者機制不同，不要試圖共用。
     variable_block = build_qa_variable_block(
         req.question, on_demand=on_demand, fundamentals=fundamentals, history=hist
     )
-    cache_name = gemini_cache.get_or_create_qa_cache(rid, static_block, settings.gemini_model_qa)
+    llm = get_decision_llm()
     try:
-        if cache_name:
-            try:
-                # 明確快取命中：contents 只送變動尾段，靜態前綴已在快取內。
-                answer, usage = gemini_client.generate_text(
-                    variable_block, use_search=True, cached_content=cache_name
-                )
-            except GeminiBadRequest as exc:
-                # 明確快取與本次請求（如 google_search tools）不相容 → 降級為完整 prompt（仍吃隱式快取）。
-                logger.warning("明確快取不相容，降級為完整 prompt：%s", exc)
-                answer, usage = gemini_client.generate_text(
-                    static_block + variable_block, use_search=True
-                )
-        else:
-            answer, usage = gemini_client.generate_text(
-                static_block + variable_block, use_search=True
+        if llm.name == "anthropic":
+            # 決策層路徑（spec 022）：穩定前綴放 system（可選 cache_control），變動尾段放 user。
+            # 即時事實由 Claude 自己的 web_search/web_fetch 補——**刻意不**先跑一次 Gemini 召回：
+            # 召回層是「今日市場事件」導向（晨報的需求），對「2330 現在能不能買」這種即時
+            # 提問幫助有限，卻要多付一次 Gemini 呼叫與延遲。晨報才是召回層的服務對象。
+            answer, usage = llm.answer_question(
+                build_chat_system(report), variable_block, cacheable=True,
             )
-    except GeminiQuotaExceeded as exc:
-        raise HTTPException(status_code=503, detail=f"Gemini 配額用盡：{exc}") from exc
-    except GeminiError as exc:
-        raise HTTPException(status_code=503, detail=f"Gemini 暫時無法使用：{exc}") from exc
+            model_used = settings.claude_model_chat
+            grounded = False   # Anthropic 的搜尋計費走 usage.web_search_requests，非 Google grounding
+        else:
+            answer, usage = _ask_gemini(rid, report, variable_block)
+            model_used = settings.gemini_model_qa
+            grounded = True
+    except LLMQuotaExceeded as exc:
+        raise HTTPException(status_code=503, detail=f"LLM 配額用盡：{exc}") from exc
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=f"LLM 暫時無法使用：{exc}") from exc
 
-    # grounded=True：問答用 Google 搜尋，含 cache 折扣與 grounding 邊際費用
-    cost = tracker.cost_of_usage(usage, settings.gemini_model_qa, grounded=True)
+    cost = tracker.cost_of_usage(usage, model_used, grounded=grounded)
     tracker.record_cost(cost)
     day_total = tracker.today_total()
     logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",

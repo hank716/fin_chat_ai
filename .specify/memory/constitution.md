@@ -1,5 +1,21 @@
 <!--
 Sync Impact Report
+- Version change: 1.0.0 → 2.0.0 (MAJOR：重定義 Principle I)
+- Rationale: 決策品質瓶頸在 LLM 推理層；Gemini 的 google_search 覆蓋率（台股中文冷門標的）
+  仍是最佳召回來源，但其 grounding 會產生幻覺（錯置日期、把分析評論當新聞、引用內容農場），
+  單一供應商同時扮演召回與決策時無法自我稽核。改為分層 + 交叉查證（spec 022-llm-tiering）。
+- Principles changed:
+  I. Gemini-only LLM 分工 → **分層 LLM 供應商 + 交叉查證**（重定義，MAJOR）
+  II–VII 未變
+- Templates status:
+  ✅ .specify/templates/plan-template.md（Constitution Check 相容，無需改動）
+  ✅ .specify/templates/spec-template.md（相容）
+  ✅ .specify/templates/tasks-template.md（相容）
+- Downstream docs requiring sync:
+  ✅ specs/005-ai-gemini-layer/spec.md FR-004（標記 superseded by 022）
+  ✅ ARCHITECTURE.md §4.1
+- Deferred TODOs: none
+
 - Version change: (template) → 1.0.0
 - Ratification: 首次採用專案憲章（自 design_docs.md v1.1 + ARCHITECTURE.md 萃取）
 - Principles defined:
@@ -11,11 +27,6 @@ Sync Impact Report
   VI. 服務隔離（Docker Compose / Qlib 離線 gate）
   VII. Spec-Driven + Conventional Commits
 - Added sections: Technology Constraints; Development Workflow; Governance
-- Templates status:
-  ✅ .specify/templates/plan-template.md（Constitution Check 相容，無需改動）
-  ✅ .specify/templates/spec-template.md（相容）
-  ✅ .specify/templates/tasks-template.md（相容）
-- Deferred TODOs: none
 -->
 
 # fin_chat_ai Constitution
@@ -25,16 +36,34 @@ AI 多市場研究助理。本憲章把 `design_docs.md` v1.1 與 `ARCHITECTURE.
 
 ## Core Principles
 
-### I. Gemini-only LLM 分工
-LLM 供應商 MUST 唯一為 Google Gemini；不得在 serving 路徑引入其他付費 LLM。資料計算、feature
-運算 MUST NOT 呼叫 LLM——先產生 structured JSON，僅「摘要、分析、報告生成」才交給 Gemini
-（design_docs §25.1）。若需 Claude/其他模型輔助分析，走「複製 prompt」離線流程，不接入 serving。
-理由：成本可控、行為可預測、guardrail 可套用於單一輸出管線。
+### I. 分層 LLM 供應商 + 交叉查證
+LLM 分為兩層，職責 MUST 分離（spec 022-llm-tiering）：
+
+- **廣度召回層** MUST 唯一為 Google Gemini + `google_search` grounding。此層 MUST NOT 做分析、
+  方向判斷或選股，只輸出**帶 source URL 的事實線索**；無來源的線索 MUST 丟棄。
+- **決策層** MUST 為單一可設定供應商（現為 Anthropic Claude），負責推理、選股與報告生成。
+  此層 MUST 具備獨立查證能力，且 MUST NOT 無條件採信召回層輸出——寫入報告的外部事件
+  MUST 先開啟其來源 URL 核對，查證結果 MUST 落地成可稽核欄位（`fact_checks`）。
+  未通過查證的事件 MUST NOT 進入敘事或新聞摘要。
+
+資料計算、feature 運算 MUST NOT 呼叫任何 LLM——先產生 structured JSON，僅「摘要、分析、報告
+生成」才交給 LLM（design_docs §25.1）。決策層 MUST 保留退回召回層供應商的降級路徑，
+使無人值守的每日晨報不因單一供應商故障而整份失敗。
+
+理由：召回與決策由同一模型擔任時無法自我稽核，會把幻覺洗成「有來源」的假事實；分層後
+兩者互為對照，且查證通過率成為可量測指標。成本仍受 Principle II 約束。
 
 ### II. 成本紀律（每月上限）
-Gemini 花費 MUST 受硬性預算約束：每月上限 NT$600（現況 ~NT$66.76，見 README 成本現況），並保有
-每日、每使用者查詢上限（design_docs §25.2）。查詢前 MUST 檢查預算；逾限即擋。cache 命中 MUST NOT
-重複呼叫 Gemini。任何新功能若增加 LLM 呼叫，plan 階段 MUST 估算成本增量並說明如何回收（快取/降頻）。
+LLM 花費（召回層 + 決策層合計）MUST 受硬性預算約束：**每月上限 NT$600**、每日 NT$30，
+並保有每使用者查詢上限（design_docs §25.2）。`.env` 的 `MONTHLY_COST_LIMIT_TWD` /
+`DAILY_COST_LIMIT_TWD` MUST 與本條文一致——2026-08-06 曾發現 `.env` 被調到 800 與憲章不符，
+已改回 600；日後兩邊若再分歧，**以本條文為準**。互動查詢前 MUST 檢查預算；逾限即擋。
+cache 命中 MUST NOT 重複呼叫 LLM。任何新功能若增加 LLM 呼叫，plan 階段 MUST 估算成本增量
+並說明如何回收（快取/降頻）。
+
+預算優先序 MUST 為「每日晨報 > 互動問答」：晨報為產品本體且無人值守，不受 `check_budget()`
+攔截；互動問答為次要，額度耗盡時被擋是**預期行為**而非故障。連網查證工具（web_fetch /
+web_search）MUST 設 `max_uses` 上限，不得把單次呼叫的成本上界交由模型自行決定。
 
 ### III. Guardrail Fail-Closed (NON-NEGOTIABLE)
 輸出護欄 MUST fail-closed：Symbol Guard 等驗證失敗時 MUST 擋下輸出，不得因驗證異常而放行
@@ -85,4 +114,4 @@ MUST 放 pCloud，採 on-demand restore、避免大量下載（§11）。理由�
   PATCH＝措辭/釐清。修訂 MUST 更新下方日期並在檔首 Sync Impact Report 記錄。
 - 所有 plan/PR 審查 MUST 驗證憲章遵循；放寬 Principle III（fail-closed）或 II（成本）之變更需明確理由與審查。
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-03
+**Version**: 2.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-08-06

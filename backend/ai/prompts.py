@@ -95,7 +95,7 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 - 全文繁體中文。
 
 嚴格規則：
-1. 數字（價格/報酬/籌碼/資券比）只能引用 features JSON，**不得捏造**。features.web_context 是用 Google 搜尋查證的近兩日市場重大事件（已附來源），可作為總經/政策/地緣/產業事件的事實依據，用於「跨市場連動」「風險」「重要新聞」等段落；features.news 為個股新聞。除這些來源外不得自行杜撰事件。
+1. 數字（價格/報酬/籌碼/資券比）只能引用 features JSON，**不得捏造**。facts pack（下方另附）是由檢索模型用 Google 搜尋抓來的**待查證線索**，須依「查證契約」核對後才可引用，可作為總經/政策/地緣/產業事件的事實依據，用於「跨市場連動」「風險」「重要新聞」等段落；features.news 為個股新聞。除這些來源外不得自行杜撰事件。
 2. 跨市場關係一律用「**可能影響 / 傾向 / 連動 / 值得觀察**」，不可斷言因果或預測漲跌。
 3. 這是輔助決策工具（非下單系統），**可以**給方向看法（偏多/偏空/中性）與**技術面目標價、止損價**，由使用者自行判斷。tw_watchlist（偏多）/ tw_caution（偏空或風險）每檔要有：thesis（看法與理由）、signals（具體訊號帶數值，如「投信連買4日」「外資5日買超115526張」「站上MA20」「資券比42%偏高」）、**target_price（目標價）與 stop_loss（止損價）**——以支撐/壓力/均線/近期區間為依據、用收盤價同單位的數字字串，並在 thesis 說明依據。uncertainty 寫需驗證之處。
    但**仍不得**使用誇大保證語（「保證獲利/穩賺/無風險/一定會漲/一定會跌」），也不得捏造數據。目標價/止損是技術面參考，非保證。
@@ -275,6 +275,97 @@ def build_brief_structuring_prompt(analysis: str, features: dict[str, Any]) -> s
         "- 禁誇大保證語。\n\n"
         f"分析稿：\n```\n{analysis}\n```\n\n"
         f"features：\n```json\n{features_json}\n```"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 決策層（spec 022）：查證契約 + 單次結構化產出。
+# ─────────────────────────────────────────────────────────────────────────
+
+VERIFICATION_CONTRACT = """## 查證契約（違反視為失敗）
+
+下方 facts pack 的每一則 event 都是**另一個模型用搜尋抓來的待查證線索**，不是既定事實。
+它常見的錯誤有：把日期張冠李戴、把分析評論當成新聞事件、引用到內容農場或轉載站、
+把舊聞當成今天發生的事。**你不得無條件採信。**
+
+凡是你打算寫進晨報的外部事件（不含 features 內的市場數據），必須：
+
+1. 先用 `web_fetch` 打開該則 event 的 url，確認原文**確實支持**該敘述（人事時地物、數字、日期）。
+2. 把結果記進 `fact_checks`，每則一筆：
+   - `confirmed`：原文支持該敘述。**只有這種才可以寫進 narrative 或 news_digest。**
+   - `contradicted`：原文與該敘述不符（日期錯、數字錯、根本不是那件事）。
+   - `unverifiable`：連結打不開、需登入、或原文找不到這個說法。
+   `note` 寫你實際看到什麼（例：「原文日期為 2026-07-28，非線索所稱的 08-05」）。
+3. `contradicted` 與 `unverifiable` 的內容**一律不得**出現在 narrative、news_digest 或
+   watchlist 的 thesis/signals。若該議題重要，改在 risks 說明「有此傳聞但無法查證」。
+4. 若某個明顯重要的議題 facts pack 完全沒涵蓋，才用 `web_search` 自行補查；
+   補查到的內容同樣要 fetch 原文查證並記進 fact_checks。
+
+不要為了讓 fact_checks 好看而全部標 confirmed——如實記錄不符與查不到的，才是這個欄位的用途。
+"""
+
+
+def _features_json(features: dict[str, Any]) -> str:
+    """features → prompt 用 JSON。
+
+    `sort_keys=True` 讓同一份 features 的位元組穩定（prompt caching 的前提）；
+    不用 `indent`——純空白就多燒 10–15% input token，決策層是 Opus 費率，這筆不小。
+    """
+    return json.dumps(_budget_features(features), ensure_ascii=False, sort_keys=True)
+
+
+def build_decision_system() -> str:
+    """決策層 system prompt：寫作規範 + 段落定義 + 查證契約。
+
+    `FULL_BRIEF_RULES` 是產品規格（寫作風格、8 個 section、watchlist 規則），與供應商無關，
+    原樣沿用；只在後面接上查證契約。
+    """
+    return f"{FULL_BRIEF_RULES}\n\n{VERIFICATION_CONTRACT}"
+
+
+def build_decision_prompt(
+    features: dict[str, Any], facts_json: str, calibration: str | None = None,
+) -> str:
+    """決策層 user prompt：features（數據事實）+ facts pack（待查證線索）+ 回測校準。"""
+    facts_block = (
+        f"facts pack（**待查證線索**，依查證契約處理後才可引用）：\n"
+        f"```json\n{facts_json}\n```\n\n"
+        if facts_json and facts_json != "[]"
+        else "facts pack：本次無外部線索，僅依 features 作答，"
+             "不得自行杜撰外部事件（fact_checks 回空陣列）。\n\n"
+    )
+    return (
+        f"以下是今日的市場數據（features，唯一的數值事實來源，不得捏造）：\n"
+        f"```json\n{_features_json(features)}\n```\n\n"
+        f"{facts_block}"
+        f"{_calibration_block(calibration).lstrip()}\n\n"
+        f"請輸出符合 schema 的結構化晨報 JSON。data_as_of 用 features.as_of。"
+    )
+
+
+CHAT_VERIFICATION_RULES = """## 即時事實的查證
+
+回答涉及「今天發生什麼」「最新報價/消息」這類即時事實時：
+- 若下方提供了 facts pack（檢索模型抓來的**待查證線索**），先用 `web_fetch` 打開其 url
+  確認原文支持該說法，再引用；打不開或內容不符就**不要引用**，並明說「查不到可靠來源」。
+- facts pack 沒涵蓋而問題又需要時，才用 `web_search` 自行查，同樣要確認來源可靠。
+- 引用時在句中標出媒體與日期。**寧可說「查不到」，也不要轉述未經查證的傳聞。**
+"""
+
+
+def build_chat_system(report: dict[str, Any]) -> str:
+    """問答 system prompt（當日穩定前綴：規則 + 晨報 + features）。
+
+    對同一份報告逐字不變，故可整塊掛 cache_control（若啟用；預設關閉見 config 註解）。
+    features 用 sort_keys 序列化，避免鍵序抖動打掉快取前綴。
+    """
+    markdown = report.get("markdown", "")
+    features_json = json.dumps(report.get("features", {}), ensure_ascii=False, sort_keys=True)
+    return (
+        f"{QA_RULES}\n\n"
+        f"{CHAT_VERIFICATION_RULES}\n\n"
+        f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
+        f"可引用的 features JSON：\n```json\n{features_json}\n```"
     )
 
 

@@ -38,7 +38,9 @@ def _fast_and_keyed(monkeypatch):
     monkeypatch.setattr(gc.monitor, "mark", lambda *a, **k: None)
     # 關掉 tenacity 真實等待（否則 exponential backoff 會讓測試 sleep 數秒）
     gc._generate_json.retry.sleep = lambda *_: None
-    gc.generate_text.retry.sleep = lambda *_: None
+    # spec 022：retry 移到真正發 HTTP 的 generate_text_with_candidate；
+    # generate_text 退化成附來源的薄包裝，不再自己掛一層。
+    gc.generate_text_with_candidate.retry.sleep = lambda *_: None
 
 
 def _sequence_post(statuses, body):
@@ -99,4 +101,24 @@ def test_usage_of_is_not_retry_wrapped():
     assert not hasattr(gc._usage_of, "retry")
     # 而真正發 HTTP 的兩個函式應有 retry
     assert hasattr(gc._generate_json, "retry")
-    assert hasattr(gc.generate_text, "retry")
+    assert hasattr(gc.generate_text_with_candidate, "retry")
+    # generate_text 只是加來源註腳的薄包裝——若它也掛 retry 就變回疊層的 4×4 次（spec 022）
+    assert not hasattr(gc.generate_text, "retry")
+
+
+def test_generate_text_with_candidate_returns_grounding(monkeypatch):
+    """召回層要拿 candidate 取完整 groundingChunks；generate_text 的前 4 筆截斷版不夠用。"""
+    body = {
+        "candidates": [{
+            "content": {"parts": [{"text": "hi"}]},
+            "groundingMetadata": {"groundingChunks": [
+                {"web": {"uri": f"https://e{i}.test", "title": f"t{i}"}} for i in range(6)
+            ]},
+        }],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+    }
+    fake, _ = _sequence_post([200], body)
+    monkeypatch.setattr(gc.httpx, "post", fake)
+    _text, _usage, cand = gc.generate_text_with_candidate("p", use_search=True)
+    chunks = cand["groundingMetadata"]["groundingChunks"]
+    assert len(chunks) == 6      # 完整清單，未被截成 4 筆

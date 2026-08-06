@@ -110,21 +110,45 @@
 
 ## 4. 關鍵設計細節
 
-### 4.1 LLM 層：Gemini-only + 給 Claude 的可複製 prompt
+### 4.1 LLM 層：分層供應商 + 交叉查證（憲章 2.0.0 Principle I、[specs/022-llm-tiering]）
 
-系統內**只用 Gemini**（每日例行、即時查詢都走它）。保留一層薄抽象方便日後換供應商，但**不接 Claude API**。
+LLM 分兩層，職責分離。**召回層負責「找得到」，決策層負責「信不信」。**
+
+```
+[ features JSON (本地 parquet, 零 LLM) ]──┐
+[ 回測校準 calibration ]─────────────────┼──> Claude Opus 5 ──> BriefResult
+[ Gemini facts pack + source URLs ]──────┘    ├ web_fetch  (開召回層引用的 URL 查證)
+        ↑ 廣度召回，標記為「待查證」            ├ web_search (補漏 / 交叉比對)
+                                              └ structured outputs（單次呼叫）
+```
+
+| 層 | 供應商 | 職責 | 明確禁止 |
+|---|---|---|---|
+| 廣度召回 | Gemini + `google_search` | 產出帶 source URL 的事實線索 | 不做分析、方向判斷、選股 |
+| 決策 + 查證 | Claude（可設定，預設 `claude-opus-5`） | 推理、選股、報告生成、逐條查證 | 不無條件採信召回層 |
+
+**為什麼要查證**：Gemini 的 grounding 會產生幻覺——錯置日期、把分析評論當成新聞、引用內容農場。
+決策層若無條件採信，等於把幻覺洗成「有來源」的假事實。`web_fetch` 只能抓取**已出現在對話裡的
+URL**，因此決策層只能去開召回層真的引用過的連結，無法自己生一個 URL，天然形成稽核閉環。
+查證結果落地成 `fact_checks`，讓「召回層有沒有在胡說」成為每日可量測的數字。
 
 ```python
 # backend/ai/llm_client.py
-class LLMClient(Protocol):
-    def analyze(self, prompt: str, input_json: dict) -> "AnalysisResult": ...
+class DecisionLLM(Protocol):
+    def draft_brief(self, features, facts, calibration) -> tuple[BriefDraft, Usage]: ...
+    def answer_question(self, static_block, variable_block, facts) -> tuple[str, Usage]: ...
 
-class GeminiClient(LLMClient): ...   # 唯一實作；example: gemini-flash 省成本
+def get_decision_llm() -> DecisionLLM:   # 依 settings.llm_decision_provider 分派
 ```
 
-**Claude 的角色**：Report Builder 產出一段「給其他 AI 的分析包」（design §8.3 模板），放在 Web 報告底部，使用者**自己決定**是否複製貼到 Claude 做深度財報分析。系統不自動呼叫 Claude，零額外 API 成本。
+**降級路徑**：決策層失敗（配額/過載/refusal）時退回 Gemini 既有的兩段式 grounded 晨報，
+晨報是無人值守的每日排程，不得因換供應商而變成可能整份失敗。
 
-`.env`：`GEMINI_API_KEY`、`GEMINI_MODEL`、`DAILY_COST_LIMIT_TWD`（每日 Gemini 成本上限，可調）。
+**Claude 的另一個角色（不變）**：Report Builder 仍產出「給其他 AI 的分析包」（design §8.3）放在
+Web 報告底部，供使用者手動複製貼到任何 AI 做深度分析。那是離線流程，與 serving 無關。
+
+`.env`：`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`、`LLM_DECISION_PROVIDER`、`CLAUDE_MODEL_DECISION`、
+`DAILY_COST_LIMIT_TWD` / `MONTHLY_COST_LIMIT_TWD`（全站 LLM 成本上限，晨報優先於問答）。
 
 ### 4.2 資料層：移植 finflow_ai 的抓取層，落地用 parquet（核心策略）
 

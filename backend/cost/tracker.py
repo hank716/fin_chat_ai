@@ -52,9 +52,33 @@ _GROUNDING_FREE_PER_MONTH = 5000
 _GROUNDING_USD_PER_REQUEST = 14.0 / 1000
 _USD_TWD = 32.0                         # 固定估算匯率；TWD 大幅波動時再調整
 
+# ─────────────────────────────────────────────────────────────────────────
+# 決策層（Anthropic）費率（spec 022）。USD / 百萬 token，欄位＝(input, output, cached_read)。
+# 不分級距。⚠️ 這張表若沒加，`claude-opus-5` 會落到下面的 flash 分支（$1.50/$9.00）而
+# **低估約 3 倍**——而 check_budget() 正是靠這個數字擋 /ask，等於預算閘門靜默失效。
+# ─────────────────────────────────────────────────────────────────────────
+_PRICING_ANTHROPIC = {
+    "claude-opus-5": (5.00, 25.00, 0.50),
+    "claude-sonnet-5": (3.00, 15.00, 0.30),
+    "claude-haiku-4-5": (1.00, 5.00, 0.10),
+}
+_ANTHROPIC_DEFAULT = _PRICING_ANTHROPIC["claude-opus-5"]   # 未知 claude-* 一律以最貴檔估（寧可高估）
+# 快取寫入 premium（倍率，乘在 input 價上）：5 分鐘 1.25×、1 小時 2×。
+_CACHE_WRITE_MULTIPLIER = {"5m": 1.25, "1h": 2.0}
+# Anthropic web_search：按次計價。⚠️ 這個數字**必須**對照 Anthropic 定價頁核實後再改，
+# 不要憑印象填；估錯會讓查證成本失真（web_fetch 不另計費，其內容以 input token 計）。
+_WEB_SEARCH_USD_PER_REQUEST = 10.0 / 1000
+
+
+def _is_anthropic(model: str) -> bool:
+    return model.lower().startswith("claude-")
+
 
 def _rates(model: str, prompt_tokens: int) -> tuple[float, float, float]:
     m = model.lower()
+    # 決策層先判：`claude-opus-5` 不含 lite/pro/flash 任何字串，落到下面會被當 flash 算。
+    if _is_anthropic(m):
+        return _PRICING_ANTHROPIC.get(m, _ANTHROPIC_DEFAULT)
     # 先判 lite（"flash-lite" 也含 "flash"，順序不可顛倒），再判 pro，最後才 flash。
     if "lite" in m:
         fam = "flash-lite"
@@ -73,28 +97,42 @@ def estimate_cost_twd(
     *,
     cached_tokens: int = 0,
     tool_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_ttl: str = "5m",
 ) -> float:
     """單次呼叫的 token 費用（TWD）。
 
-    input_tokens＝promptTokenCount（**已含** cached），cached_tokens＝其中命中快取的部分。
-    級距依 prompt 總量判定；命中快取部分以 cache 價、其餘 input 以 input 價、output 以 output 價。
-    tool_tokens（toolUsePromptTokenCount）與 promptTokenCount 分開回傳，按 input 價計。
+    ⚠️ **兩家供應商的 input_tokens 語意相反**，這裡依 model 分流，不可共用同一套減法：
+    - Gemini：`promptTokenCount` **已含** cached → 要減掉 cached 才是未命中的部分。
+    - Anthropic：`input_tokens` **不含** cache（cache_read/cache_creation 各自獨立回報）
+      → 直接相減會把快取部分重複扣掉，低估成本。
+
+    cache_write_tokens（Anthropic `cache_creation_input_tokens`）以 input 價 × premium 計：
+    5m 為 1.25×、1h 為 2×。Gemini 的明確快取是按存放時間計費的另一套模型，不走這裡。
     """
     rate_in, rate_out, rate_cached = _rates(model, input_tokens)
-    billable_input = max(input_tokens - cached_tokens, 0) + max(tool_tokens, 0)
+    if _is_anthropic(model):
+        billable_input = max(input_tokens, 0) + max(tool_tokens, 0)
+    else:
+        billable_input = max(input_tokens - cached_tokens, 0) + max(tool_tokens, 0)
+    write_multiplier = _CACHE_WRITE_MULTIPLIER.get(cache_ttl, 1.25)
     usd = (
         billable_input / 1e6 * rate_in
         + max(cached_tokens, 0) / 1e6 * rate_cached
+        + max(cache_write_tokens, 0) / 1e6 * rate_in * write_multiplier
         + output_tokens / 1e6 * rate_out
     )
     return round(usd * _USD_TWD, 6)
 
 
 def cost_of_usage(usage: dict, model: str, *, grounded: bool = False) -> float:
-    """把單次 Gemini 回傳的 usageMetadata（_usage_of 整理過）換算成 TWD。
+    """把單次 LLM 回傳的 usage（各 client 的 `_usage_of` 整理過）換算成 TWD。
 
-    這就是「Token 計數器中間件」：唯一將 token 用量 → 金額 的入口，含 cache 折扣、>200k 級距、
-    grounding。grounded=True（用到 Google 搜尋）時，加上當次 grounding 的邊際費用（超免費額才計）。
+    這就是「Token 計數器中間件」：唯一將 token 用量 → 金額 的入口，含 cache 折扣/premium、
+    Gemini >200k 級距、Google grounding、Anthropic web_search 按次計費。
+
+    grounded=True（Gemini 用到 Google 搜尋）時加上當次 grounding 邊際費用（超免費額才計）。
+    決策層的連網查證則走 usage 內的 `web_search_requests`，兩者計價方式不同、不可混用。
     """
     cost = estimate_cost_twd(
         int(usage.get("input_tokens", 0)),
@@ -102,9 +140,14 @@ def cost_of_usage(usage: dict, model: str, *, grounded: bool = False) -> float:
         model=model,
         cached_tokens=int(usage.get("cached_tokens", 0)),
         tool_tokens=int(usage.get("tool_tokens", 0)),
+        cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
+        cache_ttl=str(usage.get("cache_ttl", "5m")),
     )
     if grounded:
         cost += record_grounding_request()
+    searches = int(usage.get("web_search_requests", 0))
+    if searches > 0:
+        cost += round(searches * _WEB_SEARCH_USD_PER_REQUEST * _USD_TWD, 6)
     return round(cost, 6)
 
 

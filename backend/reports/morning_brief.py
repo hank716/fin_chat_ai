@@ -1,9 +1,10 @@
-"""每日跨市場晨報管線（M1 step 5）。
+"""每日跨市場晨報管線（M1 step 5；LLM 分層見 spec 022）。
 
-跑完整黃金路徑：yfinance 抓 → parquet 落地 → intermarket features → Gemini 結構化分析
+跑完整黃金路徑：yfinance 抓 → parquet 落地 → intermarket features
+→ ①Gemini 廣度召回待查證線索 → ②Claude 決策 + web_fetch 逐條查證 → 本地 ML 打分/融合/sizing
 → md/json/copy-for-ai → 存檔 storage/reports/{id}.json|.md。
 
-M1 範圍：美股指數 + BTC。台股/籌碼/新聞/guardrail 後續里程碑加入。
+②失敗時退回 Gemini 兩段式（無人值守的每日排程不得因換供應商而整份失敗）。
 """
 from __future__ import annotations
 
@@ -17,8 +18,10 @@ from zoneinfo import ZoneInfo
 
 import universe
 from config import settings
-from ai import gemini_client
-from ai.llm_client import get_llm_client
+from ai import retrieval
+from ai.errors import LLMError
+from ai.llm_client import get_decision_llm
+from ai.schemas import BriefResult
 from cost import tracker
 from data_sources import news_loader, yfinance_loader
 from data_sources.backfill_tw_market import backfill_market
@@ -273,6 +276,59 @@ def _run_backtest_loop() -> dict[str, Any]:
     return summary
 
 
+def _fetch_facts(feats: dict[str, Any]) -> tuple[retrieval.FactsPack, dict[str, int]]:
+    """廣度召回層：Gemini + google_search 產待查證線索（spec 022 WP2）。
+
+    關掉 `enable_facts_pack` 就回空——決策層仍可只憑 features 產出晨報，只是少了外部事件。
+    """
+    if not settings.enable_facts_pack:
+        return retrieval.FactsPack(), {}
+    as_of = str(feats.get("as_of") or datetime.now(ZoneInfo(settings.tz)).date())
+    return retrieval.fetch_facts(as_of)
+
+
+def _decide_brief(
+    feats: dict[str, Any], facts: retrieval.FactsPack, calibration_text: str,
+) -> tuple[BriefResult, dict[str, int], str, list[dict[str, Any]]]:
+    """決策 + 查證層：回 (BriefResult, usage, provider, fact_checks)。
+
+    主路徑是 Claude 單次呼叫（含 web_fetch 查證）；任何 LLMError（配額/過載/refusal/
+    schema 不符）都退回 Gemini 兩段式。**降級是必要的**：晨報每天無人值守自動跑，
+    不能因為換了決策供應商就變成有機率整份產不出來。
+
+    降級時 `fact_checks` 為空——這在報告裡是誠實的訊號：看到 provider=gemini-fallback
+    且 fact_checks 空，就知道那天的外部事件沒有經過查證。
+    """
+    primary = get_decision_llm()
+    try:
+        draft, usage = primary.draft_brief(feats, facts.to_prompt_json(), calibration_text or None)
+        return (
+            _draft_to_result(draft),
+            usage,
+            primary.name,
+            [fc.model_dump() for fc in draft.fact_checks],
+        )
+    except LLMError as exc:
+        if primary.name == "gemini":
+            raise  # 已經是降級路徑本身，沒有更下層可退
+        logger.warning("決策層(%s)失敗，降級回 Gemini 兩段式：%s", primary.name, exc)
+
+    fallback = get_decision_llm("gemini")
+    draft, usage = fallback.draft_brief(feats, facts.to_prompt_json(), calibration_text or None)
+    return _draft_to_result(draft), usage, "gemini-fallback", []
+
+
+def _draft_to_result(draft: Any) -> BriefResult:
+    """BriefDraft → BriefResult。
+
+    draft 刻意不含 risk_score / conviction_score / size_weight（那三個由後面的本地 ML
+    打分階段填），轉過來時它們就是 None，正好是 BriefResult 的預設值。
+    """
+    payload = draft.model_dump(mode="json")
+    payload.pop("fact_checks", None)   # 稽核用，不進 BriefResult（另外落地到報告 JSON）
+    return BriefResult.model_validate(payload)
+
+
 def generate_morning_brief(
     raw_query: str | None = None, *, refresh_tw: bool = True,
     push_discord: bool = False, publish: bool = False,
@@ -287,35 +343,57 @@ def generate_morning_brief(
     if calibration_text:
         logger.info("注入策略校準（%d 字）至晨報 prompt", len(calibration_text))
 
-    # 晨報主推理即時連網：兩段式 ①PRO+Google搜尋 寫分析稿 → ②Flash 純格式化成結構
-    result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(
-        feats, calibration=calibration_text or None
+    # ── LLM 分層（spec 022）──
+    # ① 廣度召回：Gemini + google_search 產「待查證線索」（不做分析、不挑股）
+    facts, facts_usage = _fetch_facts(feats)
+    # 刻意**不**塞進 feats["web_context"]：那樣同一份線索會在 prompt 裡出現兩次
+    # （features JSON 內一次、facts pack 一次），白燒 token。稽核用的副本走 report["facts"]。
+
+    # ② 決策 + 查證：Claude 單次呼叫，用 web_fetch 逐條開啟上面的 URL 核對後才採信。
+    #    失敗時退回 Gemini 兩段式——晨報是無人值守的每日排程，不得因換供應商而整份失敗。
+    result, decision_usage, provider, fact_checks = _decide_brief(feats, facts, calibration_text)
+
+    facts_cost = (
+        tracker.cost_of_usage(facts_usage, settings.gemini_model_qa, grounded=True)
+        if facts_usage else 0.0
+    )
+    decision_model = (
+        settings.claude_model_decision if provider == "anthropic" else settings.gemini_model_brief
     )
     brief_cost = round(
-        # ①研究階段 grounded（PRO+Google 搜尋）②格式化階段純文字（Flash，不連網）
-        tracker.cost_of_usage(research_usage, settings.gemini_model_brief, grounded=True)
-        + tracker.cost_of_usage(struct_usage, settings.gemini_model_qa),
+        facts_cost + tracker.cost_of_usage(decision_usage, decision_model),
         4,
     )
     usage = {
-        "input_tokens": research_usage["input_tokens"] + struct_usage["input_tokens"],
-        "output_tokens": research_usage["output_tokens"] + struct_usage["output_tokens"],
+        "input_tokens": facts_usage.get("input_tokens", 0) + decision_usage.get("input_tokens", 0),
+        "output_tokens": (facts_usage.get("output_tokens", 0)
+                          + decision_usage.get("output_tokens", 0)),
     }
     tracker.record_cost(brief_cost)
 
     # 偏空清單偶爾被模型整段略過 → 用 movers 實際數據補齊（在 guardrail 前，符號必在資料範圍內）
     _backfill_caution(result, feats)
 
+    month_total = tracker.month_total()
+    monthly_limit = float(settings.monthly_cost_limit_twd)
     cost_info = {
         "brief_twd": brief_cost,
         "tokens": usage,
         "month": tracker.current_month(),
-        "month_total_twd": tracker.month_total(),       # 全站本月累計（晨報+所有問答）
+        "month_total_twd": month_total,                  # 全站本月累計（晨報+所有問答）
         "day_total_twd": tracker.today_total(),          # 全站今日累計
-        "monthly_limit_twd": float(settings.monthly_cost_limit_twd),
+        "monthly_limit_twd": monthly_limit,
+        # 晨報**不受** check_budget() 攔截（那只擋 /ask），所以它可能把月額度吃到見底、
+        # 讓接下來整個月的問答全被擋。這是「晨報優先」的刻意取捨，但不該無聲發生——
+        # 把剩餘額度攤在報告上，超支前就看得見。
+        "month_remaining_twd": round(monthly_limit - month_total, 4),
+        "decision_provider": provider,
     }
-    logger.info("晨報 Gemini 花費 NT$%.4f（本月累計 NT$%.2f）",
-                brief_cost, cost_info["month_total_twd"])
+    logger.info("晨報 LLM 花費 NT$%.4f（provider=%s 本月累計 NT$%.2f / 上限 NT$%.0f）",
+                brief_cost, provider, month_total, monthly_limit)
+    if cost_info["month_remaining_twd"] <= 0:
+        logger.warning("本月 LLM 額度已用罄（NT$%.2f/NT$%.0f）——問答將被擋，晨報仍會續跑",
+                       month_total, monthly_limit)
 
     # guardrail：驗證未超出資料範圍、無捏造/禁語，清理後再 render
     result, guardrail = run_guardrails(result, feats)
@@ -367,6 +445,11 @@ def generate_morning_brief(
     report = build_report_dict(result, generated_at=generated_at, raw_query=raw_query)
     report["guardrail"] = guardrail
     report["cost"] = cost_info
+    report["decision_provider"] = provider
+    # 召回層線索與逐條查證結果（spec 022 稽核閉環）。fact_checks 的
+    # contradicted/unverifiable 比例＝「召回層有沒有在胡說」的每日可量測數字。
+    report["facts"] = [e.model_dump() for e in facts.events]
+    report["fact_checks"] = fact_checks
     if edge_scores:
         report["edge_scores"] = edge_scores
     if risk_scores:

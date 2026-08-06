@@ -23,16 +23,39 @@ class Settings(BaseSettings):
     tz: str = "Asia/Taipei"
     log_level: str = "info"
 
-    # ── LLM（Gemini-only）──
+    # ── LLM 廣度召回層（Gemini + google_search；憲章 2.0.0 Principle I）──
+    # 此層只產「帶 source URL 的待查證線索」，不做分析/選股——那是決策層的事。
     gemini_api_key: str = ""
     gemini_model: str = "gemini-flash-latest"        # 泛用/相容用預設
-    gemini_model_brief: str = "gemini-pro-latest"     # 每日晨報用 PRO latest（品質優先）
-    gemini_model_qa: str = "gemini-flash-latest"      # 平日問答用 Flash latest（快又省）
+    gemini_model_brief: str = "gemini-pro-latest"     # 降級路徑的晨報模型（決策層失效時才用）
+    gemini_model_qa: str = "gemini-flash-latest"      # 檢索/降級問答用 Flash latest（快又省）
     # 意圖分類用最便宜檔：問答前先用它過濾掉「與財務無關」的閒聊，省下大 prompt 與 grounding。
+    # 刻意**不**改用決策層模型——這是 trivial gate、fail-open、token 極少，用 Opus 是純浪費。
     gemini_model_classifier: str = "gemini-flash-lite-latest"
     enable_intent_filter: bool = True                 # 啟用意圖分類器（非財務問題直接婉拒）
     daily_cost_limit_twd: int = 30                    # 每日全站總花費上限（晨報+問答）
     monthly_cost_limit_twd: int = 600                 # 每月全站總花費上限（對齊後台預算）
+
+    # ── LLM 決策 + 查證層（spec 022-llm-tiering）──
+    # 吃 features + facts pack + 校準做推理選股，並用 web_fetch 逐條查證召回層引用的 URL。
+    anthropic_api_key: str = ""
+    llm_decision_provider: str = "anthropic"          # anthropic | gemini（gemini＝降級/A-B 對照）
+    claude_model_decision: str = "claude-opus-5"      # 晨報決策（品質優先，晨報是產品本體）
+    claude_model_chat: str = "claude-opus-5"          # 問答；用量稀疏，需省時可降 claude-sonnet-5
+    claude_effort: str = "high"                       # low|medium|high|xhigh|max（thinking 深度）
+    claude_max_tokens: int = 32000                    # thinking + 回答**合計**上限；必須 streaming
+    # 連網查證工具用量上限＝成本閘門（憲章 II）。沒有上限等於把每日成本交給模型自由心證。
+    claude_brief_fetch_uses: int = 12                 # 晨報：查證用 web_fetch 次數上限
+    claude_brief_search_uses: int = 5                 # 晨報：補漏用 web_search 次數上限
+    claude_chat_fetch_uses: int = 4                   # 問答：互動情境對延遲敏感，壓低
+    claude_chat_search_uses: int = 2
+    claude_max_continuations: int = 5                 # pause_turn 續跑上限（防無窮迴圈）
+    # ⚠️ 預設關閉是刻意的：Anthropic 快取寫入付 1.25×(5m)/2×(1h)、讀取才 0.1×，
+    # 5m 需 2 次、1h 需 3 次以上讀取才回本。chat 用量稀疏時每題都是「寫入後未被讀取就過期」
+    # ＝純虧。只有觀察到「同一份晨報 5 分鐘內被問 ≥2 題」才值得開。
+    enable_claude_prompt_cache: bool = False
+    claude_cache_ttl: str = "5m"                      # 5m | 1h
+    enable_facts_pack: bool = True                    # 關閉＝退回純 Gemini 舊路徑
 
     # ── Gemini 明確快取（cachedContents API；同日問答重用當日靜態 context 省 input token）──
     enable_gemini_explicit_cache: bool = True

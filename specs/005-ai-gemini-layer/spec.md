@@ -83,9 +83,15 @@ parse 成 pydantic 模型（`BriefResult` / `AnalysisResult`），供 guardrail 
 ### Functional Requirements
 
 - **FR-001**: 系統 MUST 以 `responseMimeType=application/json`+`responseSchema` 產生結構化輸出並 parse 成 pydantic 模型。
-- **FR-002**: 系統 MUST 提供兩段式 grounded 晨報（PRO+search 研究 → Flash 格式化），回兩段 usage。
+- **FR-002**: ~~系統 MUST 提供兩段式 grounded 晨報（PRO+search 研究 → Flash 格式化），回兩段 usage。~~
+  **（superseded by [022-llm-tiering]）** 兩段式的存在僅為繞過「`responseSchema` 不能與 `tools` 並用」；
+  決策層改由具 structured outputs 的供應商單次產出後，第②段格式化已移除。Gemini 路徑保留此行為
+  作為降級用途。
 - **FR-003**: 系統 MUST 依 HTTP 狀態分流例外：503 可重試、429/400 fail-fast，並由對應例外型別表達。
-- **FR-004**: 系統 MUST 為唯一 LLM 供應商（Gemini）；`llm_client` 保留薄 Protocol 但 MUST NOT 接 Claude API（憲章 I、ARCHITECTURE §4.1）。
+- **FR-004**: ~~系統 MUST 為唯一 LLM 供應商（Gemini）；`llm_client` 保留薄 Protocol 但 MUST NOT 接 Claude API。~~
+  **（superseded by [022-llm-tiering]；憲章 2.0.0 Principle I 已重定義為分層供應商）**
+  改為：Gemini MUST 為**廣度召回層**的唯一供應商（`google_search` grounding），MUST NOT 承擔決策
+  （分析、選股、報告生成）；決策層由 `llm_client.get_decision_llm()` 依設定分派，Gemini 實作保留為降級路徑。
 - **FR-005**: 意圖分類器 MUST fail-open（任何錯誤回 True），MUST NOT 成為問答單點故障。
 - **FR-006**: 明確快取建立失敗（門檻不足/API 拒絕/redis 故障）MUST 優雅降級回 None，問答不中斷。
 - **FR-007**: 引用明確快取的請求 MUST NOT 重送 tools（tools 已放進 cachedContent）。

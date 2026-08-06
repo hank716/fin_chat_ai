@@ -17,6 +17,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from activity import monitor
 from config import settings
 
+from .errors import LLMBadRequest, LLMError, LLMQuotaExceeded, LLMUnavailable
 from .prompts import (
     build_brief_research_prompt,
     build_brief_structuring_prompt,
@@ -48,19 +49,21 @@ SEARCH_TOOLS = [
 ]
 
 
-class GeminiError(RuntimeError):
+# 供應商中立例外（spec 022）：Gemini 例外改為繼承之，既有 `except GeminiError` 呼叫點行為不變，
+# 但上層也能用 `except LLMError` 同時涵蓋 Gemini 與 Claude 兩條路徑。
+class GeminiError(LLMError):
     pass
 
 
-class GeminiUnavailable(GeminiError):
+class GeminiUnavailable(GeminiError, LLMUnavailable):
     """暫時性過載（503）→ 值得 retry。"""
 
 
-class GeminiQuotaExceeded(GeminiError):
+class GeminiQuotaExceeded(GeminiError, LLMQuotaExceeded):
     """配額用盡（429）→ 短時間內不會恢復，fail-fast 不 retry。"""
 
 
-class GeminiBadRequest(GeminiError):
+class GeminiBadRequest(GeminiError, LLMBadRequest):
     """請求被拒（400）→ 不 retry。明確快取與 tools 不相容等情況會回 400，呼叫端據此降級。"""
 
 
@@ -206,13 +209,16 @@ def analyze_full_brief_grounded(
 
 
 @_gemini_retry
-def generate_text(
+def generate_text_with_candidate(
     prompt: str, model: str | None = None, *, use_search: bool = False,
     cached_content: str | None = None,
-) -> tuple[str, dict[str, int]]:
-    """純文字生成（Discord Q&A / 市場情境）。use_search=True 啟用 Google 搜尋 grounding，
-    並把來源附在文末。cached_content 非 None 時帶明確快取（contents 只放變動部分）。
-    回 (文字, token usage)。503 會重試、429/400 fail-fast。"""
+) -> tuple[str, dict[str, int], dict]:
+    """同 `generate_text`，但**額外回傳 candidate 原始 dict**。
+
+    召回層（`retrieval.py`）需要完整的 `groundingMetadata.groundingChunks` 才能把每則線索
+    對應回來源 URL；`generate_text` 只把前 4 筆來源貼在文末（那是給 Discord 看的），
+    對查證來說不夠——漏掉的 URL 等於決策層沒辦法查證那條事實。
+    """
     if not settings.gemini_api_key.strip():
         raise GeminiError("GEMINI_API_KEY 未設定")
     url = f"{BASE_URL}/{model or settings.gemini_model_qa}:generateContent"
@@ -243,18 +249,21 @@ def generate_text(
     cand = candidates[0]
     parts = cand.get("content", {}).get("parts", [])
     text = "".join(p.get("text", "") for p in parts).strip()
+    return text, _usage_of(body), cand
+
+
+def generate_text(
+    prompt: str, model: str | None = None, *, use_search: bool = False,
+    cached_content: str | None = None,
+) -> tuple[str, dict[str, int]]:
+    """純文字生成（Discord Q&A / 市場情境）。use_search=True 啟用 Google 搜尋 grounding，
+    並把來源附在文末。cached_content 非 None 時帶明確快取（contents 只放變動部分）。
+    回 (文字, token usage)。503 會重試、429/400 fail-fast。"""
+    text, usage, cand = generate_text_with_candidate(
+        prompt, model=model, use_search=use_search, cached_content=cached_content,
+    )
     if use_search:
         srcs = _grounding_sources(cand)
         if srcs:
             text += "\n\n🔎 來源：" + "　".join(f"[{t}]({u})" for t, u in srcs[:4])
-    return text, _usage_of(body)
-
-
-def fetch_web_context(date_str: str, model: str | None = None) -> tuple[str, dict[str, int]]:
-    """用 Google 搜尋抓近兩日影響台/美/加密市場的重大事件（附來源），給晨報強化事實基礎。"""
-    prompt = (
-        f"用 Google 搜尋，列出 {date_str} 前後最新、會影響台股／美股／加密貨幣市場的重大事件"
-        f"（總經數據、央行/利率、政策、地緣政治、重大企業或產業消息）。"
-        f"繁體中文條列 5–8 點，每點一句話並標日期，只列最近兩天、務必基於可信來源。"
-    )
-    return generate_text(prompt, model=model or settings.gemini_model_qa, use_search=True)
+    return text, usage

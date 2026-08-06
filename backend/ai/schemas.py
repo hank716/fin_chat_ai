@@ -92,6 +92,79 @@ class BriefResult(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Draft 模型（spec 022）：決策層 structured outputs 的目標型別。
+#
+# 與上方 BriefResult 的兩點刻意差異：
+# 1. **排除** risk_score / conviction_score / size_weight —— 那三個由本地 ML 事後填。
+#    讓 LLM 產出只會幻覺一組數字再被覆蓋，白費 token 又混淆歸因。
+# 2. **每個欄位都 required、可為 null 者用 `| None`** —— structured outputs 要求
+#    schema 有完整 required 與 additionalProperties:false；pydantic 的預設值會讓欄位
+#    從 required 掉出去，故這裡不給預設值。
+# ─────────────────────────────────────────────────────────────────────────
+
+FactVerdict = Literal["confirmed", "contradicted", "unverifiable"]
+
+
+class FactCheck(BaseModel):
+    """對 facts pack 某則線索的查證結果（spec 022 的稽核閉環）。
+
+    `contradicted` / `unverifiable` 的來源不得寫進 narrative 或 news_digest，
+    只能在 risks 提及資料限制。這讓「召回層有沒有在胡說」變成每日可量測的數字。
+    """
+
+    url: str
+    verdict: FactVerdict
+    note: str  # 查證發現了什麼（原文支持/不符之處/打不開的原因）
+
+
+class EvidenceDraft(BaseModel):
+    label: str
+    value: str
+    source_ref: str | None
+
+
+class BriefSectionDraft(BaseModel):
+    title: str
+    narrative: str
+    evidence: list[EvidenceDraft]
+
+
+class WatchItemDraft(BaseModel):
+    symbol: str
+    name: str
+    sector: str | None
+    thesis: str
+    signals: list[str]
+    target_price: str | None
+    stop_loss: str | None
+    uncertainty: str | None
+
+
+class NewsDigestItemDraft(BaseModel):
+    title: str
+    source: str
+    date: str
+    url: str | None
+    takeaway: str
+    uncertainty: str | None
+
+
+class BriefDraft(BaseModel):
+    """決策層單次呼叫的完整輸出（取代 Gemini 兩段式的 ①分析稿 + ②格式化）。"""
+
+    headline: str
+    sections: list[BriefSectionDraft]
+    tw_watchlist: list[WatchItemDraft]
+    tw_caution: list[WatchItemDraft]
+    risks: list[str]
+    follow_ups: list[str]
+    news_digest: list[NewsDigestItemDraft]
+    fact_checks: list[FactCheck]
+    data_as_of: str
+    sources: list[str]
+
+
 _EVIDENCE_SCHEMA = {
     "type": "array",
     "items": {
