@@ -79,9 +79,14 @@ def reset_client() -> None:
 def build_tools(fetch_uses: int, search_uses: int) -> list[dict[str, Any]]:
     """組出連網查證工具清單。
 
-    `max_uses` 是**成本閘門**（憲章 II）：沒有上限等於把單次呼叫的成本上界交給模型自由心證。
+    `max_uses` 是**成本閘門**（憲章 II），而且遠比直覺貴：server-side 工具的迴圈跑在 API
+    內部，**每一輪都會把累積的對話重送一次**。晨報的 features JSON 約 55k tokens，
+    `max_uses=12` 就代表那 55k 最多被重送 12 次——2026-08-06 實測跑出 NT$73.83/篇。
+    所以「多查一頁」的成本 ≈ 一頁內容 + 一次完整前綴重送，不是只有前者。
+
     但也不能調太低——模型會在查證到一半被切斷，產出「部分查證」的結果，比不查證更糟，
-    因為它看起來像查過了。
+    因為它看起來像查過了。真正的解法是搭配 prompt caching（見 `generate_structured`），
+    讓那個被重送的前綴以 0.1× 計價。
 
     ⚠️ 清單內容與**順序**必須跨請求逐字穩定：tools 渲染在 prompt 最前面
     （`tools` → `system` → `messages`），任何增減或換序都會讓整個 prompt cache 前綴失效。
@@ -94,7 +99,8 @@ def build_tools(fetch_uses: int, search_uses: int) -> list[dict[str, Any]]:
             "type": "web_fetch_20260209",
             "name": "web_fetch",
             "max_uses": int(fetch_uses),
-            "max_content_tokens": 8000,  # 防單頁爆量（一頁新聞可能數千 token）
+            # 防單頁爆量：一篇長報導可上萬 token，而它會跟著後續每一輪重送。
+            "max_content_tokens": int(settings.claude_fetch_max_content_tokens),
         },
         {
             "type": "web_search_20260209",
@@ -263,12 +269,27 @@ def generate_structured(
     user_prompt: str,
     model: str,
     tools: list[dict[str, Any]],
+    cacheable: bool = False,
 ) -> tuple[BaseModel, dict[str, int]]:
-    """帶連網查證工具跑一次，並把結果驗成指定 pydantic 模型。"""
+    """帶連網查證工具跑一次，並把結果驗成指定 pydantic 模型。
+
+    `cacheable=True` 會在 user block 尾端放 `cache_control`，讓
+    `tools` → `system` → `user`（含 features JSON）整段前綴進快取。
+
+    **這在有 server-side 工具時是最大的省錢槓桿**：工具迴圈跑在 API 內部，同一個前綴會被
+    重讀每一輪。寫入付 1.25×(5m) 一次，之後每輪讀 0.1×——與問答那邊「稀疏使用不要開快取」
+    的結論相反，但成立的是同一條規則：**看同一份前綴會被讀幾次**。
+
+    前綴要能命中，序列化必須位元組穩定：features JSON 已用 `sort_keys=True` 且不帶 indent，
+    prompt 內也不可出現時間戳或 per-request id（見 prompts.build_decision_prompt）。
+    """
+    user_block: dict[str, Any] = {"type": "text", "text": user_prompt}
+    if cacheable:
+        user_block["cache_control"] = {"type": "ephemeral", "ttl": settings.claude_cache_ttl}
     message, usage = _run(
         model=model,
         system=[{"type": "text", "text": system}],
-        messages=[{"role": "user", "content": user_prompt}],
+        messages=[{"role": "user", "content": [user_block]}],
         tools=tools,
         output_schema=schema_of(model_cls),
     )

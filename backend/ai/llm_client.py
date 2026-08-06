@@ -64,6 +64,9 @@ class AnthropicDecisionLLM:
             tools=claude_client.build_tools(
                 settings.claude_brief_fetch_uses, settings.claude_brief_search_uses,
             ),
+            # 與問答相反、預設開：連網查證的工具迴圈會把這個 ~55k 前綴在單一請求內重讀多輪，
+            # 快取讀取 0.1× 正好打在成本主體上。
+            cacheable=settings.enable_claude_brief_prompt_cache,
         )
         return draft, usage  # type: ignore[return-value]
 

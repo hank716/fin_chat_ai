@@ -101,12 +101,30 @@ def _attach_urls(events: list[dict[str, Any]], fallback_urls: list[str]) -> list
     return out
 
 
+def _model_chain() -> list[str]:
+    """召回層的模型嘗試順序：便宜的先、pro 當最後手段。
+
+    `gemini-flash-latest` 是最熱門的檔位，實測會整段回 503
+    （"This model is currently experiencing high demand"），而同一組 tenacity 重試打的
+    是**同一個過載模型**，退避再久也沒用——2026-08-06 的 E2E 就是 4 次全 503。
+    換模型比多等有效得多，故失敗後改試別的檔位。
+    """
+    chain = [
+        settings.gemini_model_qa,          # flash：預設，便宜且夠用
+        settings.gemini_model_classifier,  # flash-lite：更便宜，通常較不壅塞
+        settings.gemini_model_brief,       # pro：最後手段（貴，但檔位不同、較可能有容量）
+    ]
+    seen: set[str] = set()
+    return [m for m in chain if m and not (m in seen or seen.add(m))]
+
+
 def fetch_facts(date_str: str) -> tuple[FactsPack, dict[str, int]]:
     """用 Gemini + google_search 抓近兩日市場重大事件，回 (FactsPack, usage)。
 
-    模型走 **flash 而非 pro**：純檢索不需要 pro 的推理力，省一半成本。
-    任何失敗都回空 FactsPack（不 raise）——召回層是加值資訊，不該讓晨報整個掛掉；
-    決策層拿不到 facts 時仍可只憑 features 產出晨報。
+    模型走 **flash 而非 pro**：純檢索不需要 pro 的推理力，省一半成本；flash 過載時
+    依 `_model_chain()` 換檔位重試。全部失敗才回空 FactsPack（不 raise）——召回層是
+    加值資訊，不該讓晨報整個掛掉；決策層拿不到 facts 時仍可只憑 features 產出晨報，
+    但那次的查證閉環等於沒有被驗證到（report 的 fact_checks 會是空的）。
     """
     prompt = (
         f"{_RETRIEVAL_RULES}\n\n"
@@ -114,25 +132,32 @@ def fetch_facts(date_str: str) -> tuple[FactsPack, dict[str, int]]:
         f"（總經數據、央行/利率、政策、地緣政治、重大企業或產業消息）。\n"
         f"只輸出符合 schema 的 JSON。"
     )
-    try:
-        raw, usage, candidate = _generate_with_sources(prompt)
-    except LLMError as exc:
-        logger.warning("召回層抓取失敗（晨報改為只憑 features 產出）：%s", exc)
-        return FactsPack(), {}
+    last_exc: LLMError | None = None
+    for model in _model_chain():
+        try:
+            raw, usage, candidate = _generate_with_sources(prompt, model)
+        except LLMError as exc:
+            last_exc = exc
+            logger.warning("召回層 %s 失敗，改試下一個檔位：%s", model, str(exc)[:160])
+            continue
+        events = _attach_urls(raw.get("events") or [], _all_grounding_urls(candidate))
+        logger.info("召回層取得 %d 則待查證線索（date=%s model=%s）", len(events), date_str, model)
+        return FactsPack(events=events), usage
 
-    events = _attach_urls(raw.get("events") or [], _all_grounding_urls(candidate))
-    logger.info("召回層取得 %d 則待查證線索（date=%s）", len(events), date_str)
-    return FactsPack(events=events), usage
+    logger.warning("召回層所有檔位都失敗（晨報改為只憑 features 產出，本次無查證）：%s", last_exc)
+    return FactsPack(), {}
 
 
-def _generate_with_sources(prompt: str) -> tuple[dict[str, Any], dict[str, int], dict]:
+def _generate_with_sources(
+    prompt: str, model: str,
+) -> tuple[dict[str, Any], dict[str, int], dict]:
     """和 `gemini_client._generate_json` 相同，但額外把 candidate 原樣回傳給我們取 grounding。
 
     Gemini 的 responseSchema 不能與 tools 並用，所以這裡**不帶 schema**、改用純文字 +
     「只輸出 JSON」的指示，再自己 parse——這正是 Gemini 路徑那個兩段式的成因。
     """
     text, usage, candidate = gemini_client.generate_text_with_candidate(
-        prompt, model=settings.gemini_model_qa, use_search=True,
+        prompt, model=model, use_search=True,
     )
     cleaned = text.strip()
     # 模型偶爾會把 JSON 包在 ```json fence 裡

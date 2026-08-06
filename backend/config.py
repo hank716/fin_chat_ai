@@ -45,15 +45,23 @@ class Settings(BaseSettings):
     claude_effort: str = "high"                       # low|medium|high|xhigh|max（thinking 深度）
     claude_max_tokens: int = 32000                    # thinking + 回答**合計**上限；必須 streaming
     # 連網查證工具用量上限＝成本閘門（憲章 II）。沒有上限等於把每日成本交給模型自由心證。
-    claude_brief_fetch_uses: int = 12                 # 晨報：查證用 web_fetch 次數上限
-    claude_brief_search_uses: int = 5                 # 晨報：補漏用 web_search 次數上限
+    # ⚠️ 每多一次 fetch，成本不只是「多一頁內容」——server-side 工具迴圈在 API 內部進行，
+    # **每一輪都會把累積的對話重送一次**。features JSON 約 55k tokens，max_uses=12 就代表
+    # 那 55k 最多被重送 12 次。2026-08-06 實測：12 次上限跑出 NT$73.83/篇（≈NT$1,550/月）。
+    claude_brief_fetch_uses: int = 5                  # 晨報：查證用 web_fetch 次數上限
+    claude_brief_search_uses: int = 3                 # 晨報：補漏用 web_search 次數上限
     claude_chat_fetch_uses: int = 4                   # 問答：互動情境對延遲敏感，壓低
     claude_chat_search_uses: int = 2
+    claude_fetch_max_content_tokens: int = 3000       # 單頁擷取上限（防長文把 input 撐爆）
     claude_max_continuations: int = 5                 # pause_turn 續跑上限（防無窮迴圈）
-    # ⚠️ 預設關閉是刻意的：Anthropic 快取寫入付 1.25×(5m)/2×(1h)、讀取才 0.1×，
+    # ⚠️ 問答預設關閉是刻意的：Anthropic 快取寫入付 1.25×(5m)/2×(1h)、讀取才 0.1×，
     # 5m 需 2 次、1h 需 3 次以上讀取才回本。chat 用量稀疏時每題都是「寫入後未被讀取就過期」
     # ＝純虧。只有觀察到「同一份晨報 5 分鐘內被問 ≥2 題」才值得開。
     enable_claude_prompt_cache: bool = False
+    # 晨報則**相反、預設開**：server-side 工具迴圈在單一請求內把同一個 ~55k 前綴重讀十幾次，
+    # 這正是 prompt caching 最划算的場景（寫一次 1.25×，之後每輪讀 0.1×）。
+    # 同一個機制、相反的結論，差別只在「同一份前綴會被讀幾次」。
+    enable_claude_brief_prompt_cache: bool = True
     claude_cache_ttl: str = "5m"                      # 5m | 1h
     enable_facts_pack: bool = True                    # 關閉＝退回純 Gemini 舊路徑
 

@@ -177,6 +177,35 @@ def test_tools_are_stable_and_fetch_has_no_citations():
     assert fetch["max_content_tokens"] > 0
 
 
+def test_brief_prompt_is_cached_by_default(monkeypatch):
+    """晨報要開快取——工具迴圈在單一請求內把同一個 ~55k 前綴重讀多輪，讀取只要 0.1×。
+
+    2026-08-06 實測：沒開快取 + max_uses=12 → NT$73.83/篇（≈NT$1,550/月）。
+    """
+    monkeypatch.setattr(cc.settings, "claude_cache_ttl", "5m")
+    client = _install(monkeypatch, [_msg(text='{"headline": "hi"}')])
+    cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                           model="claude-opus-5", tools=[], cacheable=True)
+    block = client.messages.calls[0]["messages"][0]["content"][0]
+    assert block["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+
+def test_no_cache_control_when_not_cacheable(monkeypatch):
+    client = _install(monkeypatch, [_msg(text='{"headline": "hi"}')])
+    cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                           model="claude-opus-5", tools=[], cacheable=False)
+    block = client.messages.calls[0]["messages"][0]["content"][0]
+    assert "cache_control" not in block
+
+
+def test_fetch_content_cap_is_configurable(monkeypatch):
+    """單頁擷取上限：長報導會跟著後續每一輪工具迴圈重送，故要能壓。"""
+    monkeypatch.setattr(cc.settings, "claude_fetch_max_content_tokens", 3000)
+    fetch = cc.build_tools(5, 3)[0]
+    assert fetch["max_content_tokens"] == 3000
+    assert fetch["max_uses"] == 5
+
+
 def test_no_code_execution_tool():
     """_20260209 版內建 dynamic filtering，再宣告 code_execution 會有兩個執行環境。"""
     types = {t["type"] for t in cc.build_tools(4, 2)}
@@ -199,6 +228,37 @@ def test_web_search_requests_counted_from_content(monkeypatch):
 
 
 # ── schema ──────────────────────────────────────────────────────────────
+
+def test_source_ref_hint_lists_only_real_paths():
+    """2026-08-06 實測：模型會捏造看似合理的路徑，guardrail 整條丟掉（37 條丟 14 條）。
+
+    提示裡列的必須是 features 內**真實存在**的葉節點，且要明說「不確定就留 null」——
+    guardrail 對 null 是放行的，猜錯才會被丟。
+    """
+    from ai import prompts
+
+    features = {
+        "as_of": "2026-08-05",
+        "tw": {"index": {"close": 24000.0, "ma20": 23600.0},
+               "stocks": {"2330": {"close": 1200.0, "amount": 5e9}}},
+        "us_crypto": {"assets": {"SOX": {"return_20d_pct": 22.1}}},
+    }
+    hint = prompts._source_ref_hint(features)
+    assert "features.tw.index.close" in hint
+    assert "null" in hint                      # 明說可以留空
+    assert "整條 evidence 被丟棄" in hint       # 明說捏造的後果
+    # 列出的每一條都必須真的解析得到
+    from guardrails.verify import _MISSING, _resolve
+    listed = [ln[2:] for ln in hint.splitlines() if ln.startswith("- features.")]
+    assert listed, "應該要列出真實路徑範例"
+    for path in listed:
+        assert _resolve(features, path) is not _MISSING, f"提示列了不存在的路徑 {path}"
+
+
+def test_source_ref_hint_empty_features_is_noop():
+    from ai import prompts
+    assert prompts._source_ref_hint({}) == ""
+
 
 def test_schema_is_strictified():
     """structured outputs 要求每個 object 節點都有 additionalProperties: false。"""

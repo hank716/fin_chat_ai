@@ -65,21 +65,12 @@ def test_verified_starts_empty():
     assert "verified" not in retrieval.FactsPack(events=out).to_prompt_json()
 
 
-def test_fetch_facts_disabled_returns_empty(monkeypatch):
-    """召回層失敗不得拖垮晨報——決策層只憑 features 仍要能產出。"""
-    monkeypatch.setattr(retrieval.gemini_client, "generate_text_with_candidate",
-                        lambda *a, **k: (_ for _ in ()).throw(retrieval.LLMError("boom")))
-    pack, usage = retrieval.fetch_facts("2026-08-06")
-    assert pack.events == []
-    assert usage == {}
-
-
 def test_fetch_facts_parses_fenced_json(monkeypatch):
     """模型偶爾會把 JSON 包在 ```json fence 裡。"""
     body = '```json\n{"events": [{"claim": "A", "date": "2026-08-05", "source": "s"}]}\n```'
     monkeypatch.setattr(
         retrieval.gemini_client, "generate_text_with_candidate",
-        lambda *a, **k: (body, {"input_tokens": 5}, _chunks("https://a.test")),
+        lambda prompt, model, use_search: (body, {"input_tokens": 5}, _chunks("https://a.test")),
     )
     pack, usage = retrieval.fetch_facts("2026-08-06")
     assert [e.claim for e in pack.events] == ["A"]
@@ -91,3 +82,48 @@ def test_fetch_facts_parses_fenced_json(monkeypatch):
 def test_retrieval_rules_forbid_analysis(banned):
     """召回層 prompt 必須明文禁止做分析/選股——那是決策層的工作。"""
     assert banned in retrieval._RETRIEVAL_RULES
+
+
+# ── 503 韌性：換檔位比多等有效（2026-08-06 實測 flash 整段 503，4 次重試全滅）──
+
+def test_model_chain_is_cheap_first_and_deduped(monkeypatch):
+    monkeypatch.setattr(retrieval.settings, "gemini_model_qa", "gemini-flash-latest")
+    monkeypatch.setattr(retrieval.settings, "gemini_model_classifier", "gemini-flash-lite-latest")
+    monkeypatch.setattr(retrieval.settings, "gemini_model_brief", "gemini-pro-latest")
+    assert retrieval._model_chain() == [
+        "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest",
+    ]
+    # 設成同一個模型時不該重試同一檔位三次
+    monkeypatch.setattr(retrieval.settings, "gemini_model_classifier", "gemini-flash-latest")
+    monkeypatch.setattr(retrieval.settings, "gemini_model_brief", "gemini-flash-latest")
+    assert retrieval._model_chain() == ["gemini-flash-latest"]
+
+
+def test_fetch_facts_falls_through_to_next_model(monkeypatch):
+    """flash 過載時要換檔位，而不是放棄——重試同一個 503 的模型退避再久也沒用。"""
+    tried: list[str] = []
+    ok_body = '{"events": [{"claim": "A", "date": "2026-08-05", "source": "s"}]}'
+
+    def fake(prompt, model, use_search):  # noqa: ARG001
+        tried.append(model)
+        if len(tried) < 3:
+            raise retrieval.LLMError("Gemini 503 overloaded")
+        return ok_body, {"input_tokens": 7}, _chunks("https://a.test")
+
+    monkeypatch.setattr(retrieval.gemini_client, "generate_text_with_candidate",
+                        lambda prompt, model, use_search: fake(prompt, model, use_search))
+    pack, usage = retrieval.fetch_facts("2026-08-06")
+    assert len(tried) == 3, "前兩個檔位失敗後應繼續往下試"
+    assert len(tried) == len(set(tried)), "不該重複試同一個檔位"
+    assert [e.claim for e in pack.events] == ["A"]
+    assert usage["input_tokens"] == 7
+
+
+def test_fetch_facts_all_models_fail_degrades_quietly(monkeypatch):
+    """全滅時回空包、不 raise——晨報仍要能只憑 features 產出。"""
+    def _always_503(prompt, model, use_search):  # noqa: ARG001
+        raise retrieval.LLMError("Gemini 503 overloaded")
+
+    monkeypatch.setattr(retrieval.gemini_client, "generate_text_with_candidate", _always_503)
+    pack, usage = retrieval.fetch_facts("2026-08-06")
+    assert pack.events == [] and usage == {}

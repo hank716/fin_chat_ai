@@ -10,7 +10,7 @@
   </div>
 </div>
 <div class="meta">
-  引用來源 {{ report.sources|length }}{% if report.cost %}　•　💰 本篇報告花費 NT${{ '%.4f'|format(report.cost.brief_twd) }}{% endif %}
+  引用來源 {{ report.sources|length }}{% if report.cost %}　•　💰 本篇報告花費 NT${{ '%.4f'|format(report.cost.brief_twd) }}{% if report.cost.decision_twd is defined %}（召回 NT${{ '%.4f'|format(report.cost.retrieval_twd or 0) }} + 決策 NT${{ '%.4f'|format(report.cost.decision_twd or 0) }}）{% endif %}{% endif %}{% if report.decision_provider %}　•　🧠 決策層 {{ report.decision_provider }}{% endif %}
 </div>
 
 {% if report.raw_query %}

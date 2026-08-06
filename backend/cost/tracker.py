@@ -167,6 +167,25 @@ def _grounding_key() -> str:
     return f"cost:grounding:{_now():%Y%m}"
 
 
+# spec 022：分層後合計金額看不出 Gemini（廣度召回）與 Anthropic（決策查證）各佔多少，
+# 而那正是換供應商後最需要盯的數字。彙總桶維持不變（預算閘門仍看它），另開 per-provider 桶。
+PROVIDERS = ("gemini", "anthropic")
+
+
+def provider_of(model: str) -> str:
+    """由 model 名稱判供應商。與 `_rates()` 用同一個 `claude-` 前綴判準，兩者不可分歧。"""
+    return "anthropic" if _is_anthropic(model) else "gemini"
+
+
+def _provider_month_key(provider: str) -> str:
+    return f"cost:month:{_now():%Y%m}:{provider}"
+
+
+def month_by_provider() -> dict[str, float]:
+    """本月各供應商累計（TWD）。桶不存在＝0，不影響首頁渲染。"""
+    return {p: _get(_provider_month_key(p)) for p in PROVIDERS}
+
+
 def current_month() -> str:
     return _now().strftime("%Y-%m")
 
@@ -202,14 +221,22 @@ def record_grounding_request() -> float:
         return 0.0
 
 
-def record_cost(cost_twd: float) -> None:
-    """把一筆花費累加到當日與當月全站桶（日桶 48h、月桶 70d TTL）。"""
+def record_cost(cost_twd: float, provider: str | None = None) -> None:
+    """把一筆花費累加到當日與當月全站桶（日桶 48h、月桶 70d TTL）。
+
+    `provider`（"gemini" / "anthropic"）另外累進 per-provider 月桶，供首頁拆分顯示。
+    **彙總桶一定會寫**——預算閘門看的是它，不能因為漏帶 provider 就少計。
+    """
     try:
         dk, mk = _day_key(), _month_key()
         redis_client.incrbyfloat(dk, cost_twd)
         redis_client.expire(dk, 48 * 3600)
         redis_client.incrbyfloat(mk, cost_twd)
         redis_client.expire(mk, 70 * 24 * 3600)
+        if provider in PROVIDERS:
+            pk = _provider_month_key(provider)
+            redis_client.incrbyfloat(pk, cost_twd)
+            redis_client.expire(pk, 70 * 24 * 3600)
     except Exception as exc:  # noqa: BLE001
         logger.warning("記錄成本失敗: %s", exc)
 

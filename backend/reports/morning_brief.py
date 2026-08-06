@@ -360,16 +360,18 @@ def generate_morning_brief(
     decision_model = (
         settings.claude_model_decision if provider == "anthropic" else settings.gemini_model_brief
     )
-    brief_cost = round(
-        facts_cost + tracker.cost_of_usage(decision_usage, decision_model),
-        4,
-    )
+    decision_cost = tracker.cost_of_usage(decision_usage, decision_model)
+    brief_cost = round(facts_cost + decision_cost, 4)
     usage = {
         "input_tokens": facts_usage.get("input_tokens", 0) + decision_usage.get("input_tokens", 0),
         "output_tokens": (facts_usage.get("output_tokens", 0)
                           + decision_usage.get("output_tokens", 0)),
     }
-    tracker.record_cost(brief_cost)
+    # 分兩筆記帳（spec 022）：彙總桶不變，但另外累進 per-provider 月桶——
+    # 合計金額看不出召回與決策各佔多少，而那正是換供應商後最需要盯的數字。
+    if facts_cost:
+        tracker.record_cost(round(facts_cost, 4), provider="gemini")
+    tracker.record_cost(round(decision_cost, 4), provider=tracker.provider_of(decision_model))
 
     # 偏空清單偶爾被模型整段略過 → 用 movers 實際數據補齊（在 guardrail 前，符號必在資料範圍內）
     _backfill_caution(result, feats)
@@ -388,6 +390,10 @@ def generate_morning_brief(
         # 把剩餘額度攤在報告上，超支前就看得見。
         "month_remaining_twd": round(monthly_limit - month_total, 4),
         "decision_provider": provider,
+        # 本篇的召回/決策拆分 + 本月各供應商累計（spec 022 的成本可歸因性）
+        "retrieval_twd": round(facts_cost, 4),
+        "decision_twd": round(decision_cost, 4),
+        "month_by_provider": tracker.month_by_provider(),
     }
     logger.info("晨報 LLM 花費 NT$%.4f（provider=%s 本月累計 NT$%.2f / 上限 NT$%.0f）",
                 brief_cost, provider, month_total, monthly_limit)

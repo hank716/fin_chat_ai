@@ -123,7 +123,7 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
             intent_cost = tracker.cost_of_usage(
                 intent_usage, settings.gemini_model_classifier, grounded=False
             )
-            tracker.record_cost(intent_cost)
+            tracker.record_cost(intent_cost, provider="gemini")
         if not is_financial:
             logger.info("ask user=%s 意圖非財務 → 婉拒（省 token）分類成本=NT$%.4f",
                         req.user_id, intent_cost)
@@ -186,7 +186,7 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
         raise HTTPException(status_code=503, detail=f"LLM 暫時無法使用：{exc}") from exc
 
     cost = tracker.cost_of_usage(usage, model_used, grounded=grounded)
-    tracker.record_cost(cost)
+    tracker.record_cost(cost, provider=tracker.provider_of(model_used))
     day_total = tracker.today_total()
     logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",
                 req.user_id, usage, cost, day_total)

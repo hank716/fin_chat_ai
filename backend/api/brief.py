@@ -5,9 +5,10 @@ import secrets
 import threading
 
 from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
-from ai.gemini_client import GeminiError, GeminiQuotaExceeded
+from ai.errors import LLMError, LLMQuotaExceeded
 from reports import morning_brief
 from reports.web_renderer import render_history_html, render_report_html
 
@@ -19,9 +20,8 @@ _crawl_state: dict[str, bool] = {"running": False}
 _history_state: dict[str, bool] = {"listed": False, "tpex": False, "fund": False}
 
 
-@router.get("/", response_class=HTMLResponse)
-async def home() -> str:
-    """首頁＝歷史報告列表（登入後落地頁）＋本月全站 AI 花費 + 待機時段建議（皆即時）。"""
+def _render_home() -> str:
+    """首頁內容組裝（同步；全是阻塞的 redis / 檔案讀取，故由 handler 丟 threadpool 跑）。"""
     from activity import monitor
     from config import settings
     from cost import tracker
@@ -32,6 +32,9 @@ async def home() -> str:
         "day_total_twd": tracker.today_total(),
         "monthly_limit_twd": float(settings.monthly_cost_limit_twd),
         "daily_limit_twd": float(settings.daily_cost_limit_twd),
+        # provider 拆分（spec 022）：合計看不出 Gemini 與 Claude 各佔多少，
+        # 而那正是換供應商後最需要盯的數字。
+        "by_provider": tracker.month_by_provider(),
     }
     activity = monitor.idle_report()
     from reports import strategy_calibration
@@ -46,6 +49,12 @@ async def home() -> str:
         morning_brief.list_reports(), cost=cost, activity=activity,
         calibration=calibration, evaluation=evaluation, history=history,
     )
+
+
+@router.get("/", response_class=HTMLResponse)
+async def home() -> str:
+    """首頁＝歷史報告列表（登入後落地頁）＋本月全站 AI 花費 + 待機時段建議（皆即時）。"""
+    return await run_in_threadpool(_render_home)
 
 
 @router.get("/activity")
@@ -63,16 +72,22 @@ async def post_morning(
     publish: bool = Query(default=True),
 ) -> dict:
     try:
-        report = morning_brief.generate_morning_brief(
-            raw_query=raw_query, push_discord=push_discord, publish=publish
+        # ⚠️ **必須**走 threadpool：generate_morning_brief 是同步阻塞呼叫，且整條管線
+        # （資料抓取 ~15 分 + LLM ~6 分 + 回測迴圈 ~12 分）動輒 30 分鐘以上。直接在
+        # `async def` handler 裡呼叫會把 uvicorn 的 event loop 卡死，晨報跑完前**整站**
+        # 都無法服務——/health、首頁、報告頁全部 timeout（2026-08-06 實測複現）。
+        # 本檔其他重活（prefetch / backtest / eval / training_set）早就是這個寫法。
+        report = await run_in_threadpool(
+            morning_brief.generate_morning_brief,
+            raw_query=raw_query, push_discord=push_discord, publish=publish,
         )
-    except GeminiQuotaExceeded as exc:
+    except LLMQuotaExceeded as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Gemini 配額已用盡（換個有額度的 GEMINI_MODEL 或等每日重置）：{exc}",
+            detail=f"LLM 配額已用盡（換個有額度的模型或等每日重置）：{exc}",
         ) from exc
-    except GeminiError as exc:
-        raise HTTPException(status_code=503, detail=f"Gemini 暫時無法使用：{exc}") from exc
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=f"LLM 暫時無法使用：{exc}") from exc
     return {
         "report_id": report["report_id"],
         "data_as_of": report["data_as_of"],

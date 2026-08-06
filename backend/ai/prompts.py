@@ -305,6 +305,50 @@ VERIFICATION_CONTRACT = """## 查證契約（違反視為失敗）
 """
 
 
+def _leaf_paths(node: Any, prefix: str = "features", depth: int = 0,
+                out: list[str] | None = None, per_level: int = 4) -> list[str]:
+    """從 features 取出**真實存在**的葉節點路徑樣本（給 source_ref 當命名範本）。
+
+    每層只取前幾個 key，避免把整棵樹攤平（那會比 features 本身還大）。
+    """
+    out = [] if out is None else out
+    if depth > 3 or len(out) > 60:
+        return out
+    if isinstance(node, dict):
+        for key in list(node.keys())[:per_level]:
+            _leaf_paths(node[key], f"{prefix}.{key}", depth + 1, out, per_level)
+    elif isinstance(node, list) and node:
+        _leaf_paths(node[0], f"{prefix}[0]", depth + 1, out, per_level)
+    else:
+        out.append(prefix)
+    return out
+
+
+def _source_ref_hint(features: dict[str, Any]) -> str:
+    """source_ref 的命名慣例提示。
+
+    2026-08-06 實測：決策層會**憑常識捏造**看似合理的路徑（如
+    `features.tw.index.return_1d_pct`、`features.tw.sectors.*.avg_return_5d_pct`），
+    guardrail 一律判定不存在並丟掉整條 evidence——那次 37 條 evidence 被丟了 14 條、
+    15 個 error。而 guardrail 對 `source_ref=null` 是**放行**的（verify.py 只檢查非空值），
+    所以「不確定就留 null」嚴格優於「猜一個」。
+    """
+    samples = _leaf_paths(features)[:24]
+    if not samples:
+        return ""
+    listed = "\n".join(f"- {s}" for s in samples)
+    return (
+        "\n\n## source_ref 規則（違反會讓整條 evidence 被丟棄）\n"
+        "`evidence.source_ref` 必須是**你在下方 features JSON 裡實際看得到**的鍵路徑，"
+        "逐字照抄。系統會用它去 features 裡解析，解析不到就把那條 evidence 整條刪除——"
+        "**憑命名慣例猜一個看似合理的路徑，比留空更糟**。\n"
+        "找不到對應欄位、或不確定路徑長什麼樣，就把 `source_ref` 設為 null："
+        "留 null 不會被扣分，敘述照樣保留。\n"
+        "以下是這份 features 中**真實存在**的路徑範例（注意實際命名，不要自創）：\n"
+        f"{listed}\n"
+    )
+
+
 def _features_json(features: dict[str, Any]) -> str:
     """features → prompt 用 JSON。
 
@@ -338,7 +382,8 @@ def build_decision_prompt(
         f"以下是今日的市場數據（features，唯一的數值事實來源，不得捏造）：\n"
         f"```json\n{_features_json(features)}\n```\n\n"
         f"{facts_block}"
-        f"{_calibration_block(calibration).lstrip()}\n\n"
+        f"{_calibration_block(calibration).lstrip()}"
+        f"{_source_ref_hint(features)}\n\n"
         f"請輸出符合 schema 的結構化晨報 JSON。data_as_of 用 features.as_of。"
     )
 

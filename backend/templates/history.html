@@ -22,6 +22,13 @@
     <span>今日累計 NT${{ '%.2f'|format(cost.day_total_twd or 0) }} / NT${{ '%.0f'|format(cost.daily_limit_twd or 0) }}</span>
     <span>本月剩餘額度 NT${{ '%.2f'|format([0, (cost.monthly_limit_twd or 0) - (cost.month_total_twd or 0)]|max) }}</span>
   </div>
+  {% if cost.by_provider %}
+  {# spec 022 分層後的可歸因性：合計看不出召回(Gemini)與決策(Claude)各佔多少 #}
+  <div class="cb-sub cb-split">
+    <span>🔍 Gemini 廣度召回 NT${{ '%.2f'|format(cost.by_provider.gemini or 0) }}</span>
+    <span>🧠 Claude 決策查證 NT${{ '%.2f'|format(cost.by_provider.anthropic or 0) }}</span>
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 
