@@ -110,6 +110,32 @@ def test_payload_has_no_sampling_params(monkeypatch):
     assert sent["output_config"]["effort"] == "high"
 
 
+def test_effort_is_overridable_per_call(monkeypatch):
+    """晨報與問答分開設 effort——thinking token 以 output 費率計價，這是輸出端的成本主閥。
+
+    2026-08-07 實測 effort=high 跑出 output 32,236 tokens ≈ NT$25.8＝單篇決策成本的 70%。
+    """
+    client = _install(monkeypatch, [_msg(text='{"headline": "hi"}')])
+    cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                           model="claude-opus-5", tools=[], effort="medium")
+    assert client.messages.calls[0]["output_config"]["effort"] == "medium"
+    # 沒指定就回落到全域設定（問答路徑不受晨報那一檔影響）
+    cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                           model="claude-opus-5", tools=[])
+    assert client.messages.calls[1]["output_config"]["effort"] == "high"
+
+
+def test_thinking_is_never_disabled(monkeypatch):
+    """Opus 5 關掉 thinking 有兩個靜默失效模式（工具呼叫被寫成純文字、標籤外洩）。
+
+    省錢請降 effort。這條測試是防「為了省錢把 thinking 關掉」那個手滑。
+    """
+    client = _install(monkeypatch, [_msg(text='{"headline": "hi"}')])
+    cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                           model="claude-opus-5", tools=[], effort="low")
+    assert client.messages.calls[0]["thinking"]["type"] == "adaptive"
+
+
 def test_no_assistant_prefill(monkeypatch):
     """最後一則不得是 assistant（prefill 在 Opus 5 回 400）。"""
     client = _install(monkeypatch, [_msg(text='{"headline": "hi"}')])
@@ -276,6 +302,25 @@ def test_usage_normalisation_keeps_cache_fields_separate(monkeypatch):
     assert usage["input_tokens"] == 100          # 未含 cached
     assert usage["cached_tokens"] == 900
     assert usage["cache_write_tokens"] == 40
+
+
+def test_usage_reports_round_count(monkeypatch):
+    """`rounds` 是 prompt cache 的損益判準：cache write 付 1.25×，只有被後續輪次
+    重讀才回本。rounds=1 且 cached≈0 ⇒ 寫了沒被讀 ⇒ 開快取是純虧。不記就只能猜。
+    """
+    paused = _msg(text="半途", stop="pause_turn")
+    done = _msg(text='{"headline": "完成"}', stop="end_turn")
+    _install(monkeypatch, [paused, done])
+    _result, usage = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert usage["rounds"] == 2
+
+    _install(monkeypatch, [_msg(text='{"headline": "一輪就完"}')])
+    _result, usage = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert usage["rounds"] == 1
 
 
 def test_bad_json_raises_llm_error(monkeypatch):

@@ -207,6 +207,24 @@ def month_total() -> float:
     return _get(_month_key())
 
 
+def month_remaining() -> float:
+    """本月全站剩餘額度（TWD，可能為負）。"""
+    return round(float(settings.monthly_cost_limit_twd) - month_total(), 4)
+
+
+def brief_should_degrade() -> bool:
+    """月餘額是否已不足以再產一篇完整晨報 → 呼叫端改跑節儉模式。
+
+    晨報刻意**不受** `check_budget()` 攔截（那只擋 /ask），因為它是產品本體、不能因額度
+    見底而消失。但「不攔截」不該等於「無聲吃光整個月的額度」——2026-08-06 當天跑了三次
+    晨報、單日 NT$115.19（日上限 NT$30）就是這個敞口。這裡給呼叫端一個中間選項：
+    額度快見底時降級（關查證、降 effort），照樣出報，但不再把剩下的月額度一次吃完。
+
+    門檻用日上限當代理值：日上限的語意就是「一篇晨報 + 若干問答」，剩不到這個數就該收手。
+    """
+    return month_remaining() < float(settings.daily_cost_limit_twd)
+
+
 def record_grounding_request() -> float:
     """記一次 Google 搜尋 grounding（全站當月計數）。回傳這次的邊際費用 TWD（前 5,000 次/月免費）。"""
     try:

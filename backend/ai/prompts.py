@@ -115,6 +115,7 @@ FULL_BRIEF_RULES = """你是一位多市場研究助理，為家庭使用者撰�
 接著填兩份觀察清單（都不是買賣建議）：
 - **tw_watchlist（正向，5 檔）**：訊號偏多、值得關注者——族群轉強、法人連續買超、相對大盤強、站上均線。從 features.tw.movers.top_gainers_5d / top_foreign_buy_5d 與 sectors 強勢族群挑。
 - **tw_caution（負向/要注意，5 檔）**：訊號偏空或有風險者——外資/投信連續賣超、跌破均線、相對大盤明顯弱（vs_index_20d_pct 負值大）、**資券比偏高或融資急增（追高風險）**、近期跌幅大。從 features.tw.movers.top_losers_5d / top_foreign_sell_5d / top_short_margin_ratio / top_below_index_20d 挑。每檔在 signals 帶出具體警示數值。**即使今日大盤偏多，這 5 檔仍必須列出**——上述排行（跌幅榜／賣超榜／資券比榜／弱於大盤榜）任何盤勢都有候選，不可因整體偏多就留空或少於 5 檔。
+**但湊不滿時寧可少列，也絕不可填佔位符**（如 symbol 寫 "ignore"/"N/A"/"-"）——系統會用實際排行資料自動補齊，佔位符只會被判定為不存在的代號整條刪掉。symbol 一律用 features.tw.stocks 裡真實存在的代號。
 
 最後填 risks（今日風險提醒，敘事數點）、follow_ups（後續追蹤重點）、news_digest（重要新聞解讀）。"""
 
@@ -358,13 +359,45 @@ def _features_json(features: dict[str, Any]) -> str:
     return json.dumps(_budget_features(features), ensure_ascii=False, sort_keys=True)
 
 
-def build_decision_system() -> str:
-    """決策層 system prompt：寫作規範 + 段落定義 + 查證契約。
+NO_VERIFICATION_NOTE = """## 本次無連網查證工具
+
+這次呼叫**沒有**提供 `web_fetch` / `web_search`，也沒有 facts pack。請只依下方 features JSON
+與 features.news 作答，**不得**提及任何 features 以外的外部事件、政策、總經數據或傳聞——
+沒有工具就無法查證，未經查證的敘述比沒有敘述更糟。`fact_checks` 回空陣列。
+
+上面「嚴格規則」第 1 條裡關於 facts pack 與查證契約的部分，本次**不適用**（沒有 facts pack
+可查、也沒有查證契約）；該條其餘部分——數字只能引用 features JSON、不得捏造——照常適用。
+"""
+
+
+BREVITY_RULES = """## 篇幅（違反視為失敗）
+
+寫得完整不等於寫得長。以下是上限，不是目標：
+
+- 每個 section 的 narrative：**2–4 句**。把最重要的判斷放第一句，其餘是支撐。
+- 每個 section 的 evidence：**至多 6 條**，只放實際支撐該段敘述的數字，不要把 features 清單搬過來。
+- `tw_watchlist` / `tw_caution` 每檔：thesis 至多 3 句、signals 至多 4 條。
+- `fact_checks[].note`：**一句話**，寫你實際看到什麼即可。
+- `risks` / `follow_ups`：各至多 5 點，每點一句。
+
+不要重述前面 section 已經講過的事實；不要在結尾加總結段。
+"""
+
+
+def build_decision_system(*, verify: bool = True) -> str:
+    """決策層 system prompt：寫作規範 + 篇幅上限 + 段落定義 + 查證契約。
 
     `FULL_BRIEF_RULES` 是產品規格（寫作風格、8 個 section、watchlist 規則），與供應商無關，
-    原樣沿用；只在後面接上查證契約。
+    原樣沿用；只在後面接上篇幅上限與查證契約。
+
+    `verify=False` 是**預算降級模式**（月額度不足以再產一篇完整晨報時）：不給連網工具，
+    因此把查證契約換成「不得引用外部事件」的明確禁令——留著契約會讓模型去呼叫不存在的工具。
+
+    篇幅上限在 2026-08-07 加入：Opus 5 預設寫得比前代長，而 thinking + 可見輸出**合計**
+    以 output 費率計價（$25/MTok），實測單篇 output 32,236 tokens ≈ NT$25.8。
     """
-    return f"{FULL_BRIEF_RULES}\n\n{VERIFICATION_CONTRACT}"
+    tail = VERIFICATION_CONTRACT if verify else NO_VERIFICATION_NOTE
+    return f"{FULL_BRIEF_RULES}\n\n{BREVITY_RULES}\n\n{tail}"
 
 
 def build_decision_prompt(

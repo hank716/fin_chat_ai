@@ -8,6 +8,10 @@
 假事實直接寫進晨報。分層後，決策層用 `web_fetch` 開啟這裡給的 URL 核對，兩者互為對照。
 
 **無來源的線索一律丟棄**——查證不了的東西不該進決策層。
+
+⚠️ Gemini 給的來源是 `vertexaisearch.cloud.google.com/grounding-api-redirect/...` 轉址，
+而決策層的 `web_fetch` 對該網域回 `url_not_allowed`——不先解析轉址，整個查證閉環就是
+空轉（fetch 次次失敗卻照樣佔用 max_uses）。見 `_resolve_redirect`。
 """
 from __future__ import annotations
 
@@ -78,6 +82,43 @@ def _all_grounding_urls(candidate: dict) -> list[str]:
     return urls
 
 
+_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+_RESOLVE_TIMEOUT = 6.0
+
+
+def _resolve_redirect(url: str) -> str:
+    """把 Google grounding 的轉址網址換成真正的文章網址。
+
+    ⚠️ 這是查證閉環的**必要**步驟，不是優化。Gemini 的 groundingChunks 給的是
+    `https://vertexaisearch.cloud.google.com/grounding-api-redirect/<opaque>`，而決策層的
+    `web_fetch` 對這個網域一律回 **`url_not_allowed`**——2026-08-07 那篇 7 條 fact_checks
+    全部 `unverifiable`、note 幾乎都寫著 url_not_allowed，就是這個原因。也就是說：
+    查證層從上線第一天起就結構性失效，每一次 fetch 都注定失敗卻照樣計費。
+
+    轉址解析在本地做（HEAD + follow_redirects），零 LLM 成本；解不開就沿用原網址——
+    決策層仍會誠實地標成 unverifiable，不會因為我們解析失敗就把它當成已查證。
+    """
+    if _REDIRECT_HOST not in url:
+        return url
+    try:
+        import httpx
+
+        with httpx.Client(follow_redirects=True, timeout=_RESOLVE_TIMEOUT) as client:
+            resp = client.head(url)
+            # 少數站台不吃 HEAD（405/501）→ 退回 GET，但只讀 headers 就關掉，不下載內容
+            if resp.status_code >= 400:
+                with client.stream("GET", url) as stream_resp:
+                    final = str(stream_resp.url)
+            else:
+                final = str(resp.url)
+        if final and _REDIRECT_HOST not in final:
+            return final
+        logger.info("轉址仍指向 grounding redirect，沿用原網址：%s", url[:80])
+    except Exception as exc:  # noqa: BLE001 — 解不開不該讓整份晨報失敗
+        logger.info("解析 grounding 轉址失敗（沿用原網址）：%s", exc)
+    return url
+
+
 def _attach_urls(events: list[dict[str, Any]], fallback_urls: list[str]) -> list[FactEvent]:
     """把 event 補上 URL 並丟掉補不到的。
 
@@ -86,6 +127,7 @@ def _attach_urls(events: list[dict[str, Any]], fallback_urls: list[str]) -> list
     """
     out: list[FactEvent] = []
     spare = list(fallback_urls)
+    resolved: dict[str, str] = {}      # 同一個轉址只解析一次（多則線索常共用同一來源）
     for item in events:
         url = (item.get("url") or "").strip()
         if not url and spare:
@@ -93,6 +135,9 @@ def _attach_urls(events: list[dict[str, Any]], fallback_urls: list[str]) -> list
         if not url:
             logger.info("召回層線索無來源，丟棄：%s", str(item.get("claim"))[:60])
             continue
+        if url not in resolved:
+            resolved[url] = _resolve_redirect(url)
+        url = resolved[url]
         try:
             out.append(FactEvent(claim=item["claim"], date=item["date"],
                                  source=item["source"], url=url))

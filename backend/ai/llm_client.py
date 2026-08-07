@@ -33,8 +33,12 @@ class DecisionLLM(Protocol):
 
     def draft_brief(
         self, features: dict[str, Any], facts_json: str, calibration: str | None,
+        *, frugal: bool = False,
     ) -> tuple[BriefDraft, Usage]:
-        """features + 待查證線索 + 回測校準 → 結構化晨報草稿。"""
+        """features + 待查證線索 + 回測校準 → 結構化晨報草稿。
+
+        `frugal=True`＝預算降級模式（月餘額不足時由呼叫端指定）：關連網查證、降 effort。
+        """
         ...
 
     def answer_question(
@@ -55,18 +59,31 @@ class AnthropicDecisionLLM:
 
     def draft_brief(
         self, features: dict[str, Any], facts_json: str, calibration: str | None,
+        *, frugal: bool = False,
     ) -> tuple[BriefDraft, Usage]:
+        # 節儉模式：不給工具、不帶 facts pack、effort 降到最低。刻意**不是**「少查幾次」——
+        # 部分查證比不查證更糟（看起來像查過了），所以要關就整個關，並在 system prompt 明講
+        # 「不得引用 features 以外的外部事件」，否則模型會去呼叫不存在的工具。
+        if frugal:
+            logger.warning("晨報進入預算節儉模式：關閉連網查證、effort=low")
+        tools = [] if frugal else claude_client.build_tools(
+            settings.claude_brief_fetch_uses, settings.claude_brief_search_uses,
+        )
         draft, usage = claude_client.generate_structured(
             BriefDraft,
-            system=prompts.build_decision_system(),
-            user_prompt=prompts.build_decision_prompt(features, facts_json, calibration),
-            model=settings.claude_model_decision,
-            tools=claude_client.build_tools(
-                settings.claude_brief_fetch_uses, settings.claude_brief_search_uses,
+            system=prompts.build_decision_system(verify=not frugal),
+            user_prompt=prompts.build_decision_prompt(
+                features, "[]" if frugal else facts_json, calibration,
             ),
+            model=settings.claude_model_decision,
+            tools=tools,
             # 與問答相反、預設開：連網查證的工具迴圈會把這個 ~55k 前綴在單一請求內重讀多輪，
             # 快取讀取 0.1× 正好打在成本主體上。
-            cacheable=settings.enable_claude_brief_prompt_cache,
+            # ⚠️ 節儉模式沒有工具＝只有一輪，前綴不會被重讀，此時 1.25× 的寫入是純虧 → 關掉。
+            cacheable=settings.enable_claude_brief_prompt_cache and not frugal,
+            # 晨報獨立一檔（見 config.claude_brief_effort）：thinking token 以 output 費率計價，
+            # 這是輸出端的成本主閥。
+            effort="low" if frugal else settings.claude_brief_effort,
         )
         return draft, usage  # type: ignore[return-value]
 
@@ -101,7 +118,10 @@ class GeminiDecisionLLM:
 
     def draft_brief(
         self, features: dict[str, Any], facts_json: str, calibration: str | None,
+        *, frugal: bool = False,
     ) -> tuple[BriefDraft, Usage]:
+        # `frugal` 在這條路徑無對應旋鈕（Gemini 兩段式沒有 effort、搜尋是模型內建），
+        # 收下但不使用——它本來就是降級路徑，單篇約 NT$14，不是成本敞口。
         result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(
             features, calibration=calibration,
         )

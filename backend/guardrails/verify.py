@@ -87,10 +87,35 @@ def _resolve(features: dict[str, Any], ref: str) -> Any:
     return cur
 
 
+# 禁語前方若緊接否定詞，語意是**否定該斷言**（模型正在做正確的保留），不該當違規。
+# 2026-08-07 實測誤判：「…帶來偏正面的參考，但**不代表必然上漲**」被判成必然因果禁語。
+# 只看前方一小段窗口，避免把同段落更前面、不相干的否定詞誤算進來。
+_NEGATIONS = ("不代表", "不必然", "不一定", "並非", "不會", "未必", "不保證", "不等於", "不表示")
+_NEGATION_WINDOW = 6
+
+
+def _is_negated(text: str, idx: int) -> bool:
+    head = text[max(0, idx - _NEGATION_WINDOW):idx]
+    return any(neg in head for neg in _NEGATIONS)
+
+
 def _scan_phrases(text: str | None, banned: tuple[str, ...]) -> list[str]:
+    """回出現過、且**至少有一處不是被否定**的禁語。
+
+    整句被否定（「不代表必然上漲」）是我們要的謹慎表述，攔它等於懲罰正確行為；
+    但同一段若另有一處未被否定地使用，仍要攔——所以逐次出現檢查，不是看第一次。
+    """
     if not text:
         return []
-    return [w for w in banned if w in text]
+    hits: list[str] = []
+    for word in banned:
+        idx = text.find(word)
+        while idx != -1:
+            if not _is_negated(text, idx):
+                hits.append(word)
+                break
+            idx = text.find(word, idx + len(word))
+    return hits
 
 
 def run_guardrails(result: BriefResult, features: dict[str, Any]) -> tuple[BriefResult, dict]:

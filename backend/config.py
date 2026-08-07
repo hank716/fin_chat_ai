@@ -42,18 +42,29 @@ class Settings(BaseSettings):
     llm_decision_provider: str = "anthropic"          # anthropic | gemini（gemini＝降級/A-B 對照）
     claude_model_decision: str = "claude-opus-5"      # 晨報決策（品質優先，晨報是產品本體）
     claude_model_chat: str = "claude-opus-5"          # 問答；用量稀疏，需省時可降 claude-sonnet-5
-    claude_effort: str = "high"                       # low|medium|high|xhigh|max（thinking 深度）
+    claude_effort: str = "high"                       # 問答用 low|medium|high|xhigh|max（thinking 深度）
+    # 晨報獨立一檔（2026-08-07 拆出）。**這是輸出端的成本主閥**：thinking token 以 output 費率
+    # 計價（Opus 5 $25/MTok），effort=high 實測跑出 output 32,236 tokens ≈ NT$25.8，佔單篇
+    # 決策成本 70%。39a7d03 曾記錄「effort 不是主因」——那是在 prompt cache 開啟**之前**、
+    # 且兩次比較的 facts 量不同的混淆結論；input 被壓平後 effort 才第一次成為主導變數。
+    claude_brief_effort: str = "medium"               # 晨報：長輸出、無人值守，用 medium 換成本
     claude_max_tokens: int = 32000                    # thinking + 回答**合計**上限；必須 streaming
     # 連網查證工具用量上限＝成本閘門（憲章 II）。沒有上限等於把每日成本交給模型自由心證。
     # ⚠️ 每多一次 fetch，成本不只是「多一頁內容」——server-side 工具迴圈在 API 內部進行，
     # **每一輪都會把累積的對話重送一次**。features JSON 約 55k tokens，max_uses=12 就代表
     # 那 55k 最多被重送 12 次。2026-08-06 實測：12 次上限跑出 NT$73.83/篇（≈NT$1,550/月）。
-    claude_brief_fetch_uses: int = 5                  # 晨報：查證用 web_fetch 次數上限
-    claude_brief_search_uses: int = 3                 # 晨報：補漏用 web_search 次數上限
+    # 2026-08-07 再降一階（5→3 / 3→2）：實測 8/7 那篇 7 條 fact_checks **全部 unverifiable**、
+    # 8/6 那篇 6 條有 4 條 contradicted——這筆支出目前買到的是「證明線索不可信」，有價值但
+    # 不值得付到 5 次。真正該修的是召回層的 URL 品質，不是多買幾次 fetch。
+    claude_brief_fetch_uses: int = 3                  # 晨報：查證用 web_fetch 次數上限
+    claude_brief_search_uses: int = 2                 # 晨報：補漏用 web_search 次數上限
     claude_chat_fetch_uses: int = 4                   # 問答：互動情境對延遲敏感，壓低
     claude_chat_search_uses: int = 2
     claude_fetch_max_content_tokens: int = 3000       # 單頁擷取上限（防長文把 input 撐爆）
-    claude_max_continuations: int = 5                 # pause_turn 續跑上限（防無窮迴圈）
+    # pause_turn 續跑上限（防無窮迴圈），同時也是「整份晨報壓在單次呼叫」的實際旋鈕：
+    # 每多一輪就多一次完整輸出 + 一次前綴重讀。調低的風險是查證做到一半被切斷，
+    # 靠報告 JSON 的 `cost.tokens.rounds` 監控：連續多篇頂到上限就代表被切，再調回。
+    claude_max_continuations: int = 2
     # ⚠️ 問答預設關閉是刻意的：Anthropic 快取寫入付 1.25×(5m)/2×(1h)、讀取才 0.1×，
     # 5m 需 2 次、1h 需 3 次以上讀取才回本。chat 用量稀疏時每題都是「寫入後未被讀取就過期」
     # ＝純虧。只有觀察到「同一份晨報 5 分鐘內被問 ≥2 題」才值得開。

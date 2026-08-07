@@ -93,3 +93,27 @@ def test_phrase_scan_warns_not_removes():
     assert report["counts"]["phrase_warnings"] >= 1
     guards = {v["guard"] for v in report["violations"]}
     assert "advice" in guards
+
+
+# ── 否定語境下的禁語（2026-08-07 實測誤判）────────────────────────────────
+
+def test_banned_phrase_under_negation_is_not_a_violation():
+    """「不代表必然上漲」是我們要的謹慎表述，攔它等於懲罰正確行為。"""
+    from guardrails.verify import CAUSALITY_BANNED, _scan_phrases
+
+    text = "費半強彈可能對隔日半導體族群帶來偏正面的參考，但不代表必然上漲。"
+    assert _scan_phrases(text, CAUSALITY_BANNED) == []
+
+
+def test_bare_banned_phrase_still_caught():
+    from guardrails.verify import CAUSALITY_BANNED, _scan_phrases
+
+    assert "必然上漲" in _scan_phrases("費半強彈，隔日半導體必然上漲。", CAUSALITY_BANNED)
+
+
+def test_negated_once_but_asserted_elsewhere_is_still_caught():
+    """同段若另有一處未被否定地使用，仍要攔——不能看第一次出現就放行。"""
+    from guardrails.verify import CAUSALITY_BANNED, _scan_phrases
+
+    text = "這不代表必然上漲。不過就技術面看，站上均線後必然上漲。"
+    assert "必然上漲" in _scan_phrases(text, CAUSALITY_BANNED)

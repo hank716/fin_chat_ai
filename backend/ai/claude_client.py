@@ -199,6 +199,7 @@ def _run(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     output_schema: dict[str, Any] | None = None,
+    effort: str | None = None,
 ) -> tuple[Any, dict[str, int]]:
     """跑一次完整對話（含 pause_turn 續跑），回 (最終 message, 累計 usage)。
 
@@ -212,8 +213,15 @@ def _run(
         "model": model,
         "max_tokens": int(settings.claude_max_tokens),
         # adaptive：讓模型自己決定要想多久。**不可**帶 temperature/top_p/top_k（Opus 5 會 400）。
+        #
+        # ⚠️ 不要為了省錢改成 `{"type": "disabled"}`：Opus 5 關掉 thinking 有兩個靜默失效模式
+        # ——① 工具呼叫被寫成一般文字（該輪照常結束、工具其實沒跑、沒有任何錯誤）；
+        # ② `<thinking>` 標籤外洩到使用者可見的內容。要壓成本請降 effort（見下）。
         "thinking": {"type": "adaptive"},
-        "output_config": {"effort": settings.claude_effort},
+        # thinking token 以 **output 費率**計價（Opus 5 $25/MTok），所以 effort 就是輸出端的
+        # 成本主閥。2026-08-07 實測：effort=high 跑出 output 32,236 tokens ≈ NT$25.8，
+        # 佔單篇決策成本 70%。晨報與問答分開設（晨報長輸出無人值守、問答短輸出對延遲敏感）。
+        "output_config": {"effort": effort or settings.claude_effort},
         "system": system,
         "tools": tools,
     }
@@ -238,6 +246,9 @@ def _run(
 
         _merge_usage(usage, _usage_of(getattr(message, "usage", None)))
         searches += _count_web_searches(message.content)
+        # `rounds` 是事後歸因用的：cache write 付 1.25×，只有被後續輪次重讀才回本，
+        # 所以「跑了幾輪」決定了 prompt cache 到底是賺是賠。不記就只能猜。
+        usage["rounds"] = round_idx + 1
 
         stop = getattr(message, "stop_reason", None)
         # refusal 是 HTTP 200 + stop_reason，不是錯誤回應。必須在讀 content 之前檢查——
@@ -270,6 +281,7 @@ def generate_structured(
     model: str,
     tools: list[dict[str, Any]],
     cacheable: bool = False,
+    effort: str | None = None,
 ) -> tuple[BaseModel, dict[str, int]]:
     """帶連網查證工具跑一次，並把結果驗成指定 pydantic 模型。
 
@@ -292,6 +304,7 @@ def generate_structured(
         messages=[{"role": "user", "content": [user_block]}],
         tools=tools,
         output_schema=schema_of(model_cls),
+        effort=effort,
     )
     text = _text_of(message.content)
     if not text:

@@ -26,6 +26,49 @@ def test_all_grounding_urls_dedupes():
     assert retrieval._all_grounding_urls(cand) == ["https://a.test", "https://b.test"]
 
 
+def test_grounding_redirect_is_resolved_to_real_url(monkeypatch):
+    """轉址網址必須換成真正的文章網址，否則決策層的 web_fetch 一律回 url_not_allowed。
+
+    2026-08-07 那篇 7 條 fact_checks **全部 unverifiable**、note 幾乎都寫著 url_not_allowed
+    ——查證層從上線第一天起就結構性失效：每一次 fetch 都注定失敗，卻照樣佔用 max_uses 額度。
+    """
+    calls: list[str] = []
+
+    def _fake_resolve(url: str) -> str:
+        calls.append(url)
+        return "https://news.example.com/real-article" if "grounding-api-redirect" in url else url
+
+    monkeypatch.setattr(retrieval, "_resolve_redirect", _fake_resolve)
+    redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ"
+    events = [
+        {"claim": "A", "date": "2026-08-05", "source": "鉅亨", "url": redirect},
+        {"claim": "B", "date": "2026-08-05", "source": "鉅亨", "url": redirect},
+    ]
+    out = retrieval._attach_urls(events, [])
+    assert [e.url for e in out] == ["https://news.example.com/real-article"] * 2
+    # 多則線索常共用同一來源；同一個轉址只該解析一次
+    assert calls == [redirect]
+
+
+def test_resolve_redirect_passes_through_normal_urls():
+    """非 grounding 轉址不碰（不發任何網路請求）。"""
+    url = "https://www.cnyes.com/news/id/1234567"
+    assert retrieval._resolve_redirect(url) == url
+
+
+def test_resolve_redirect_keeps_original_on_failure(monkeypatch):
+    """解不開就沿用原網址——決策層仍會誠實標成 unverifiable，不會假裝查過。"""
+    class _Boom:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): raise RuntimeError("network down")
+        def __exit__(self, *exc): return False
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Boom)
+    url = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/XYZ"
+    assert retrieval._resolve_redirect(url) == url
+
+
 def test_event_without_any_source_is_dropped():
     """模型沒填 url、grounding 也補不到 → 丟棄。查證不了的東西不進決策層。"""
     events = [{"claim": "無來源傳聞", "date": "2026-08-05", "source": "不明"}]

@@ -276,12 +276,15 @@ def _run_backtest_loop() -> dict[str, Any]:
     return summary
 
 
-def _fetch_facts(feats: dict[str, Any]) -> tuple[retrieval.FactsPack, dict[str, int]]:
+def _fetch_facts(
+    feats: dict[str, Any], *, frugal: bool = False,
+) -> tuple[retrieval.FactsPack, dict[str, int]]:
     """廣度召回層：Gemini + google_search 產待查證線索（spec 022 WP2）。
 
     關掉 `enable_facts_pack` 就回空——決策層仍可只憑 features 產出晨報，只是少了外部事件。
+    `frugal` 同理：節儉模式下決策層沒有查證工具，召回再多線索也無法採信，白花錢。
     """
-    if not settings.enable_facts_pack:
+    if not settings.enable_facts_pack or frugal:
         return retrieval.FactsPack(), {}
     as_of = str(feats.get("as_of") or datetime.now(ZoneInfo(settings.tz)).date())
     return retrieval.fetch_facts(as_of)
@@ -289,6 +292,7 @@ def _fetch_facts(feats: dict[str, Any]) -> tuple[retrieval.FactsPack, dict[str, 
 
 def _decide_brief(
     feats: dict[str, Any], facts: retrieval.FactsPack, calibration_text: str,
+    *, frugal: bool = False,
 ) -> tuple[BriefResult, dict[str, int], str, list[dict[str, Any]]]:
     """決策 + 查證層：回 (BriefResult, usage, provider, fact_checks)。
 
@@ -301,7 +305,9 @@ def _decide_brief(
     """
     primary = get_decision_llm()
     try:
-        draft, usage = primary.draft_brief(feats, facts.to_prompt_json(), calibration_text or None)
+        draft, usage = primary.draft_brief(
+            feats, facts.to_prompt_json(), calibration_text or None, frugal=frugal,
+        )
         return (
             _draft_to_result(draft),
             usage,
@@ -343,15 +349,26 @@ def generate_morning_brief(
     if calibration_text:
         logger.info("注入策略校準（%d 字）至晨報 prompt", len(calibration_text))
 
+    # 預算降級：月餘額已不足以再產一篇完整晨報時，改跑節儉模式（關召回與查證、effort=low）。
+    # 晨報仍照常產出——它是產品本體，不因額度見底而消失；但也不該無聲把剩餘額度一次吃完。
+    frugal = tracker.brief_should_degrade()
+    if frugal:
+        logger.warning(
+            "月餘額 NT$%.2f 已低於日上限 NT$%.0f → 晨報改跑節儉模式（無外部事件、無查證）",
+            tracker.month_remaining(), float(settings.daily_cost_limit_twd),
+        )
+
     # ── LLM 分層（spec 022）──
     # ① 廣度召回：Gemini + google_search 產「待查證線索」（不做分析、不挑股）
-    facts, facts_usage = _fetch_facts(feats)
+    facts, facts_usage = _fetch_facts(feats, frugal=frugal)
     # 刻意**不**塞進 feats["web_context"]：那樣同一份線索會在 prompt 裡出現兩次
     # （features JSON 內一次、facts pack 一次），白燒 token。稽核用的副本走 report["facts"]。
 
     # ② 決策 + 查證：Claude 單次呼叫，用 web_fetch 逐條開啟上面的 URL 核對後才採信。
     #    失敗時退回 Gemini 兩段式——晨報是無人值守的每日排程，不得因換供應商而整份失敗。
-    result, decision_usage, provider, fact_checks = _decide_brief(feats, facts, calibration_text)
+    result, decision_usage, provider, fact_checks = _decide_brief(
+        feats, facts, calibration_text, frugal=frugal,
+    )
 
     facts_cost = (
         tracker.cost_of_usage(facts_usage, settings.gemini_model_qa, grounded=True)
@@ -362,11 +379,16 @@ def generate_morning_brief(
     )
     decision_cost = tracker.cost_of_usage(decision_usage, decision_model)
     brief_cost = round(facts_cost + decision_cost, 4)
+    # ⚠️ 只抄 input/output 兩欄會產生誤導性數字：Anthropic 的 `input_tokens` **不含** cache，
+    # 快取命中時它會掉到近乎 0（2026-08-07 實測 914），看起來像沒花錢，實際成本全在 output
+    # 與 cache write。這裡把計價實際用到的欄位全部落地，才有辦法事後歸因：
+    # `rounds=1` 且 `cached_tokens≈0` ⇒ 前綴寫了沒被重讀，1.25× 的 cache write 是純虧。
     usage = {
-        "input_tokens": facts_usage.get("input_tokens", 0) + decision_usage.get("input_tokens", 0),
-        "output_tokens": (facts_usage.get("output_tokens", 0)
-                          + decision_usage.get("output_tokens", 0)),
+        key: facts_usage.get(key, 0) + decision_usage.get(key, 0)
+        for key in ("input_tokens", "output_tokens", "cached_tokens",
+                    "cache_write_tokens", "tool_tokens", "web_search_requests")
     }
+    usage["rounds"] = int(decision_usage.get("rounds", 0))   # 只有決策層會 pause_turn 續跑
     # 分兩筆記帳（spec 022）：彙總桶不變，但另外累進 per-provider 月桶——
     # 合計金額看不出召回與決策各佔多少，而那正是換供應商後最需要盯的數字。
     if facts_cost:
@@ -388,8 +410,9 @@ def generate_morning_brief(
         # 晨報**不受** check_budget() 攔截（那只擋 /ask），所以它可能把月額度吃到見底、
         # 讓接下來整個月的問答全被擋。這是「晨報優先」的刻意取捨，但不該無聲發生——
         # 把剩餘額度攤在報告上，超支前就看得見。
-        "month_remaining_twd": round(monthly_limit - month_total, 4),
+        "month_remaining_twd": tracker.month_remaining(),
         "decision_provider": provider,
+        "frugal_mode": frugal,           # True＝額度不足而降級（無外部事件、無查證、effort=low）
         # 本篇的召回/決策拆分 + 本月各供應商累計（spec 022 的成本可歸因性）
         "retrieval_twd": round(facts_cost, 4),
         "decision_twd": round(decision_cost, 4),
