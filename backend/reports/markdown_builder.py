@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from ai.schemas import BriefResult, BriefSection
+from reports.degradation import degradation_notes
 
 
 def _now() -> datetime:
@@ -107,6 +108,13 @@ def build_markdown(
             f" / NT${cost.get('monthly_limit_twd', 0):.0f}"
         )
     parts.append("## 資料來源\n\n" + "\n".join(source_lines))
+    # 降級提示放在免責聲明前、資料來源後——讀者看到「這篇怎麼沒有外部事件」時，
+    # 答案就在同一個區塊裡，而不是要去翻 JSON。
+    notes = degradation_notes(cost)
+    if notes:
+        parts.append(
+            "## ⚠️ 本篇產出限制\n\n" + "\n".join(f"- {note}" for note in notes)
+        )
     parts.append(
         "---\n*⚠️ 本報告之方向看法、目標價與止損價皆為技術面輔助參考，非保證獲利或準確，"
         "亦不保證成交；請自行評估風險後決策。系統自動產生，僅供家庭內部研究。*"

@@ -151,24 +151,41 @@ def _usage_of(raw: Any) -> dict[str, int]:
     }
 
 
+def _stamp_tool_counts(usage: dict[str, int], searches: int, fetches: int) -> None:
+    """把 server tool 次數寫進 usage。每個離開 `_run` 的路徑都要蓋章——包含 refusal 與
+    pause_turn 用盡兩條例外路徑，否則失敗那次的查證用量就從遙測裡消失了。
+    """
+    usage["web_search_requests"] = searches
+    usage["web_fetch_requests"] = fetches
+
+
 def _merge_usage(acc: dict[str, int], new: dict[str, int]) -> dict[str, int]:
     for key, value in new.items():
         acc[key] = acc.get(key, 0) + value
     return acc
 
 
-def _count_web_searches(content: Any) -> int:
-    """數這一輪用掉幾次 web_search（server tool 按次計費）。
+def _count_server_tools(content: Any) -> dict[str, int]:
+    """數這一輪各 server tool 用掉幾次，回 {"web_search": n, "web_fetch": n}。
 
     刻意從 content blocks 自己數，而不是讀 usage 上某個欄位——後者的欄位名在 SDK 版本間
     有變動風險，數 block 是穩定的。
+
+    `web_search` 是計費需要（按次計價）；`web_fetch` **不按次計費**，數它純粹是遙測——
+    而這正是它必須被數的原因：查證層跑或不跑在帳單上完全看不出來。2026-08-12 盤點時
+    連續多天出現「fact_checks 全部 unverifiable」，卻無法分辨是「查了但查不到」還是
+    「根本沒查」，因為沒有任何欄位記錄 fetch 實際發生過幾次。
+    ⚠️ 別拿 `usage.tool_tokens` 當代理值：Anthropic 那欄恆為 0（見 `_usage_of`），
+    報告裡看到的 tool_tokens 全部來自 Gemini 召回層，與 Claude 查證無關。
     """
-    total = 0
+    counts = {"web_search": 0, "web_fetch": 0}
     for block in content or []:
-        if getattr(block, "type", None) == "server_tool_use" and \
-                getattr(block, "name", None) == "web_search":
-            total += 1
-    return total
+        if getattr(block, "type", None) != "server_tool_use":
+            continue
+        name = getattr(block, "name", None)
+        if name in counts:
+            counts[name] += 1
+    return counts
 
 
 def _text_of(content: Any) -> str:
@@ -234,6 +251,7 @@ def _run(
     convo = list(messages)
     usage: dict[str, int] = {}
     searches = 0
+    fetches = 0
     max_rounds = int(settings.claude_max_continuations) + 1
 
     for round_idx in range(max_rounds):
@@ -245,7 +263,9 @@ def _run(
         monitor.mark("ai")  # 記一次對外 AI 流量（待機偵測用）
 
         _merge_usage(usage, _usage_of(getattr(message, "usage", None)))
-        searches += _count_web_searches(message.content)
+        tool_counts = _count_server_tools(message.content)
+        searches += tool_counts["web_search"]
+        fetches += tool_counts["web_fetch"]
         # `rounds` 是事後歸因用的：cache write 付 1.25×，只有被後續輪次重讀才回本，
         # 所以「跑了幾輪」決定了 prompt cache 到底是賺是賠。不記就只能猜。
         usage["rounds"] = round_idx + 1
@@ -256,17 +276,17 @@ def _run(
         if stop == "refusal":
             details = getattr(message, "stop_details", None)
             category = getattr(details, "category", None) if details else None
-            usage["web_search_requests"] = searches
+            _stamp_tool_counts(usage, searches, fetches)
             raise LLMRefused(f"Claude 婉拒此請求（category={category}）")
         if stop == "pause_turn":
             logger.info("Claude pause_turn，續跑第 %d/%d 輪", round_idx + 1, max_rounds - 1)
             convo = convo + [{"role": "assistant", "content": message.content}]
             continue
 
-        usage["web_search_requests"] = searches
+        _stamp_tool_counts(usage, searches, fetches)
         return message, usage
 
-    usage["web_search_requests"] = searches
+    _stamp_tool_counts(usage, searches, fetches)
     raise LLMError(
         f"Claude 連續 {max_rounds} 輪都回 pause_turn 仍未完成，放棄"
         "（避免無窮迴圈；可調高 CLAUDE_MAX_CONTINUATIONS 或調低 max_uses）"

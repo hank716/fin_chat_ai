@@ -163,13 +163,17 @@ def _model_chain() -> list[str]:
     return [m for m in chain if m and not (m in seen or seen.add(m))]
 
 
-def fetch_facts(date_str: str) -> tuple[FactsPack, dict[str, int]]:
-    """用 Gemini + google_search 抓近兩日市場重大事件，回 (FactsPack, usage)。
+def fetch_facts(date_str: str) -> tuple[FactsPack, dict[str, int], str]:
+    """用 Gemini + google_search 抓近兩日市場重大事件，回 (FactsPack, usage, 實際使用的 model)。
 
     模型走 **flash 而非 pro**：純檢索不需要 pro 的推理力，省一半成本；flash 過載時
     依 `_model_chain()` 換檔位重試。全部失敗才回空 FactsPack（不 raise）——召回層是
     加值資訊，不該讓晨報整個掛掉；決策層拿不到 facts 時仍可只憑 features 產出晨報，
     但那次的查證閉環等於沒有被驗證到（report 的 fact_checks 會是空的）。
+
+    **必須回傳實際使用的 model**：換檔位是靜默的，呼叫端若一律以 flash 計價，落到
+    flash-lite 會高估 6 倍、落到 pro 會低估，`month_by_provider` 的拆分也跟著失真
+    （spec 022 FR-011 成本可歸因性）。
     """
     prompt = (
         f"{_RETRIEVAL_RULES}\n\n"
@@ -187,10 +191,12 @@ def fetch_facts(date_str: str) -> tuple[FactsPack, dict[str, int]]:
             continue
         events = _attach_urls(raw.get("events") or [], _all_grounding_urls(candidate))
         logger.info("召回層取得 %d 則待查證線索（date=%s model=%s）", len(events), date_str, model)
-        return FactsPack(events=events), usage
+        if model != settings.gemini_model_qa:
+            logger.info("召回層換檔位成功（%s），本次以該檔位費率計價", model)
+        return FactsPack(events=events), usage, model
 
     logger.warning("召回層所有檔位都失敗（晨報改為只憑 features 產出，本次無查證）：%s", last_exc)
-    return FactsPack(), {}
+    return FactsPack(), {}, settings.gemini_model_qa
 
 
 def _generate_with_sources(

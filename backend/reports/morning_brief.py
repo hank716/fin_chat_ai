@@ -278,14 +278,16 @@ def _run_backtest_loop() -> dict[str, Any]:
 
 def _fetch_facts(
     feats: dict[str, Any], *, frugal: bool = False,
-) -> tuple[retrieval.FactsPack, dict[str, int]]:
+) -> tuple[retrieval.FactsPack, dict[str, int], str]:
     """廣度召回層：Gemini + google_search 產待查證線索（spec 022 WP2）。
+
+    回 (FactsPack, usage, 實際使用的 model)——第三個值供正確計價，見 retrieval.fetch_facts。
 
     關掉 `enable_facts_pack` 就回空——決策層仍可只憑 features 產出晨報，只是少了外部事件。
     `frugal` 同理：節儉模式下決策層沒有查證工具，召回再多線索也無法採信，白花錢。
     """
     if not settings.enable_facts_pack or frugal:
-        return retrieval.FactsPack(), {}
+        return retrieval.FactsPack(), {}, settings.gemini_model_qa
     as_of = str(feats.get("as_of") or datetime.now(ZoneInfo(settings.tz)).date())
     return retrieval.fetch_facts(as_of)
 
@@ -335,6 +337,52 @@ def _draft_to_result(draft: Any) -> BriefResult:
     return BriefResult.model_validate(payload)
 
 
+def _verification_stats(
+    facts: retrieval.FactsPack, fact_checks: list[dict[str, Any]],
+    decision_usage: dict[str, int], *, frugal: bool,
+) -> dict[str, Any]:
+    """查證層遙測：召回幾則線索、裁決了幾則、各判定幾則、實際開了幾次 web_fetch。
+
+    存在的理由是 2026-08-12 盤點時發現的兩個盲點：
+    ① `web_fetch` 不按次計費，查證層空轉在帳單上完全看不出來——連續多天 100% unverifiable
+       時，無從分辨是「查了但查不到」還是「根本沒查」。
+    ② 8/10、8/11 兩篇都是 8 則線索只回 6 條 fact_checks，兩則線索被靜默跳過，無人偵測。
+
+    同時發出告警（而不是只落地數字）：這兩種情況都不會讓晨報失敗，所以不主動喊就等於沒發生。
+    """
+    verdicts: dict[str, int] = {}
+    for check in fact_checks:
+        verdict = str(check.get("verdict") or "unknown")
+        verdicts[verdict] = verdicts.get(verdict, 0) + 1
+
+    facts_n = len(facts.events)
+    checks_n = len(fact_checks)
+    fetch_requests = int(decision_usage.get("web_fetch_requests", 0))
+    search_requests = int(decision_usage.get("web_search_requests", 0))
+
+    if checks_n < facts_n:
+        logger.warning(
+            "查證層漏裁決：召回 %d 則線索但只回 %d 條 fact_checks（%d 則被靜默略過）",
+            facts_n, checks_n, facts_n - checks_n,
+        )
+    # 節儉模式本來就沒掛工具，0 次是預期；非節儉模式下 0 次代表查證層空轉——
+    # 模型照樣產出 verdict，但那些 verdict 沒有任何實際開啟來源作為依據。
+    if not frugal and facts_n and fetch_requests == 0:
+        logger.warning(
+            "查證層空轉：本次有 %d 則待查證線索、工具已掛載，但 web_fetch 實際使用 0 次"
+            "（fact_checks 的判定並非來自實際開啟來源）", facts_n,
+        )
+
+    return {
+        "facts_n": facts_n,
+        "fact_checks_n": checks_n,
+        "unadjudicated_n": max(facts_n - checks_n, 0),
+        "verdicts": verdicts,
+        "fetch_requests": fetch_requests,
+        "search_requests": search_requests,
+    }
+
+
 def generate_morning_brief(
     raw_query: str | None = None, *, refresh_tw: bool = True,
     push_discord: bool = False, publish: bool = False,
@@ -360,7 +408,7 @@ def generate_morning_brief(
 
     # ── LLM 分層（spec 022）──
     # ① 廣度召回：Gemini + google_search 產「待查證線索」（不做分析、不挑股）
-    facts, facts_usage = _fetch_facts(feats, frugal=frugal)
+    facts, facts_usage, facts_model = _fetch_facts(feats, frugal=frugal)
     # 刻意**不**塞進 feats["web_context"]：那樣同一份線索會在 prompt 裡出現兩次
     # （features JSON 內一次、facts pack 一次），白燒 token。稽核用的副本走 report["facts"]。
 
@@ -370,8 +418,10 @@ def generate_morning_brief(
         feats, facts, calibration_text, frugal=frugal,
     )
 
+    # 以召回層**實際跑的** model 計價：`_model_chain()` 換檔位是靜默的，一律用 flash 算會在
+    # 落到 flash-lite 時高估 6 倍、落到 pro 時低估（spec 022 FR-011 成本可歸因性）。
     facts_cost = (
-        tracker.cost_of_usage(facts_usage, settings.gemini_model_qa, grounded=True)
+        tracker.cost_of_usage(facts_usage, facts_model, grounded=True)
         if facts_usage else 0.0
     )
     decision_model = (
@@ -385,8 +435,8 @@ def generate_morning_brief(
     # `rounds=1` 且 `cached_tokens≈0` ⇒ 前綴寫了沒被重讀，1.25× 的 cache write 是純虧。
     usage = {
         key: facts_usage.get(key, 0) + decision_usage.get(key, 0)
-        for key in ("input_tokens", "output_tokens", "cached_tokens",
-                    "cache_write_tokens", "tool_tokens", "web_search_requests")
+        for key in ("input_tokens", "output_tokens", "cached_tokens", "cache_write_tokens",
+                    "tool_tokens", "web_search_requests", "web_fetch_requests")
     }
     usage["rounds"] = int(decision_usage.get("rounds", 0))   # 只有決策層會 pause_turn 續跑
     # 分兩筆記帳（spec 022）：彙總桶不變，但另外累進 per-provider 月桶——
@@ -417,6 +467,9 @@ def generate_morning_brief(
         "retrieval_twd": round(facts_cost, 4),
         "decision_twd": round(decision_cost, 4),
         "month_by_provider": tracker.month_by_provider(),
+        # 查證層是否真的動過（spec 022 的核心宣稱），以及線索有沒有被逐條裁決。
+        # 這幾個數字在成本上留不下痕跡（web_fetch 不按次計費），不落地就永遠無從查核。
+        "verification": _verification_stats(facts, fact_checks, decision_usage, frugal=frugal),
     }
     logger.info("晨報 LLM 花費 NT$%.4f（provider=%s 本月累計 NT$%.2f / 上限 NT$%.0f）",
                 brief_cost, provider, month_total, monthly_limit)

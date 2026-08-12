@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from config import settings
+from reports.degradation import degradation_notes
 
 
 def _pct(v: Any) -> str:
@@ -110,6 +111,9 @@ def build_discord_summary(report: dict[str, Any]) -> str:
             f" / NT${cost.get('monthly_limit_twd',0):.0f}"
             f"（今日 NT${cost.get('day_total_twd',0):.2f}）"
         )
+    # 降級提示（憲章 II）。Discord 常常是唯一被讀到的介面，這裡漏掉等於沒做。
+    for note in degradation_notes(cost):
+        parts.append(f"⚠️ {note}")
     parts.append("\n_此結果僅供家庭內部市場研究使用，不構成投資建議。_")
 
     text = "\n\n".join(parts)

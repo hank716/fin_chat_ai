@@ -33,8 +33,18 @@ class Settings(BaseSettings):
     # 刻意**不**改用決策層模型——這是 trivial gate、fail-open、token 極少，用 Opus 是純浪費。
     gemini_model_classifier: str = "gemini-flash-lite-latest"
     enable_intent_filter: bool = True                 # 啟用意圖分類器（非財務問題直接婉拒）
-    daily_cost_limit_twd: int = 30                    # 每日全站總花費上限（晨報+問答）
-    monthly_cost_limit_twd: int = 600                 # 每月全站總花費上限（對齊後台預算）
+    # 每日全站總花費上限。⚠️ 它**只約束 /ask**——晨報刻意不受 check_budget() 攔截，
+    # 走 tracker.brief_should_degrade() 的降級路徑。語意是「一篇晨報 + 若干問答」，
+    # 所以必須大於單篇晨報成本（實測 NT$26–39），否則對最大宗支出完全失效。
+    daily_cost_limit_twd: int = 45
+    # 每月全站總花費上限。2026-08-12 盤點：近四篇單日晨報均值 NT$32.5、月約 20.5 個交易日
+    # → 投影 NT$666/月，600 會讓每月最後約 4 篇晨報全部降級（無外部事件、無查證）。
+    # 提到 800 是「吃下成本、不要月底品質懸崖」的取捨（憲章 II 同步修訂）。
+    monthly_cost_limit_twd: int = 800
+    # 月底保留給降級的緩衝：月餘額低於此值時晨報改跑節儉模式。
+    # 刻意與 daily_cost_limit_twd 解耦——兩者語意無關（一個是 /ask 閘門、一個是降級門檻），
+    # 共用一個旋鈕會讓調整日上限意外改變晨報降級時機。
+    brief_degrade_reserve_twd: int = 45
 
     # ── LLM 決策 + 查證層（spec 022-llm-tiering）──
     # 吃 features + facts pack + 校準做推理選股，並用 web_fetch 逐條查證召回層引用的 URL。
@@ -42,7 +52,10 @@ class Settings(BaseSettings):
     llm_decision_provider: str = "anthropic"          # anthropic | gemini（gemini＝降級/A-B 對照）
     claude_model_decision: str = "claude-opus-5"      # 晨報決策（品質優先，晨報是產品本體）
     claude_model_chat: str = "claude-opus-5"          # 問答；用量稀疏，需省時可降 claude-sonnet-5
-    claude_effort: str = "high"                       # 問答用 low|medium|high|xhigh|max（thinking 深度）
+    # 問答 thinking 深度 low|medium|high|xhigh|max。2026-08-12 從 high 降到 medium：
+    # 原本問答（次要、用量稀疏、且已有當日晨報 JSON 當上下文）跑得比晨報（產品本體）還深，
+    # 檔位配置與「晨報 > 問答」的預算優先序相反。省下的額度回流給晨報與查證。
+    claude_effort: str = "medium"
     # 晨報獨立一檔（2026-08-07 拆出）。**這是輸出端的成本主閥**：thinking token 以 output 費率
     # 計價（Opus 5 $25/MTok），effort=high 實測跑出 output 32,236 tokens ≈ NT$25.8，佔單篇
     # 決策成本 70%。39a7d03 曾記錄「effort 不是主因」——那是在 prompt cache 開啟**之前**、

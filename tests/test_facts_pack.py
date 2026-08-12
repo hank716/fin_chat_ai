@@ -115,10 +115,11 @@ def test_fetch_facts_parses_fenced_json(monkeypatch):
         retrieval.gemini_client, "generate_text_with_candidate",
         lambda prompt, model, use_search: (body, {"input_tokens": 5}, _chunks("https://a.test")),
     )
-    pack, usage = retrieval.fetch_facts("2026-08-06")
+    pack, usage, model = retrieval.fetch_facts("2026-08-06")
     assert [e.claim for e in pack.events] == ["A"]
     assert pack.events[0].url == "https://a.test"
     assert usage["input_tokens"] == 5
+    assert model == retrieval.settings.gemini_model_qa, "首選檔位成功時回預設 model"
 
 
 @pytest.mark.parametrize("banned", ["分析", "選股", "推薦", "預測"])
@@ -155,11 +156,14 @@ def test_fetch_facts_falls_through_to_next_model(monkeypatch):
 
     monkeypatch.setattr(retrieval.gemini_client, "generate_text_with_candidate",
                         lambda prompt, model, use_search: fake(prompt, model, use_search))
-    pack, usage = retrieval.fetch_facts("2026-08-06")
+    pack, usage, model = retrieval.fetch_facts("2026-08-06")
     assert len(tried) == 3, "前兩個檔位失敗後應繼續往下試"
     assert len(tried) == len(set(tried)), "不該重複試同一個檔位"
     assert [e.claim for e in pack.events] == ["A"]
     assert usage["input_tokens"] == 7
+    # 換檔位是靜默的，呼叫端必須拿得到實際跑的 model 才能正確計價——
+    # 一律以 flash 計價會在落到 flash-lite 時高估 6 倍、落到 pro 時低估。
+    assert model == tried[-1] != retrieval.settings.gemini_model_qa
 
 
 def test_fetch_facts_all_models_fail_degrades_quietly(monkeypatch):
@@ -168,5 +172,6 @@ def test_fetch_facts_all_models_fail_degrades_quietly(monkeypatch):
         raise retrieval.LLMError("Gemini 503 overloaded")
 
     monkeypatch.setattr(retrieval.gemini_client, "generate_text_with_candidate", _always_503)
-    pack, usage = retrieval.fetch_facts("2026-08-06")
+    pack, usage, model = retrieval.fetch_facts("2026-08-06")
     assert pack.events == [] and usage == {}
+    assert model == retrieval.settings.gemini_model_qa, "全滅時回預設 model，呼叫端不必處理 None"

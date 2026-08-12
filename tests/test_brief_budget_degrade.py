@@ -33,34 +33,71 @@ class _FakeRedis:
 def fake_redis(monkeypatch):
     r = _FakeRedis()
     monkeypatch.setattr(ct, "redis_client", r)
-    monkeypatch.setattr(ct.settings, "monthly_cost_limit_twd", 600)
+    monkeypatch.setattr(ct.settings, "monthly_cost_limit_twd", 800)
     monkeypatch.setattr(ct.settings, "daily_cost_limit_twd", 45)
+    monkeypatch.setattr(ct.settings, "brief_degrade_reserve_twd", 45)
     return r
 
 
-# ── 門檻 ────────────────────────────────────────────────────────────────
+def _spend_earlier_this_month(twd: float) -> None:
+    """把花費只記進月桶——模擬「本月稍早花的，但不是今天」。
+
+    `record_cost` 會同時寫日桶與月桶，所以直接用它記大額會連帶觸發「當日已花滿」那條，
+    測不到單純的月餘額情境。這個 helper 讓兩個維度可以分開驗。
+    """
+    ct.redis_client.incrbyfloat(ct._month_key(), twd)
+
+
+# ── 門檻①：月餘額 ────────────────────────────────────────────────────────
 
 def test_month_remaining_tracks_spend(fake_redis):
-    assert ct.month_remaining() == pytest.approx(600.0)
+    assert ct.month_remaining() == pytest.approx(800.0)
     ct.record_cost(120.0, provider="anthropic")
-    assert ct.month_remaining() == pytest.approx(480.0)
+    assert ct.month_remaining() == pytest.approx(680.0)
 
 
 def test_no_degrade_while_budget_is_healthy(fake_redis):
-    ct.record_cost(400.0, provider="anthropic")   # 剩 200，遠高於日上限
+    _spend_earlier_this_month(400.0)              # 剩 400，且今天還沒花
     assert ct.brief_should_degrade() is False
 
 
-def test_degrade_when_remaining_below_one_day(fake_redis):
-    """門檻用日上限當代理值：日上限的語意就是「一篇晨報 + 若干問答」。"""
-    ct.record_cost(560.0, provider="anthropic")   # 剩 40 < 45
+def test_degrade_when_remaining_below_reserve(fake_redis):
+    """門檻是 brief_degrade_reserve_twd：剩不到一篇晨報的量就收手。"""
+    _spend_earlier_this_month(760.0)              # 剩 40 < 45
     assert ct.brief_should_degrade() is True
 
 
 def test_degrade_when_already_overspent(fake_redis):
-    ct.record_cost(700.0, provider="anthropic")   # 剩 -100
+    _spend_earlier_this_month(900.0)              # 剩 -100
     assert ct.month_remaining() < 0
     assert ct.brief_should_degrade() is True
+
+
+def test_reserve_is_decoupled_from_daily_limit(fake_redis, monkeypatch):
+    """降級門檻不該被 /ask 的日上限牽動——兩者語意無關，共用旋鈕會誤觸。"""
+    _spend_earlier_this_month(770.0)              # 剩 30
+    monkeypatch.setattr(ct.settings, "brief_degrade_reserve_twd", 20)
+    assert ct.brief_should_degrade() is False, "剩 30 > 保留額 20，不該降級"
+    monkeypatch.setattr(ct.settings, "daily_cost_limit_twd", 200)
+    assert ct.brief_should_degrade() is False, "調日上限不該改變晨報降級時機"
+
+
+# ── 門檻②：當日重跑（2026-08-06 三跑 NT$115.19 的敞口）──────────────────
+
+def test_degrade_on_same_day_rerun_even_with_healthy_month(fake_redis):
+    """今天已經花滿日上限＝已產過一篇完整晨報，再跑就是補跑 → 節儉模式。
+
+    這正是條件①（只看月餘額）擋不住的情境：8/6 那天跑三次時月餘額還很充裕。
+    """
+    ct.record_cost(46.0, provider="anthropic")    # 今日 46 ≥ 日上限 45，月餘額仍有 754
+    assert ct.month_remaining() > 700
+    assert ct.brief_should_degrade() is True
+
+
+def test_first_brief_of_the_day_is_not_degraded(fake_redis):
+    """當日還沒花滿就不降級——否則每天第一篇晨報就會被自己的護欄擋成節儉模式。"""
+    ct.record_cost(30.0, provider="anthropic")    # 今日 30 < 45
+    assert ct.brief_should_degrade() is False
 
 
 # ── 降級的內容 ──────────────────────────────────────────────────────────

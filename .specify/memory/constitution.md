@@ -1,4 +1,18 @@
 <!--
+Sync Impact Report (2.1.0, 2026-08-12)
+- Version change: 2.0.0 → 2.1.0 (MINOR：Principle II 實質擴充)
+- Rationale: 成本盤點發現維持月上限 600 的代價不是省錢、而是每月最後約 4 篇晨報固定降級
+  （spec 022 分層完全不作用）。依 Governance「放寬成本原則需明確理由與審查」具名修訂為 800/45。
+- Principle II changed:
+  · 上限 600/30 → 800/45，附實測依據與沿革（含 2026-08-06 未經審查分歧的對照）
+  · 新增：日上限只約束 /ask 的豁免範圍（原本只存在於程式註解）
+  · 新增：max_uses 調整 MUST 有遙測依據（web_fetch 不計費、不留成本痕跡）
+  · 新增：降級 MUST 對使用者可見（不得只落在 JSON / log）
+  I、III–VII 未變
+- 依賴同步：.env / .env.example / backend/config.py / README.md 已對齊 800 / 45
+-->
+
+<!--
 Sync Impact Report
 - Version change: 1.0.0 → 2.0.0 (MAJOR：重定義 Principle I)
 - Rationale: 決策品質瓶頸在 LLM 推理層；Gemini 的 google_search 覆蓋率（台股中文冷門標的）
@@ -54,16 +68,32 @@ LLM 分為兩層，職責 MUST 分離（spec 022-llm-tiering）：
 兩者互為對照，且查證通過率成為可量測指標。成本仍受 Principle II 約束。
 
 ### II. 成本紀律（每月上限）
-LLM 花費（召回層 + 決策層合計）MUST 受硬性預算約束：**每月上限 NT$600**、每日 NT$30，
+LLM 花費（召回層 + 決策層合計）MUST 受硬性預算約束：**每月上限 NT$800**、每日 NT$45，
 並保有每使用者查詢上限（design_docs §25.2）。`.env` 的 `MONTHLY_COST_LIMIT_TWD` /
-`DAILY_COST_LIMIT_TWD` MUST 與本條文一致——2026-08-06 曾發現 `.env` 被調到 800 與憲章不符，
-已改回 600；日後兩邊若再分歧，**以本條文為準**。互動查詢前 MUST 檢查預算；逾限即擋。
-cache 命中 MUST NOT 重複呼叫 LLM。任何新功能若增加 LLM 呼叫，plan 階段 MUST 估算成本增量
-並說明如何回收（快取/降頻）。
+`DAILY_COST_LIMIT_TWD` MUST 與本條文一致；日後兩邊若分歧，**以本條文為準**。
+互動查詢前 MUST 檢查預算；逾限即擋。cache 命中 MUST NOT 重複呼叫 LLM。任何新功能若增加
+LLM 呼叫，plan 階段 MUST 估算成本增量並說明如何回收（快取/降頻）。
 
-預算優先序 MUST 為「每日晨報 > 互動問答」：晨報為產品本體且無人值守，不受 `check_budget()`
-攔截；互動問答為次要，額度耗盡時被擋是**預期行為**而非故障。連網查證工具（web_fetch /
-web_search）MUST 設 `max_uses` 上限，不得把單次呼叫的成本上界交由模型自行決定。
+上限沿革：600/30 → **800/45**（2026-08-12，依 Governance 條「放寬成本原則需明確理由與審查」
+所做的具名修訂）。理由是實測而非寬鬆：spec 022 上線後單篇晨報穩定在 NT$26–39（均值 32.5），
+月約 20.5 個交易日 → 投影 NT$666/月。維持 600 不會讓成本變低，只會讓 `brief_should_degrade()`
+在每月第 17 篇左右觸發，使當月最後約 4 篇晨報全部跑節儉模式（無外部事件、無查證、effort=low）
+——等於用「每月最後一週產出一份分層設計完全不作用的晨報」去換帳面數字。
+2026-08-06 曾把 `.env` 調到 800 而未修條文，那是**未經審查的分歧**、已改回；本次是相反情形：
+先審查、後同步兩邊。日上限 30→45 同理——它一度低於單篇晨報成本，對最大宗支出完全失效。
+
+日上限的適用範圍 MUST 明確：它**只約束 `/ask`**。晨報為產品本體且無人值守，刻意不受
+`check_budget()` 攔截（預算優先序 MUST 為「每日晨報 > 互動問答」；互動問答額度耗盡時被擋是
+**預期行為**而非故障）。晨報側的成本約束改由 `tracker.brief_should_degrade()` 承擔：月餘額低於
+`BRIEF_DEGRADE_RESERVE_TWD`、或當日已花滿日上限（補跑情境）時降級，照常出報但不再吃光額度。
+此豁免 MUST 寫在條文裡而非只存在於程式註解。
+
+連網查證工具（web_fetch / web_search）MUST 設 `max_uses` 上限，不得把單次呼叫的成本上界交由
+模型自行決定。`max_uses` 的調整 MUST 有遙測依據：`web_fetch` 不按次計費、不留成本痕跡，
+沒有實際使用次數的紀錄就調整上限等於憑印象改成本與品質的取捨點。
+
+降級 MUST 對使用者可見：晨報若以節儉模式或降級供應商產出，該事實 MUST 出現在使用者實際閱讀
+的輸出面（markdown / Discord / 網頁），不得只落在報告 JSON 或 log。看不見的品質降級比降級本身更糟。
 
 ### III. Guardrail Fail-Closed (NON-NEGOTIABLE)
 輸出護欄 MUST fail-closed：Symbol Guard 等驗證失敗時 MUST 擋下輸出，不得因驗證異常而放行
@@ -114,4 +144,4 @@ MUST 放 pCloud，採 on-demand restore、避免大量下載（§11）。理由�
   PATCH＝措辭/釐清。修訂 MUST 更新下方日期並在檔首 Sync Impact Report 記錄。
 - 所有 plan/PR 審查 MUST 驗證憲章遵循；放寬 Principle III（fail-closed）或 II（成本）之變更需明確理由與審查。
 
-**Version**: 2.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-08-06
+**Version**: 2.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-08-12

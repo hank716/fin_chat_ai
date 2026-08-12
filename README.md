@@ -67,17 +67,21 @@ on-demand 抓取並算衍生指標，餵進 grounded 研究稿，仍受 guardrai
 
 全站總花費（晨報 + 所有人問答）以 token × 模型費率估算（`backend/cost/tracker.py`），上限在 `.env` 可調（`backend/config.py`）：
 
-- **每日上限** `DAILY_COST_LIMIT_TWD = 30`
-- **每月上限** `MONTHLY_COST_LIMIT_TWD = 600`（憲章 II 的硬性約束，`.env` 須與之一致）
+- **每日上限** `DAILY_COST_LIMIT_TWD = 45`（**只約束 `/ask`**，見下）
+- **每月上限** `MONTHLY_COST_LIMIT_TWD = 800`（憲章 II 的硬性約束，`.env` 須與之一致）
+- **降級緩衝** `BRIEF_DEGRADE_RESERVE_TWD = 45`（月餘額低於此值 → 晨報跑節儉模式）
 
-> **spec 022 起成本結構改變**：晨報＝Gemini flash 廣度召回（小）+ Claude Opus 5 單次決策
-> （$5/$25 per MTok）+ 連網查證（web_fetch ≤12 / web_search ≤5）。原本的 Gemini 兩段式
-> （PRO 研究 + Flash 格式化，單篇約 NT$8）已退為降級路徑。
-> **新結構的實際單價待上線後量測**——粗估 NT$12–21/篇、月 NT$250–450。
+> **實測單價（2026-08-12 盤點）**：晨報＝Gemini flash 廣度召回（NT$0.2–5）+ Claude Opus 5
+> 單次決策與查證（NT$23–37）。近四篇單日總額 **NT$26–39、均值 32.5**，月約 20.5 個交易日
+> → 投影約 **NT$666/月**。上限 800 是照這個跑率訂的，只夠**每天跑一次**晨報。
 >
-> 預算優先序為 **晨報 > 問答**：晨報不受 `check_budget()` 攔截（那只擋 `/ask`），
-> 可能把月額度吃到見底、使問答整月被擋——這是刻意取捨，非故障。
-> 每份晨報 JSON 的 `cost.month_remaining_twd` 會攤出剩餘額度，讓超支不是無聲發生。
+> 成本主體在 **output/thinking**（以 output 費率計價），不在 input——晨報開了 prompt cache，
+> 快取讀取 0.1× 打在查證工具迴圈的前綴重讀上，實測單篇省下約 NT$61。**不要關掉它**。
+>
+> 預算優先序為 **晨報 > 問答**：晨報不受 `check_budget()` 攔截（那只擋 `/ask`），改由
+> `brief_should_degrade()` 在月餘額見底或當日已花滿日上限（補跑）時降級——照常出報，
+> 但關掉外部事件與連網查證。降級會直接標在報告、Discord 與網頁上，不是無聲發生。
+> 每份晨報 JSON 的 `cost.month_remaining_twd` 也會攤出剩餘額度。
 
 ## 本機啟動（M0）
 

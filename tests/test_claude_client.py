@@ -253,6 +253,47 @@ def test_web_search_requests_counted_from_content(monkeypatch):
     assert usage["web_search_requests"] == 2
 
 
+def test_web_fetch_requests_counted_even_though_unbilled(monkeypatch):
+    """`web_fetch` 不按次計費，但**必須**照數——這是查證層唯一的可觀測性來源。
+
+    不計費代表查證層跑或不跑在帳單上完全看不出來：2026-08-12 盤點時連續多天出現
+    「fact_checks 全部 unverifiable」，卻無法分辨是「查了但查不到」還是「根本沒查」。
+    ⚠️ 別拿 usage.tool_tokens 當代理值——Anthropic 那欄恆為 0（見 `_usage_of`）。
+    """
+    content = [
+        _block(type="server_tool_use", name="web_fetch"),
+        _block(type="server_tool_use", name="web_search"),
+        _block(type="server_tool_use", name="web_fetch"),
+        _block(type="server_tool_use", name="web_fetch"),
+        _block(type="text", text='{"headline": "x"}'),
+    ]
+    _install(monkeypatch, [_msg(content=content)])
+    _result, usage = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert usage["web_fetch_requests"] == 3
+    assert usage["web_search_requests"] == 1
+    assert usage["tool_tokens"] == 0, "Anthropic 不分開回報 tool token，不可當查證代理值"
+
+
+def test_tool_counts_survive_pause_turn_continuations(monkeypatch):
+    """續跑時次數要累加，不是只算最後一輪——否則多輪查證的用量被低估。"""
+    paused = _msg(
+        content=[_block(type="server_tool_use", name="web_fetch"), _block(type="text", text="半途")],
+        stop="pause_turn",
+    )
+    done = _msg(content=[
+        _block(type="server_tool_use", name="web_fetch"),
+        _block(type="text", text='{"headline": "完成"}'),
+    ])
+    _install(monkeypatch, [paused, done])
+    _result, usage = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert usage["web_fetch_requests"] == 2
+    assert usage["rounds"] == 2
+
+
 # ── schema ──────────────────────────────────────────────────────────────
 
 def test_source_ref_hint_lists_only_real_paths():

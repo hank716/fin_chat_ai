@@ -14,6 +14,10 @@
 ⚠️ 本檔費率對應 `*-latest` 別名「當前」指向的版本（pro-latest→Gemini 3.1 Pro、
 flash-latest→Gemini 3.5 Flash，於 2026-06-03 核對）。Google 把別名重新指向新版時，
 這張表必須同步更新，否則會再次低估。
+
+Anthropic 側費率於 **2026-08-12** 對照官方定價重新核實，全數正確：Opus 5 $5/$25、
+Sonnet 5 $3/$15、Haiku 4.5 $1/$5、快取讀 0.1×、快取寫 1.25×(5m)/2×(1h)、
+web_search $10/1,000 次、web_fetch 不按次計費。
 """
 from __future__ import annotations
 
@@ -63,10 +67,13 @@ _PRICING_ANTHROPIC = {
     "claude-haiku-4-5": (1.00, 5.00, 0.10),
 }
 _ANTHROPIC_DEFAULT = _PRICING_ANTHROPIC["claude-opus-5"]   # 未知 claude-* 一律以最貴檔估（寧可高估）
-# 快取寫入 premium（倍率，乘在 input 價上）：5 分鐘 1.25×、1 小時 2×。
+# 快取寫入 premium（倍率，乘在 input 價上）：5 分鐘 1.25×、1 小時 2×。快取讀取為 0.1× input，
+# 已反映在上表第三欄（opus 5.00→0.50、sonnet 3.00→0.30、haiku 1.00→0.10）。2026-08-12 核對。
 _CACHE_WRITE_MULTIPLIER = {"5m": 1.25, "1h": 2.0}
-# Anthropic web_search：按次計價。⚠️ 這個數字**必須**對照 Anthropic 定價頁核實後再改，
-# 不要憑印象填；估錯會讓查證成本失真（web_fetch 不另計費，其內容以 input token 計）。
+# Anthropic web_search：按次計價 $10 / 1,000 次（2026-08-12 對照官方定價核實，數字正確）。
+# ⚠️ **web_fetch 不按次計費**，其抓回的內容以 input token 計。這代表查證層跑或不跑，
+# 在成本上**不留任何痕跡**——所以 web_fetch 的用量必須靠遙測記錄（見 claude_client 的
+# `web_fetch_requests`），不能反推自帳單。
 _WEB_SEARCH_USD_PER_REQUEST = 10.0 / 1000
 
 
@@ -213,16 +220,22 @@ def month_remaining() -> float:
 
 
 def brief_should_degrade() -> bool:
-    """月餘額是否已不足以再產一篇完整晨報 → 呼叫端改跑節儉模式。
+    """晨報是否該改跑節儉模式（關召回與查證、effort=low）。任一條件成立即降級：
+
+    ① **月餘額見底**：剩不到 `brief_degrade_reserve_twd` 就收手，不把剩下的額度一次吃完。
+    ② **當日已花滿日上限**：今天已經產過一篇完整晨報了，再跑就是補跑——補跑走節儉模式。
 
     晨報刻意**不受** `check_budget()` 攔截（那只擋 /ask），因為它是產品本體、不能因額度
-    見底而消失。但「不攔截」不該等於「無聲吃光整個月的額度」——2026-08-06 當天跑了三次
-    晨報、單日 NT$115.19（日上限 NT$30）就是這個敞口。這裡給呼叫端一個中間選項：
-    額度快見底時降級（關查證、降 effort），照樣出報，但不再把剩下的月額度一次吃完。
+    見底而消失。但「不攔截」不該等於「無聲吃光額度」——2026-08-06 當天跑了三次晨報、
+    單日 NT$115.19 就是這個敞口，而條件①（只看月）擋不住它：那天月餘額還很充裕。
+    條件② 才是補上那個口子的，手動補跑晨報是常態操作。
 
-    門檻用日上限當代理值：日上限的語意就是「一篇晨報 + 若干問答」，剩不到這個數就該收手。
+    門檻獨立於 `daily_cost_limit_twd`（見 config.brief_degrade_reserve_twd）：兩者語意無關，
+    共用一個旋鈕會讓調整 /ask 日上限意外改變晨報的降級時機。
     """
-    return month_remaining() < float(settings.daily_cost_limit_twd)
+    if month_remaining() < float(settings.brief_degrade_reserve_twd):
+        return True
+    return today_total() >= float(settings.daily_cost_limit_twd)
 
 
 def record_grounding_request() -> float:
