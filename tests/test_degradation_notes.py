@@ -66,3 +66,70 @@ def test_unadjudicated_clues_are_surfaced():
     }
     notes = degradation_notes(cost)
     assert any("2 則外部線索未被裁決" in n for n in notes)
+
+
+# ── spec 023 US2：查證失敗的分流提示 ─────────────────────────────────────
+
+def _cost(outcomes, **extra):
+    verification = {"facts_n": sum(outcomes.values()), "fact_checks_n": sum(outcomes.values()),
+                    "fetch_requests": 3, "fetch_limit": 3, "outcomes": outcomes,
+                    "checked_n": sum(v for k, v in outcomes.items()
+                                     if k in ("confirmed", "contradicted", "checked_insufficient"))}
+    verification.update(extra)
+    return {"frugal_mode": False, "decision_provider": "anthropic",
+            "verification": verification}
+
+
+def test_budget_shortfall_says_so_explicitly():
+    """「額度不足」與「來源打不開」要修的東西不同，講成同一句話等於兩邊都修不了。"""
+    notes = degradation_notes(_cost({"confirmed": 2, "unchecked_budget": 3}))
+    assert any("查證額度不足" in n and "3 則" in n for n in notes)
+    assert not any("來源無法開啟" in n for n in notes)
+
+
+def test_unreachable_sources_say_so_explicitly():
+    notes = degradation_notes(_cost({"confirmed": 2, "unchecked_unreachable": 2}))
+    assert any("來源無法開啟" in n and "2 則" in n for n in notes)
+    assert not any("查證額度不足" in n for n in notes)
+
+
+def test_mixed_failures_are_both_reported():
+    notes = degradation_notes(_cost(
+        {"confirmed": 1, "unchecked_budget": 2, "unchecked_unreachable": 1}))
+    assert any("查證額度不足" in n for n in notes)
+    assert any("來源無法開啟" in n for n in notes)
+
+
+def test_all_unchecked_reads_as_no_verified_events():
+    """FR-008：全數未查證時，呈現效果要等同「本篇無經查證外部事件」。
+
+    否則讀者會把「本篇有 5 則外部事件」當成那 5 則有事實基礎。
+    """
+    notes = degradation_notes(_cost({"unchecked_budget": 3, "unchecked_unreachable": 2}))
+    assert any("本篇無經查證的外部事件" in n for n in notes)
+
+
+def test_fully_checked_report_stays_quiet():
+    """全部查證成功就不該有任何提示——狼來了會讓真正的降級被忽略。"""
+    assert degradation_notes(_cost({"confirmed": 3, "checked_insufficient": 1})) == []
+
+
+def test_claimed_but_unbacked_verdicts_are_surfaced():
+    """模型說已查證、工具卻沒有成功紀錄——這是最該讓讀者看到的一類（8/20 實際發生）。"""
+    notes = degradation_notes(_cost({"confirmed": 1, "unchecked_budget": 1},
+                                    claimed_unbacked_n=1))
+    assert any("無實際開啟來源的紀錄" in n for n in notes)
+
+
+def test_frugal_mode_does_not_report_verification_failures():
+    """節儉模式本來就不掛查證工具，再報一次「查證失敗」是雜訊。"""
+    notes = degradation_notes({"frugal_mode": True,
+                               "verification": {"outcomes": {"unchecked_other": 3}}})
+    assert len(notes) == 1 and "節儉模式" in notes[0]
+
+
+def test_notes_carry_no_markdown_syntax():
+    """網頁面是 `{{ note }}` 逐字跳脫輸出——文案帶 markdown 就會變成一排星號。"""
+    notes = degradation_notes(_cost({"unchecked_budget": 2, "unchecked_unreachable": 1},
+                                    claimed_unbacked_n=1))
+    assert notes and all("*" not in n for n in notes)

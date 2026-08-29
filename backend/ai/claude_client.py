@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import anthropic
@@ -188,6 +189,71 @@ def _count_server_tools(content: Any) -> dict[str, int]:
     return counts
 
 
+@dataclass(frozen=True)
+class FetchAttempt:
+    """一次 `web_fetch` 的實際結果（spec 023 FR-006）。
+
+    `fact_checks[].verdict` 是**模型自述**，無法稽核；這個結構是**工具行為**，可以。
+    2026-08-20 那篇實測：4 則 `confirmed` 分屬 4 個不同 URL，但當天只開了 3 次原文——
+    至少一則「已查證」沒有任何工具行為支撐。只讀 verdict 永遠看不出這件事。
+    """
+
+    url: str
+    ok: bool
+    error_code: str | None
+    retrieved_at: str | None
+
+
+def _fetch_url_of(block: Any) -> str:
+    """從 `server_tool_use` 取出它想開的 URL。
+
+    `input` 在 SDK 回應上是 dict，但測試 mock 可能給物件——兩種都接。
+    """
+    payload = getattr(block, "input", None)
+    if isinstance(payload, dict):
+        return str(payload.get("url") or "")
+    return str(getattr(payload, "url", "") or "")
+
+
+def _collect_fetch_attempts(content: Any) -> list[FetchAttempt]:
+    """以 `tool_use_id` 把 `server_tool_use` 與 `web_fetch_tool_result` 配成對。
+
+    ⚠️ **失敗時 URL 只能從請求端拿**：`WebFetchToolResultErrorBlock` 只有 `error_code`，
+    沒有 `url` 欄位。而「哪個來源失敗」正是 spec 023 US4 的判斷依據，所以必須回頭配對。
+
+    刻意用 `getattr` 讀 block 而不 import SDK 型別做 isinstance——與 `_count_server_tools`
+    同一個理由（測試全程用 SimpleNamespace mock，且欄位名比型別名穩定）。
+    """
+    requested: dict[str, str] = {}
+    attempts: list[FetchAttempt] = []
+    for block in content or []:
+        btype = getattr(block, "type", None)
+        if btype == "server_tool_use" and getattr(block, "name", None) == "web_fetch":
+            tool_id = getattr(block, "id", None)
+            if tool_id:
+                requested[str(tool_id)] = _fetch_url_of(block)
+            continue
+        if btype != "web_fetch_tool_result":
+            continue
+        tool_id = str(getattr(block, "tool_use_id", "") or "")
+        inner = getattr(block, "content", None)
+        error_code = getattr(inner, "error_code", None)
+        attempts.append(FetchAttempt(
+            url=str(getattr(inner, "url", None) or requested.pop(tool_id, "") or ""),
+            ok=error_code is None,
+            error_code=str(error_code) if error_code else None,
+            retrieved_at=str(getattr(inner, "retrieved_at", "") or "") or None,
+        ))
+        requested.pop(tool_id, None)
+    # 請求了卻沒有對應結果 block（理論上不該發生，pause_turn 切在工具中間時可能出現）。
+    # 這種也要記——不記的話 attempts 數會少於 web_fetch_requests，事後只會以為是配對寫錯。
+    attempts.extend(
+        FetchAttempt(url=url, ok=False, error_code="no_result", retrieved_at=None)
+        for url in requested.values()
+    )
+    return attempts
+
+
 def _text_of(content: Any) -> str:
     return "".join(
         getattr(b, "text", "") for b in content or [] if getattr(b, "type", None) == "text"
@@ -209,6 +275,22 @@ def _map_error(exc: Exception) -> LLMError:
     return LLMError(f"Claude 呼叫失敗: {exc}")
 
 
+def _with_attempts(exc: LLMError, attempts: list[FetchAttempt]) -> LLMError:
+    """把已發生的查證行為掛在例外上再往外丟。
+
+    `raise` 會連同區域變數把 attempts 一起丟掉——失敗那次的查證用量就這樣從遙測裡消失了
+    （現行 `_stamp_tool_counts` 在 refusal / 續跑用盡兩條路徑上其實也救不回 usage）。
+    掛在例外物件上，呼叫端要就拿得到，不要也不必 catch。
+    """
+    exc.fetch_attempts = attempts  # type: ignore[attr-defined]
+    if attempts:
+        logger.warning(
+            "Claude 呼叫以例外結束，但期間已發生 %d 次 web_fetch（成功 %d）",
+            len(attempts), sum(1 for a in attempts if a.ok),
+        )
+    return exc
+
+
 def _run(
     *,
     model: str,
@@ -217,8 +299,8 @@ def _run(
     tools: list[dict[str, Any]],
     output_schema: dict[str, Any] | None = None,
     effort: str | None = None,
-) -> tuple[Any, dict[str, int]]:
-    """跑一次完整對話（含 pause_turn 續跑），回 (最終 message, 累計 usage)。
+) -> tuple[Any, dict[str, int], list[FetchAttempt]]:
+    """跑一次完整對話（含 pause_turn 續跑），回 (最終 message, 累計 usage, 查證 attempts)。
 
     **pause_turn 是這裡最重要的邏輯**：server-side 工具跑到內部迭代上限時，API 會回
     `stop_reason="pause_turn"` 和一段**未完成**的內容。必須把該 assistant turn 接回
@@ -252,6 +334,7 @@ def _run(
     usage: dict[str, int] = {}
     searches = 0
     fetches = 0
+    attempts: list[FetchAttempt] = []
     max_rounds = int(settings.claude_max_continuations) + 1
 
     for round_idx in range(max_rounds):
@@ -266,6 +349,8 @@ def _run(
         tool_counts = _count_server_tools(message.content)
         searches += tool_counts["web_search"]
         fetches += tool_counts["web_fetch"]
+        # 續跑時每輪都有自己的 content blocks，attempts 與次數計數走同一個累加點。
+        attempts.extend(_collect_fetch_attempts(message.content))
         # `rounds` 是事後歸因用的：cache write 付 1.25×，只有被後續輪次重讀才回本，
         # 所以「跑了幾輪」決定了 prompt cache 到底是賺是賠。不記就只能猜。
         usage["rounds"] = round_idx + 1
@@ -277,19 +362,24 @@ def _run(
             details = getattr(message, "stop_details", None)
             category = getattr(details, "category", None) if details else None
             _stamp_tool_counts(usage, searches, fetches)
-            raise LLMRefused(f"Claude 婉拒此請求（category={category}）")
+            raise _with_attempts(
+                LLMRefused(f"Claude 婉拒此請求（category={category}）"), attempts,
+            )
         if stop == "pause_turn":
             logger.info("Claude pause_turn，續跑第 %d/%d 輪", round_idx + 1, max_rounds - 1)
             convo = convo + [{"role": "assistant", "content": message.content}]
             continue
 
         _stamp_tool_counts(usage, searches, fetches)
-        return message, usage
+        return message, usage, attempts
 
     _stamp_tool_counts(usage, searches, fetches)
-    raise LLMError(
-        f"Claude 連續 {max_rounds} 輪都回 pause_turn 仍未完成，放棄"
-        "（避免無窮迴圈；可調高 CLAUDE_MAX_CONTINUATIONS 或調低 max_uses）"
+    raise _with_attempts(
+        LLMError(
+            f"Claude 連續 {max_rounds} 輪都回 pause_turn 仍未完成，放棄"
+            "（避免無窮迴圈；可調高 CLAUDE_MAX_CONTINUATIONS 或調低 max_uses）"
+        ),
+        attempts,
     )
 
 
@@ -302,8 +392,12 @@ def generate_structured(
     tools: list[dict[str, Any]],
     cacheable: bool = False,
     effort: str | None = None,
-) -> tuple[BaseModel, dict[str, int]]:
+) -> tuple[BaseModel, dict[str, int], list[FetchAttempt]]:
     """帶連網查證工具跑一次，並把結果驗成指定 pydantic 模型。
+
+    第三個回傳值是查證層**實際**做了什麼（spec 023）。刻意獨立成一個回傳值，**不併進
+    `usage`**：那是 `dict[str, int]`，且在 `morning_brief` 被逐鍵相加，塞 list 進去會在
+    相加時炸，型別註記也會說謊。
 
     `cacheable=True` 會在 user block 尾端放 `cache_control`，讓
     `tools` → `system` → `user`（含 features JSON）整段前綴進快取。
@@ -318,7 +412,7 @@ def generate_structured(
     user_block: dict[str, Any] = {"type": "text", "text": user_prompt}
     if cacheable:
         user_block["cache_control"] = {"type": "ephemeral", "ttl": settings.claude_cache_ttl}
-    message, usage = _run(
+    message, usage, attempts = _run(
         model=model,
         system=[{"type": "text", "text": system}],
         messages=[{"role": "user", "content": [user_block]}],
@@ -334,7 +428,7 @@ def generate_structured(
     except json.JSONDecodeError as exc:
         raise LLMError(f"Claude 回的不是合法 JSON: {exc}; head={text[:200]}") from exc
     try:
-        return model_cls.model_validate(payload), usage
+        return model_cls.model_validate(payload), usage, attempts
     except ValidationError as exc:
         raise LLMError(f"Claude 輸出不符 {model_cls.__name__} schema: {exc}") from exc
 
@@ -346,8 +440,12 @@ def generate_answer(
     model: str,
     tools: list[dict[str, Any]],
 ) -> tuple[str, dict[str, int]]:
-    """純文字作答（Discord 問答）。system_blocks 允許帶 cache_control。"""
-    message, usage = _run(
+    """純文字作答（Discord 問答）。system_blocks 允許帶 cache_control。
+
+    這條路徑**刻意丟棄** `_run` 回的查證 attempts：問答不做逐則裁決統計，多回一個值只會
+    連帶動 `api/ask.py` 與其測試，收益為零。要加查證遙測時再從這裡接出去。
+    """
+    message, usage, _attempts = _run(
         model=model,
         system=system_blocks,
         messages=[{"role": "user", "content": user_prompt}],

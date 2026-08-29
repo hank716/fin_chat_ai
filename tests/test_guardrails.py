@@ -117,3 +117,92 @@ def test_negated_once_but_asserted_elsewhere_is_still_caught():
 
     text = "這不代表必然上漲。不過就技術面看，站上均線後必然上漲。"
     assert "必然上漲" in _scan_phrases(text, CAUSALITY_BANNED)
+
+
+# ── Verification Guard（spec 023 FR-009）────────────────────────────────
+
+
+class _Clue:
+    """ClueOutcome 的最小替身（guardrail 只認 duck-type，不綁 reports 層的型別）。"""
+
+    def __init__(self, url, outcome, claim=""):
+        self.url, self.outcome, self.claim = url, outcome, claim
+
+
+def test_unverified_source_is_dropped_from_news_and_sources():
+    """未經查證的線索被當事實引用 → 擋下（憲章 III fail-closed）。"""
+    url = "https://rumor.example/story"
+    brief = _brief(
+        news_digest=[NewsDigestItem(title="傳聞", source="某媒體", date="2026-08-31",
+                                    url=url, takeaway="影響大")],
+        sources=[url, "https://ok.example/a"],
+    )
+    features = _features(news=[{"title": "傳聞", "url": url, "source": "某媒體",
+                                "date": "2026-08-31"}])
+    cleaned, report = verify.run_guardrails(
+        brief, features, clue_outcomes=[_Clue(url, "unchecked_budget")],
+    )
+    assert cleaned.news_digest == []
+    assert cleaned.sources == ["https://ok.example/a"]
+    assert report["counts"]["unverified_refs_dropped"] == 2
+    assert report["passed"] is False
+
+
+def test_confirmed_clue_is_not_blocked():
+    """已核對的線索照常放行——誤擋正確內容比漏擋更難察覺。"""
+    url = "https://ok.example/story"
+    brief = _brief(
+        news_digest=[NewsDigestItem(title="已查證", source="某媒體", date="2026-08-31",
+                                    url=url, takeaway="有原文佐證")],
+        sources=[url],
+    )
+    features = _features(news=[{"title": "已查證", "url": url, "source": "某媒體",
+                                "date": "2026-08-31"}])
+    cleaned, report = verify.run_guardrails(
+        brief, features, clue_outcomes=[_Clue(url, "confirmed")],
+    )
+    assert len(cleaned.news_digest) == 1 and cleaned.sources == [url]
+    assert report["counts"]["unverified_refs_dropped"] == 0
+
+
+def test_unverified_claim_quoted_in_thesis_is_flagged_not_deleted():
+    """文字重疊是啟發式判定：標示而非刪除，誤判時的代價才不會是靜默刪掉正確內容。"""
+    claim = "美國商務部宣布對先進封裝設備實施新的出口管制"
+    brief = _brief(
+        tw_watchlist=[WatchItem(symbol="2330", name="台積電",
+                                thesis="美國商務部宣布對先進封裝設備實施新的出口管制，短線有壓")],
+        sections=[BriefSection(title="跨市場連動",
+                               narrative="美國商務部宣布對先進封裝設備實施新的出口管制。",
+                               evidence=[])],
+    )
+    cleaned, report = verify.run_guardrails(
+        brief, _features(stocks={"2330": {"close": 900}}),
+        clue_outcomes=[_Clue("https://x.example/1", "unchecked_unreachable", claim)],
+    )
+    assert cleaned.tw_watchlist[0].thesis.endswith("（含未經查證線索）")
+    assert cleaned.sections[0].narrative.endswith("（含未經查證線索）")
+    assert report["counts"]["unverified_refs_flagged"] == 2
+    assert report["warning_count"] >= 2
+    assert report["passed"] is True          # warning 不影響 passed
+
+
+def test_short_overlap_does_not_trigger_flag():
+    """中文沒有詞界：「台積電」這種短字串在任何一篇晨報都會命中，門檻低了會天天誤標。"""
+    brief = _brief(
+        tw_watchlist=[WatchItem(symbol="2330", name="台積電", thesis="台積電量能穩定")],
+    )
+    cleaned, report = verify.run_guardrails(
+        brief, _features(stocks={"2330": {"close": 900}}),
+        clue_outcomes=[_Clue("https://x.example/1", "unchecked_budget", "台積電傳出擴產")],
+    )
+    assert "未經查證" not in cleaned.tw_watchlist[0].thesis
+    assert report["counts"]["unverified_refs_flagged"] == 0
+
+
+def test_guard_is_noop_without_clue_outcomes():
+    """沒帶查證結局時整條 guard 跳過——問答路徑與既有呼叫點不受影響。"""
+    url = "https://any.example/x"
+    brief = _brief(sources=[url])
+    cleaned, report = verify.run_guardrails(brief, _features())
+    assert cleaned.sources == [url]
+    assert report["counts"]["unverified_refs_dropped"] == 0

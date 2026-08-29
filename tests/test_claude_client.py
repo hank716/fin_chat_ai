@@ -6,6 +6,7 @@
 (c) pause_turn 必須續跑——漏掉不會報錯，只會拿到內容少一半的晨報
 (d) tools 清單逐字穩定（順序一變就打掉整個 prompt cache 前綴）
 (e) web_fetch 不得開 citations（與 output_config.format 互斥，會 400）
+(f) 查證 attempts 的配對（spec 023）——錯了不會報錯，只會讓失敗原因靜默消失
 
 全程 mock SDK，不打任何外部 API。
 """
@@ -18,6 +19,25 @@ from pydantic import BaseModel
 
 from ai import claude_client as cc
 from ai.errors import LLMError, LLMRefused
+
+
+def _fetch_use(tool_id: str, url: str):
+    return _block(type="server_tool_use", name="web_fetch", id=tool_id, input={"url": url})
+
+
+def _fetch_ok(tool_id: str, url: str, retrieved_at="2026-08-29T00:00:00Z"):
+    return _block(
+        type="web_fetch_tool_result", tool_use_id=tool_id,
+        content=_block(type="web_fetch_result", url=url, retrieved_at=retrieved_at),
+    )
+
+
+def _fetch_err(tool_id: str, error_code: str):
+    """錯誤 block **沒有 url 欄位**——這正是必須靠 tool_use_id 回頭配對的原因。"""
+    return _block(
+        type="web_fetch_tool_result", tool_use_id=tool_id,
+        content=_block(type="web_fetch_tool_result_error", error_code=error_code),
+    )
 
 
 def _block(**kw):
@@ -162,7 +182,7 @@ def test_pause_turn_continues_and_finishes(monkeypatch):
     done = _msg(text='{"headline": "完成"}', stop="end_turn", usage=_usage(inp=200, out=80))
     client = _install(monkeypatch, [paused, done])
 
-    result, usage = cc.generate_structured(
+    result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
 
@@ -247,7 +267,7 @@ def test_web_search_requests_counted_from_content(monkeypatch):
         _block(type="text", text='{"headline": "x"}'),
     ]
     _install(monkeypatch, [_msg(content=content)])
-    _result, usage = cc.generate_structured(
+    _result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
     assert usage["web_search_requests"] == 2
@@ -268,7 +288,7 @@ def test_web_fetch_requests_counted_even_though_unbilled(monkeypatch):
         _block(type="text", text='{"headline": "x"}'),
     ]
     _install(monkeypatch, [_msg(content=content)])
-    _result, usage = cc.generate_structured(
+    _result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
     assert usage["web_fetch_requests"] == 3
@@ -287,7 +307,7 @@ def test_tool_counts_survive_pause_turn_continuations(monkeypatch):
         _block(type="text", text='{"headline": "完成"}'),
     ])
     _install(monkeypatch, [paused, done])
-    _result, usage = cc.generate_structured(
+    _result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
     assert usage["web_fetch_requests"] == 2
@@ -337,7 +357,7 @@ def test_usage_normalisation_keeps_cache_fields_separate(monkeypatch):
     """Anthropic 的 input_tokens **不含** cache——與 Gemini 相反，計價端靠這點分流。"""
     _install(monkeypatch, [_msg(text='{"headline": "x"}',
                                 usage=_usage(inp=100, out=50, cache_read=900, cache_write=40))])
-    _result, usage = cc.generate_structured(
+    _result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
     assert usage["input_tokens"] == 100          # 未含 cached
@@ -352,13 +372,13 @@ def test_usage_reports_round_count(monkeypatch):
     paused = _msg(text="半途", stop="pause_turn")
     done = _msg(text='{"headline": "完成"}', stop="end_turn")
     _install(monkeypatch, [paused, done])
-    _result, usage = cc.generate_structured(
+    _result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
     assert usage["rounds"] == 2
 
     _install(monkeypatch, [_msg(text='{"headline": "一輪就完"}')])
-    _result, usage = cc.generate_structured(
+    _result, usage, _attempts = cc.generate_structured(
         _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
     )
     assert usage["rounds"] == 1
@@ -369,3 +389,137 @@ def test_bad_json_raises_llm_error(monkeypatch):
     with pytest.raises(LLMError):
         cc.generate_structured(_Tiny, system="s", user_prompt="u",
                                model="claude-opus-5", tools=[])
+
+
+# ── (f) 查證 attempts（spec 023 US1）─────────────────────────────────────
+
+def test_fetch_attempt_pairs_success_with_url(monkeypatch):
+    """成功的 attempt 要帶得出 url 與 retrieved_at——那是「這則線索真的查過」的唯一證據。"""
+    content = [
+        _fetch_use("t1", "https://example.com/a"),
+        _fetch_ok("t1", "https://example.com/a"),
+        _block(type="text", text='{"headline": "x"}'),
+    ]
+    _install(monkeypatch, [_msg(content=content)])
+    _result, _usage, attempts = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert len(attempts) == 1
+    assert attempts[0].ok is True
+    assert attempts[0].url == "https://example.com/a"
+    assert attempts[0].error_code is None
+    assert attempts[0].retrieved_at
+
+
+def test_fetch_attempt_takes_url_from_request_when_failed(monkeypatch):
+    """失敗時 URL 只能從 server_tool_use.input 拿——錯誤 block 只有 error_code。
+
+    「哪個來源失敗」是 spec 023 US4 的判斷依據；配對寫錯就只剩一個沒有主詞的錯誤碼。
+    """
+    content = [
+        _fetch_use("t1", "https://blocked.example/story"),
+        _fetch_err("t1", "url_not_accessible"),
+        _fetch_use("t2", "https://example.com/ok"),
+        _fetch_ok("t2", "https://example.com/ok"),
+        _block(type="text", text='{"headline": "x"}'),
+    ]
+    _install(monkeypatch, [_msg(content=content)])
+    _result, _usage, attempts = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    failed = [a for a in attempts if not a.ok]
+    assert len(failed) == 1
+    assert failed[0].url == "https://blocked.example/story"
+    assert failed[0].error_code == "url_not_accessible"
+
+
+def test_fetch_attempt_marks_max_uses_exceeded(monkeypatch):
+    """`max_uses_exceeded` 是假說 A（額度不足）唯一的直接證據，不可與其他失敗混為一談。"""
+    content = [
+        _fetch_use("t1", "https://example.com/a"),
+        _fetch_err("t1", "max_uses_exceeded"),
+        _block(type="text", text='{"headline": "x"}'),
+    ]
+    _install(monkeypatch, [_msg(content=content)])
+    _result, _usage, attempts = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert [a.error_code for a in attempts] == ["max_uses_exceeded"]
+
+
+def test_unmatched_fetch_request_is_still_recorded(monkeypatch):
+    """請求了卻沒有結果 block（pause_turn 切在工具中間）也要留紀錄。
+
+    不記的話 attempts 數會少於 web_fetch_requests，事後只會誤以為配對邏輯壞了。
+    """
+    content = [
+        _fetch_use("t1", "https://example.com/dangling"),
+        _block(type="text", text='{"headline": "x"}'),
+    ]
+    _install(monkeypatch, [_msg(content=content)])
+    _result, usage, attempts = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert len(attempts) == usage["web_fetch_requests"] == 1
+    assert attempts[0].ok is False and attempts[0].error_code == "no_result"
+
+
+def test_fetch_attempts_accumulate_across_pause_turn(monkeypatch):
+    """續跑時每輪都有自己的 content blocks——只讀最後一輪會漏掉前面查過的來源。"""
+    paused = _msg(
+        content=[_fetch_use("t1", "https://a.example/1"), _fetch_ok("t1", "https://a.example/1"),
+                 _block(type="text", text="半途")],
+        stop="pause_turn",
+    )
+    done = _msg(content=[
+        _fetch_use("t2", "https://b.example/2"), _fetch_err("t2", "too_many_requests"),
+        _block(type="text", text='{"headline": "完成"}'),
+    ])
+    _install(monkeypatch, [paused, done])
+    _result, usage, attempts = cc.generate_structured(
+        _Tiny, system="s", user_prompt="u", model="claude-opus-5", tools=[],
+    )
+    assert [a.url for a in attempts] == ["https://a.example/1", "https://b.example/2"]
+    assert [a.ok for a in attempts] == [True, False]
+    assert usage["web_fetch_requests"] == 2
+
+
+def test_refusal_still_carries_fetch_attempts(monkeypatch):
+    """refusal 走 raise，區域變數會連同 usage 一起消失——attempts 必須掛在例外上帶出來。
+
+    不帶出來的話，失敗那次的查證用量就從遙測裡整段消失（正是 spec 023 要消滅的盲點）。
+    """
+    content = [
+        _fetch_use("t1", "https://example.com/a"),
+        _fetch_err("t1", "url_not_allowed"),
+    ]
+    _install(monkeypatch, [_msg(content=content, stop="refusal", category="cyber")])
+    with pytest.raises(LLMRefused) as excinfo:
+        cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                               model="claude-opus-5", tools=[])
+    attempts = excinfo.value.fetch_attempts
+    assert [a.error_code for a in attempts] == ["url_not_allowed"]
+
+
+def test_exhausted_continuations_carry_fetch_attempts(monkeypatch):
+    """pause_turn 用盡那條例外路徑同樣要帶出 attempts。"""
+    paused = _msg(
+        content=[_fetch_use("t1", "https://example.com/a"), _fetch_ok("t1", "https://example.com/a")],
+        stop="pause_turn",
+    )
+    _install(monkeypatch, [paused])
+    with pytest.raises(LLMError, match="pause_turn") as excinfo:
+        cc.generate_structured(_Tiny, system="s", user_prompt="u",
+                               model="claude-opus-5", tools=[])
+    assert len(excinfo.value.fetch_attempts) == 4   # max_continuations=3 → 4 輪各一次
+
+
+def test_answer_path_does_not_break_on_attempts(monkeypatch):
+    """問答路徑刻意丟棄 attempts，但不得因此改變它的回傳形狀。"""
+    _install(monkeypatch, [_msg(text="回答內容")])
+    text, usage = cc.generate_answer(
+        system_blocks=[{"type": "text", "text": "s"}], user_prompt="u",
+        model="claude-opus-5", tools=[],
+    )
+    assert text == "回答內容"
+    assert usage["web_fetch_requests"] == 0

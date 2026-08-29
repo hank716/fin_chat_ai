@@ -114,7 +114,7 @@ def test_frugal_brief_drops_tools_facts_and_cache(monkeypatch):
     def _fake_generate_structured(model_cls, **kwargs):  # noqa: ARG001
         captured.update(kwargs)
         from ai.schemas import BriefDraft
-        return BriefDraft.model_construct(fact_checks=[]), {"input_tokens": 0}
+        return BriefDraft.model_construct(fact_checks=[]), {"input_tokens": 0}, []
 
     monkeypatch.setattr(llm_client.claude_client, "generate_structured",
                         _fake_generate_structured)
@@ -145,7 +145,7 @@ def test_normal_brief_keeps_tools_and_brief_effort(monkeypatch):
     def _fake_generate_structured(model_cls, **kwargs):  # noqa: ARG001
         captured.update(kwargs)
         from ai.schemas import BriefDraft
-        return BriefDraft.model_construct(fact_checks=[]), {"input_tokens": 0}
+        return BriefDraft.model_construct(fact_checks=[]), {"input_tokens": 0}, []
 
     monkeypatch.setattr(llm_client.claude_client, "generate_structured",
                         _fake_generate_structured)

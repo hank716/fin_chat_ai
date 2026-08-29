@@ -13,7 +13,7 @@ import logging
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import universe
@@ -29,9 +29,11 @@ from data_sources.ingest import _dq_filter
 from guardrails.verify import run_guardrails
 from processor.intermarket_features import build_intermarket_features
 from processor.tw_features import build_tw_features
+from reports import verification_stats
 from reports.copy_for_ai_builder import build_copy_for_ai
 from reports.json_builder import build_report_dict
 from reports.markdown_builder import build_markdown
+from reports.verification_stats import ClueOutcome, classify_outcomes, summarize
 from storage import local_store
 
 logger = logging.getLogger("ai-market-backend.morning_brief")
@@ -292,11 +294,25 @@ def _fetch_facts(
     return retrieval.fetch_facts(as_of)
 
 
+class Decision(NamedTuple):
+    """`_decide_brief` 的回傳。
+
+    位置解包到第五個欄位已經沒人記得住順序，且 `fetch_attempts` 與 `fact_checks` 型別相近，
+    調換不會有型別錯誤、只會讓遙測靜默錯亂——具名欄位是這裡唯一安全的形式。
+    """
+
+    result: BriefResult
+    usage: dict[str, int]
+    provider: str
+    fact_checks: list[dict[str, Any]]
+    fetch_attempts: list[Any]
+
+
 def _decide_brief(
     feats: dict[str, Any], facts: retrieval.FactsPack, calibration_text: str,
     *, frugal: bool = False,
-) -> tuple[BriefResult, dict[str, int], str, list[dict[str, Any]]]:
-    """決策 + 查證層：回 (BriefResult, usage, provider, fact_checks)。
+) -> Decision:
+    """決策 + 查證層：回 (BriefResult, usage, provider, fact_checks, fetch_attempts)。
 
     主路徑是 Claude 單次呼叫（含 web_fetch 查證）；任何 LLMError（配額/過載/refusal/
     schema 不符）都退回 Gemini 兩段式。**降級是必要的**：晨報每天無人值守自動跑，
@@ -307,14 +323,15 @@ def _decide_brief(
     """
     primary = get_decision_llm()
     try:
-        draft, usage = primary.draft_brief(
+        draft, usage, attempts = primary.draft_brief(
             feats, facts.to_prompt_json(), calibration_text or None, frugal=frugal,
         )
-        return (
+        return Decision(
             _draft_to_result(draft),
             usage,
             primary.name,
             [fc.model_dump() for fc in draft.fact_checks],
+            attempts,
         )
     except LLMError as exc:
         if primary.name == "gemini":
@@ -322,8 +339,10 @@ def _decide_brief(
         logger.warning("決策層(%s)失敗，降級回 Gemini 兩段式：%s", primary.name, exc)
 
     fallback = get_decision_llm("gemini")
-    draft, usage = fallback.draft_brief(feats, facts.to_prompt_json(), calibration_text or None)
-    return _draft_to_result(draft), usage, "gemini-fallback", []
+    draft, usage, attempts = fallback.draft_brief(
+        feats, facts.to_prompt_json(), calibration_text or None,
+    )
+    return Decision(_draft_to_result(draft), usage, "gemini-fallback", [], attempts)
 
 
 def _draft_to_result(draft: Any) -> BriefResult:
@@ -339,16 +358,19 @@ def _draft_to_result(draft: Any) -> BriefResult:
 
 def _verification_stats(
     facts: retrieval.FactsPack, fact_checks: list[dict[str, Any]],
-    decision_usage: dict[str, int], *, frugal: bool,
-) -> dict[str, Any]:
-    """查證層遙測：召回幾則線索、裁決了幾則、各判定幾則、實際開了幾次 web_fetch。
+    decision_usage: dict[str, int], fetch_attempts: list[Any], *, frugal: bool,
+) -> tuple[dict[str, Any], list[ClueOutcome]]:
+    """查證層遙測：回 (落地用的 dict, 每則線索的結局)。
 
     存在的理由是 2026-08-12 盤點時發現的兩個盲點：
     ① `web_fetch` 不按次計費，查證層空轉在帳單上完全看不出來——連續多天 100% unverifiable
        時，無從分辨是「查了但查不到」還是「根本沒查」。
     ② 8/10、8/11 兩篇都是 8 則線索只回 6 條 fact_checks，兩則線索被靜默跳過，無人偵測。
 
-    同時發出告警（而不是只落地數字）：這兩種情況都不會讓晨報失敗，所以不主動喊就等於沒發生。
+    spec 023 再補上第三層：光有「開了幾次」還是分不出**為什麼**沒查成。結局分類由
+    `verification_stats` 從實際 attempts 推導（FR-006），不採信模型自述的 verdict。
+
+    同時發出告警（而不是只落地數字）：這些情況都不會讓晨報失敗，所以不主動喊就等於沒發生。
     """
     verdicts: dict[str, int] = {}
     for check in fact_checks:
@@ -359,28 +381,75 @@ def _verification_stats(
     checks_n = len(fact_checks)
     fetch_requests = int(decision_usage.get("web_fetch_requests", 0))
     search_requests = int(decision_usage.get("web_search_requests", 0))
+    # 本篇的額度上限（FR-004）：有了它，「是否撞到上限」才是資料判定而非自然語言推測。
+    # 節儉模式沒掛工具，上限就是 0——那是「沒有查證這回事」，不是「額度為 0 的失敗」。
+    fetch_limit = 0 if frugal else int(settings.claude_brief_fetch_uses)
+
+    outcomes = classify_outcomes(
+        facts.events,
+        fact_checks,
+        fetch_attempts,
+        fetch_limit=fetch_limit,
+        fetch_requests=fetch_requests,
+    )
+    counts = summarize(outcomes)
+    attempts_ok = sum(1 for a in fetch_attempts if getattr(a, "ok", False))
+    claimed_unbacked = [o for o in outcomes if o.claimed_unbacked]
 
     if checks_n < facts_n:
         logger.warning(
             "查證層漏裁決：召回 %d 則線索但只回 %d 條 fact_checks（%d 則被靜默略過）",
             facts_n, checks_n, facts_n - checks_n,
         )
-    # 節儉模式本來就沒掛工具，0 次是預期；非節儉模式下 0 次代表查證層空轉——
-    # 模型照樣產出 verdict，但那些 verdict 沒有任何實際開啟來源作為依據。
-    if not frugal and facts_n and fetch_requests == 0:
+    # 以下三條取代舊的「fetch_requests == 0 就喊空轉」——那個判斷只抓得到最極端的一種失效。
+    budget_n = counts.get(verification_stats.UNCHECKED_BUDGET, 0)
+    if not frugal and budget_n:
         logger.warning(
-            "查證層空轉：本次有 %d 則待查證線索、工具已掛載，但 web_fetch 實際使用 0 次"
-            "（fact_checks 的判定並非來自實際開啟來源）", facts_n,
+            "查證額度不足：%d 則線索未能核對（上限 %d 次、實際用 %d 次、成功 %d 次）",
+            budget_n, fetch_limit, fetch_requests, attempts_ok,
+        )
+    unreachable = [o for o in outcomes
+                   if o.outcome == verification_stats.UNCHECKED_UNREACHABLE]
+    if unreachable:
+        logger.warning(
+            "查證來源打不開：%d 則（%s）",
+            len(unreachable),
+            ", ".join(sorted({f"{o.domain}:{o.error_code}" for o in unreachable})),
+        )
+    if claimed_unbacked:
+        # 模型說查證過、工具卻沒有對應的成功紀錄。這是 FR-006 存在的理由，最該喊。
+        logger.warning(
+            "模型宣稱已查證但無 fetch 支撐：%d 則（%s）",
+            len(claimed_unbacked), ", ".join(o.domain for o in claimed_unbacked),
         )
 
-    return {
+    stats = {
+        # ── 既有欄位一律保留：三個渲染面與既有測試都吃這些鍵 ──
         "facts_n": facts_n,
         "fact_checks_n": checks_n,
         "unadjudicated_n": max(facts_n - checks_n, 0),
         "verdicts": verdicts,
         "fetch_requests": fetch_requests,
         "search_requests": search_requests,
+        # ── spec 023 新增 ──
+        "fetch_limit": fetch_limit,
+        "fetch_ok": attempts_ok,
+        "fetch_failed": len(fetch_attempts) - attempts_ok,
+        "budget_exhausted": bool(fetch_limit and fetch_requests >= fetch_limit),
+        "outcomes": counts,
+        "checked_n": sum(v for k, v in counts.items()
+                         if k in verification_stats.CHECKED),
+        "claimed_unbacked_n": len(claimed_unbacked),
+        "clues": [o.as_dict() for o in outcomes],
+        "attempts": [
+            {"url": getattr(a, "url", ""), "domain": verification_stats.domain_of(
+                getattr(a, "url", "")),
+             "ok": bool(getattr(a, "ok", False)),
+             "error_code": getattr(a, "error_code", None)}
+            for a in fetch_attempts
+        ],
     }
+    return stats, outcomes
 
 
 def generate_morning_brief(
@@ -414,9 +483,9 @@ def generate_morning_brief(
 
     # ② 決策 + 查證：Claude 單次呼叫，用 web_fetch 逐條開啟上面的 URL 核對後才採信。
     #    失敗時退回 Gemini 兩段式——晨報是無人值守的每日排程，不得因換供應商而整份失敗。
-    result, decision_usage, provider, fact_checks = _decide_brief(
-        feats, facts, calibration_text, frugal=frugal,
-    )
+    decision = _decide_brief(feats, facts, calibration_text, frugal=frugal)
+    result, decision_usage, provider = decision.result, decision.usage, decision.provider
+    fact_checks = decision.fact_checks
 
     # 以召回層**實際跑的** model 計價：`_model_chain()` 換檔位是靜默的，一律用 flash 算會在
     # 落到 flash-lite 時高估 6 倍、落到 pro 時低估（spec 022 FR-011 成本可歸因性）。
@@ -448,6 +517,11 @@ def generate_morning_brief(
     # 偏空清單偶爾被模型整段略過 → 用 movers 實際數據補齊（在 guardrail 前，符號必在資料範圍內）
     _backfill_caution(result, feats)
 
+    # 查證結局分類（spec 023）：verification 落地到報告、clue_outcomes 餵給 guardrail。
+    verification, clue_outcomes = _verification_stats(
+        facts, fact_checks, decision_usage, decision.fetch_attempts, frugal=frugal,
+    )
+
     month_total = tracker.month_total()
     monthly_limit = float(settings.monthly_cost_limit_twd)
     cost_info = {
@@ -469,7 +543,7 @@ def generate_morning_brief(
         "month_by_provider": tracker.month_by_provider(),
         # 查證層是否真的動過（spec 022 的核心宣稱），以及線索有沒有被逐條裁決。
         # 這幾個數字在成本上留不下痕跡（web_fetch 不按次計費），不落地就永遠無從查核。
-        "verification": _verification_stats(facts, fact_checks, decision_usage, frugal=frugal),
+        "verification": verification,
     }
     logger.info("晨報 LLM 花費 NT$%.4f（provider=%s 本月累計 NT$%.2f / 上限 NT$%.0f）",
                 brief_cost, provider, month_total, monthly_limit)
@@ -478,7 +552,7 @@ def generate_morning_brief(
                        month_total, monthly_limit)
 
     # guardrail：驗證未超出資料範圍、無捏造/禁語，清理後再 render
-    result, guardrail = run_guardrails(result, feats)
+    result, guardrail = run_guardrails(result, feats, clue_outcomes=clue_outcomes)
     logger.info("guardrail passed=%s errors=%s warnings=%s",
                 guardrail["passed"], guardrail["error_count"], guardrail["warning_count"])
 

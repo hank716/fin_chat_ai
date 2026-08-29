@@ -4,15 +4,17 @@
 是否使用禁語（買賣建議 / 必然因果）。對「捏造類」違規直接移除該片段並記錄；對「禁語類」
 標記警示。回傳清理後的 result + guardrail 報告（存進 report JSON、頁面顯示攔截狀態）。
 
-六道 guard：Source(Metric) / Symbol / News Citation / Advice / Intermarket Causality / Data Age。
+六道 guard：Source(Metric) / Symbol / News Citation / Advice / Intermarket Causality / Data Age，
+外加 spec 023 的 Verification guard（未經查證的外部線索不得被當已查證事實引用）。
 另做新聞分層強制：social 來源比對後標 tier，頁面以情緒訊號呈現。
 """
 from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterable
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 
 from config import settings
 from ai.schemas import BriefResult
@@ -118,13 +120,60 @@ def _scan_phrases(text: str | None, banned: tuple[str, ...]) -> list[str]:
     return hits
 
 
-def run_guardrails(result: BriefResult, features: dict[str, Any]) -> tuple[BriefResult, dict]:
+# ── Verification Guard（spec 023 FR-009）─────────────────────────────
+# 只有 `confirmed`（開了原文且原文支持）的線索可以被當事實引用。這與決策層 prompt 裡的
+# 查證契約逐字一致：contradicted 與 unverifiable 的內容不得出現在 narrative / news_digest /
+# thesis。差別在於——契約靠模型自律，這裡靠系統強制（憲章 III fail-closed）。
+_CITABLE_OUTCOMES = frozenset({"confirmed"})
+# 中文沒有詞界，短字串（「台積電」「聯準會」）會在任何一篇晨報裡命中。
+# 12 字連續重疊才算引用：短於此的巧合太多，誤判會靜默刪掉正確內容。
+_QUOTE_MIN_CHARS = 12
+_UNVERIFIED_MARK = "（含未經查證線索）"
+_WS_RE = re.compile(r"\s+")
+
+
+def _norm_url(url: str | None) -> str:
+    """與 `reports.verification_stats.normalize_url` 同一套規則。
+
+    刻意複寫而不 import：guardrails 是被 reports 依賴的下層，反向 import 會把層級關係
+    倒過來。這裡只需要「去尾斜線 + host 小寫」這件小事。
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parts = urlsplit(raw)
+    if not parts.netloc:
+        return raw.rstrip("/").lower()
+    query = "?" + parts.query if parts.query else ""
+    return parts.scheme.lower() + "://" + parts.netloc.lower() + parts.path.rstrip("/") + query
+
+
+def _quotes_claim(claim: str, text: str | None) -> bool:
+    """text 是否引用了 claim——以「有無 12 字以上連續重疊」判定。"""
+    a = _WS_RE.sub("", claim or "")
+    b = _WS_RE.sub("", text or "")
+    if len(a) < _QUOTE_MIN_CHARS or not b:
+        return False
+    return any(a[i:i + _QUOTE_MIN_CHARS] in b
+               for i in range(len(a) - _QUOTE_MIN_CHARS + 1))
+
+
+def _unverified_clues(clue_outcomes: Iterable[Any] | None) -> list[Any]:
+    return [c for c in clue_outcomes or []
+            if str(getattr(c, "outcome", "")) not in _CITABLE_OUTCOMES]
+
+
+def run_guardrails(
+    result: BriefResult, features: dict[str, Any],
+    *, clue_outcomes: Iterable[Any] | None = None,
+) -> tuple[BriefResult, dict]:
     cleaned = result.model_copy(deep=True)
     violations: list[dict[str, str]] = []
     counts = {
         "evidence_checked": 0, "evidence_dropped": 0,
         "news_checked": 0, "news_dropped": 0,
         "symbols_dropped": 0, "phrase_warnings": 0,
+        "unverified_refs_dropped": 0, "unverified_refs_flagged": 0,
     }
 
     def add(guard: str, severity: str, detail: str) -> None:
@@ -181,6 +230,52 @@ def run_guardrails(result: BriefResult, features: dict[str, Any]) -> tuple[Brief
         nd.provider = match.get("provider")            # 回填新聞來源管線出處（finmind / google）
         kept_news.append(nd)
     cleaned.news_digest = kept_news
+
+    # ── Verification Guard：未經查證的線索不得被當已查證事實引用（spec 023 FR-009）──
+    # 兩段強度刻意不同：URL 比對是確定性的事實，直接移除；文字重疊是啟發式判定，
+    # 只標示不刪——中文模糊比對誤判時，靜默刪掉正確內容比留下一個標記糟得多。
+    unverified = _unverified_clues(clue_outcomes)
+    if unverified:
+        blocked = {_norm_url(getattr(c, "url", "")): c for c in unverified}
+        blocked.pop("", None)
+
+        kept_news = []
+        for nd in cleaned.news_digest:
+            clue = blocked.get(_norm_url(nd.url))
+            if clue is not None:
+                counts["unverified_refs_dropped"] += 1
+                add("verification", "error",
+                    f"新聞「{nd.title[:30]}」引用未經查證的線索來源"
+                    f"（{getattr(clue, 'outcome', '?')}），已移除")
+                continue
+            kept_news.append(nd)
+        cleaned.news_digest = kept_news
+
+        kept_sources = []
+        for src in cleaned.sources:
+            if _norm_url(src) in blocked:
+                counts["unverified_refs_dropped"] += 1
+                add("verification", "error", f"來源清單含未經查證的連結 {src[:60]}，已移除")
+                continue
+            kept_sources.append(src)
+        cleaned.sources = kept_sources
+
+        # 敘事與選股理由：命中就標示（FR-009 的「明確降級標示」分支）
+        for clue in unverified:
+            claim = str(getattr(clue, "claim", "") or "")
+            outcome = str(getattr(clue, "outcome", "?"))
+            for sec in cleaned.sections:
+                if _quotes_claim(claim, sec.narrative) and _UNVERIFIED_MARK not in sec.narrative:
+                    counts["unverified_refs_flagged"] += 1
+                    sec.narrative += _UNVERIFIED_MARK
+                    add("verification", "warning",
+                        f"[{sec.title}] 敘述引用了未經查證的線索（{outcome}），已標示")
+            for w in cleaned.tw_watchlist + cleaned.tw_caution:
+                if _quotes_claim(claim, w.thesis) and _UNVERIFIED_MARK not in w.thesis:
+                    counts["unverified_refs_flagged"] += 1
+                    w.thesis += _UNVERIFIED_MARK
+                    add("verification", "warning",
+                        f"候選 {w.symbol} 的理由引用了未經查證的線索（{outcome}），已標示")
 
     # ── Advice / Intermarket Causality Guard：掃描所有敘事文字禁語 ──
     texts: list[tuple[str, str]] = [("簡短結論", cleaned.headline)]

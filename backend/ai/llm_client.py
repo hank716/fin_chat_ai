@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from config import settings
 
 from . import claude_client, gemini_client, prompts
+from .claude_client import FetchAttempt
 from .schemas import BriefDraft, BriefResult
 
 logger = logging.getLogger("ai-market-backend.llm")
@@ -34,10 +35,13 @@ class DecisionLLM(Protocol):
     def draft_brief(
         self, features: dict[str, Any], facts_json: str, calibration: str | None,
         *, frugal: bool = False,
-    ) -> tuple[BriefDraft, Usage]:
-        """features + 待查證線索 + 回測校準 → 結構化晨報草稿。
+    ) -> tuple[BriefDraft, Usage, list[FetchAttempt]]:
+        """features + 待查證線索 + 回測校準 → (草稿, usage, 查證 attempts)。
 
         `frugal=True`＝預算降級模式（月餘額不足時由呼叫端指定）：關連網查證、降 effort。
+
+        第三個回傳值讓報告層能用**工具行為**判定每則線索的查證結局（spec 023 FR-006），
+        而不是採信模型自述的 verdict。不做查證的實作回空 list，呼叫端因此不必分支。
         """
         ...
 
@@ -60,7 +64,7 @@ class AnthropicDecisionLLM:
     def draft_brief(
         self, features: dict[str, Any], facts_json: str, calibration: str | None,
         *, frugal: bool = False,
-    ) -> tuple[BriefDraft, Usage]:
+    ) -> tuple[BriefDraft, Usage, list[FetchAttempt]]:
         # 節儉模式：不給工具、不帶 facts pack、effort 降到最低。刻意**不是**「少查幾次」——
         # 部分查證比不查證更糟（看起來像查過了），所以要關就整個關，並在 system prompt 明講
         # 「不得引用 features 以外的外部事件」，否則模型會去呼叫不存在的工具。
@@ -69,7 +73,7 @@ class AnthropicDecisionLLM:
         tools = [] if frugal else claude_client.build_tools(
             settings.claude_brief_fetch_uses, settings.claude_brief_search_uses,
         )
-        draft, usage = claude_client.generate_structured(
+        draft, usage, attempts = claude_client.generate_structured(
             BriefDraft,
             system=prompts.build_decision_system(verify=not frugal),
             user_prompt=prompts.build_decision_prompt(
@@ -85,7 +89,7 @@ class AnthropicDecisionLLM:
             # 這是輸出端的成本主閥。
             effort="low" if frugal else settings.claude_brief_effort,
         )
-        return draft, usage  # type: ignore[return-value]
+        return draft, usage, attempts  # type: ignore[return-value]
 
     def answer_question(
         self, system_prompt: str, user_prompt: str, *, cacheable: bool,
@@ -119,7 +123,7 @@ class GeminiDecisionLLM:
     def draft_brief(
         self, features: dict[str, Any], facts_json: str, calibration: str | None,
         *, frugal: bool = False,
-    ) -> tuple[BriefDraft, Usage]:
+    ) -> tuple[BriefDraft, Usage, list[FetchAttempt]]:
         # `frugal` 在這條路徑無對應旋鈕（Gemini 兩段式沒有 effort、搜尋是模型內建），
         # 收下但不使用——它本來就是降級路徑，單篇約 NT$14，不是成本敞口。
         result, research_usage, struct_usage = gemini_client.analyze_full_brief_grounded(
@@ -129,7 +133,9 @@ class GeminiDecisionLLM:
             k: research_usage.get(k, 0) + struct_usage.get(k, 0)
             for k in ("input_tokens", "output_tokens", "cached_tokens", "tool_tokens")
         }
-        return _result_to_draft(result), usage
+        # attempts 恆為空：這條路徑不做查證（沒有 web_fetch），不是「查了 0 次」而是
+        # 「沒有查證這回事」。報告層據此把整篇排除在查證統計外，不污染成功率基準。
+        return _result_to_draft(result), usage, []
 
     def answer_question(
         self, system_prompt: str, user_prompt: str, *, cacheable: bool,

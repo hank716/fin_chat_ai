@@ -52,19 +52,21 @@ def test_brief_falls_back_to_gemini_when_claude_fails(monkeypatch):
         name = "gemini"
 
         def draft_brief(self, *a, **k):
-            return _draft("降級產出"), {"input_tokens": 10, "output_tokens": 5}
+            # 降級路徑不做查證：attempts 恆為空，與 GeminiDecisionLLM 實作一致
+            return _draft("降級產出"), {"input_tokens": 10, "output_tokens": 5}, []
 
     monkeypatch.setattr(
         morning_brief, "get_decision_llm",
         lambda provider=None: _Fallback() if provider == "gemini" else _Failing(),
     )
 
-    result, usage, provider, fact_checks = morning_brief._decide_brief({}, FactsPack(), "")
-    assert result.headline == "降級產出"
-    assert provider == "gemini-fallback"
-    # 降級路徑不查證 → fact_checks 空是**誠實訊號**，不是遺漏
-    assert fact_checks == []
-    assert usage["input_tokens"] == 10
+    decision = morning_brief._decide_brief({}, FactsPack(), "")
+    assert decision.result.headline == "降級產出"
+    assert decision.provider == "gemini-fallback"
+    # 降級路徑不查證 → fact_checks 與 fetch_attempts 都空，是**誠實訊號**，不是遺漏
+    assert decision.fact_checks == []
+    assert decision.fetch_attempts == []
+    assert decision.usage["input_tokens"] == 10
 
 
 def test_fallback_not_attempted_when_already_on_gemini(monkeypatch):
