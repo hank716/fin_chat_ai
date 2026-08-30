@@ -107,3 +107,63 @@ def test_result_to_draft_strips_ml_fields():
     draft = llm_client._result_to_draft(result)
     assert draft.tw_watchlist[0].symbol == "2330"
     assert draft.fact_checks == []
+
+
+def test_fallback_carries_fetch_attempts_from_the_failed_primary(monkeypatch):
+    """Claude 在倒下之前可能已經開過幾次原文——那些查證行為是真的發生過。
+
+    `claude_client._with_attempts` 把它們掛在例外上，就是為了在降級處接住；
+    不接的話，失敗那次的查證用量連同 usage 一起從遙測裡整段消失。
+    """
+    from ai.claude_client import FetchAttempt
+    from reports import morning_brief
+
+    done = [FetchAttempt(url="https://a.example/1", ok=True, error_code=None,
+                         retrieved_at="2026-08-29T00:00:00Z"),
+            FetchAttempt(url="https://b.example/2", ok=False,
+                         error_code="url_not_accessible", retrieved_at=None)]
+
+    class _Failing:
+        name = "anthropic"
+
+        def draft_brief(self, *a, **k):
+            exc = LLMQuotaExceeded("配額用盡")
+            exc.fetch_attempts = done
+            raise exc
+
+    class _Fallback:
+        name = "gemini"
+
+        def draft_brief(self, *a, **k):
+            return _draft("降級產出"), {"input_tokens": 10}, []
+
+    monkeypatch.setattr(
+        morning_brief, "get_decision_llm",
+        lambda provider=None: _Fallback() if provider == "gemini" else _Failing(),
+    )
+    decision = morning_brief._decide_brief({}, FactsPack(), "")
+    assert [a.url for a in decision.fetch_attempts] == ["https://a.example/1",
+                                                        "https://b.example/2"]
+
+
+def test_fallback_report_has_no_verification_layer(monkeypatch):
+    """降級路徑沒有 web_fetch＝**沒有查證這回事**，不是「線索全部查證失敗」。
+
+    分不清楚的代價很具體：那些線索若被當成 unchecked_* 餵進 guardrail，會讓一篇與查證
+    完全無關的降級晨報被整批刪掉 news_digest / sources，還配上一串重複的降級提示。
+    """
+    from reports import morning_brief
+
+    facts = FactsPack(events=[
+        {"claim": "某公司宣布擴產", "date": "2026-08-29",
+         "source": "鉅亨網", "url": "https://n.example/1"},
+    ])
+    stats, outcomes = morning_brief._verification_stats(
+        facts, [], {"input_tokens": 10}, [], active=False,
+    )
+    assert outcomes == []                      # 不得餵任何「未查證線索」給 guardrail
+    assert stats["verification_active"] is False
+    assert stats["outcomes"] == {} and stats["clues"] == []
+    assert stats["fetch_limit"] == 0           # 上限 0＝沒掛工具，不是「額度為 0 的失敗」
+    assert stats["facts_n"] == 1               # 召回層的既有遙測照常保留
+

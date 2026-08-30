@@ -59,11 +59,25 @@ _UNREACHABLE_CODES = frozenset({
 _TRANSIENT_CODES = frozenset({"too_many_requests", "unavailable"})
 
 
+def _host_of(netloc: str) -> str:
+    """netloc → 比對用的 host：轉小寫並去掉 `www.`。
+
+    ⚠️ **`www.` 必須在這裡就去掉**：召回層拿到的是 `https://www.cnyes.com/...`，模型
+    送給 `web_fetch` 的常是 `https://cnyes.com/...`（反之亦然）。只差一個 `www.` 就配不上，
+    結果是一則**真的查證成功**的線索被判成 `claimed_unbacked`（「模型宣稱查了但沒紀錄」），
+    然後被 guardrail 從 news_digest / sources 整條刪掉——誤刪正確內容比漏報更難察覺。
+    """
+    return netloc.lower().removeprefix("www.")
+
+
 def normalize_url(url: str | None) -> str:
-    """比對用的正規化：去 fragment、去尾斜線、host 轉小寫。
+    """比對用的正規化：去 fragment、去尾斜線、host 轉小寫並去 `www.`。
 
     召回層寫進 facts pack 的 URL 與模型送給 `web_fetch` 的 URL 常有這類無意義差異，
     逐字比對會把「查過的」誤判成「沒查的」——那正是本模組要消除的錯誤。
+
+    ⚠️ **query 一律保留**：它常常就是文章 id（`/article?id=1` 與 `/article?id=2` 是兩篇
+    不同的報導）。把 query 當雜訊丟掉會讓「沒查的那則」冒名頂替「查過的那則」。
     """
     raw = (url or "").strip()
     if not raw:
@@ -73,21 +87,31 @@ def normalize_url(url: str | None) -> str:
         return raw.rstrip("/").lower()
     path = parts.path.rstrip("/")
     query = "?" + parts.query if parts.query else ""
-    return parts.scheme.lower() + "://" + parts.netloc.lower() + path + query
+    return parts.scheme.lower() + "://" + _host_of(parts.netloc) + path + query
 
 
 def _loose_key(url: str) -> str:
-    """退一步的比對鍵：netloc + path（忽略 scheme 與 query）。"""
+    """退一步的比對鍵：netloc + path（忽略 scheme 與 query）。
+
+    只在**這個鍵唯一對應一個 URL** 時才可以拿來配對，見 `_unambiguous()`。忽略 query
+    是為了吸收 utm 之類的追蹤參數，但同一個 path 底下若有多個不同 query 的 URL，
+    這個鍵就分不出誰是誰了。
+    """
     parts = urlsplit(url)
     if not parts.netloc:
         return url
-    return parts.netloc.lower() + parts.path.rstrip("/")
+    return _host_of(parts.netloc) + parts.path.rstrip("/")
+
+
+def _unambiguous(keys: Iterable[str]) -> set[str]:
+    """只出現一次的鍵。出現兩次以上者不得用於寬鬆配對——寧可判成「沒查」也不能張冠李戴。"""
+    counts = Counter(keys)
+    return {k for k, n in counts.items() if n == 1}
 
 
 def domain_of(url: str | None) -> str:
     """來源網域（FR-003：足以做網域層級彙總）。"""
-    host = urlsplit((url or "").strip()).netloc.lower()
-    return host[4:] if host.startswith("www.") else host
+    return _host_of(urlsplit((url or "").strip()).netloc)
 
 
 @dataclass(frozen=True)
@@ -138,6 +162,10 @@ def _index_attempts(attempts: Iterable[Any]) -> tuple[dict[str, Any], dict[str, 
             # 成功壓過失敗：同一個 URL 開過兩次、只要一次成功就算查過了。
             if prev is None or (ok and not bool(_attr(prev, "ok"))):
                 index[key] = att
+    # 兩個**不同**的 URL 撞進同一個寬鬆鍵時（同 path 不同 query），這個鍵已經無法指認
+    # 是誰被開過了——留著只會讓沒查的那則繼承別人的成功紀錄。整個鍵丟掉，退回 exact。
+    for key in set(loose) - _unambiguous(_loose_key(u) for u in exact):
+        loose.pop(key, None)
     return exact, loose
 
 
@@ -213,9 +241,15 @@ def classify_outcomes(
             seen.add(url)
             ordered.append((url, "", False))
 
+    # 線索端同樣要防張冠李戴：兩則不同線索共用一個寬鬆鍵時，就算 attempts 那邊只有一筆
+    # 紀錄，也無法斷定它屬於哪一則。此時一律不用寬鬆配對（fail-closed）。
+    safe_loose = _unambiguous(_loose_key(u) for u, _claim, _src in ordered)
+
     outcomes: list[ClueOutcome] = []
     for url, claim, from_facts in ordered:
-        att = exact.get(url) or loose.get(_loose_key(url))
+        att = exact.get(url)
+        if att is None and _loose_key(url) in safe_loose:
+            att = loose.get(_loose_key(url))
         attempted = att is not None
         ok = bool(_attr(att, "ok")) if attempted else False
         error_code = None if ok else (_attr(att, "error_code") if attempted else None)

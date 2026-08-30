@@ -153,6 +153,46 @@ def test_url_differences_that_do_not_matter_still_match():
     assert out.domain == "news.example.com"
 
 
+def test_www_prefix_difference_still_matches():
+    """`www.` 是最常見的無意義差異：召回層拿 www、模型 fetch 裸網域（或反過來）。
+
+    配不上的後果不是少一筆統計——是把一則**真的查證成功**的線索判成 claimed_unbacked，
+    然後被 guardrail 從 news_digest / sources 刪掉。誤刪正確內容比漏報難察覺得多。
+    """
+    url = "https://www.cnyes.com/news/id/1"
+    out = _one([url], [_check(url, "confirmed")],
+               [_attempt("https://cnyes.com/news/id/1")])
+    assert out.outcome == vs.CONFIRMED
+    assert out.attempted is True
+    assert out.claimed_unbacked is False
+    assert out.domain == "cnyes.com"
+
+
+def test_same_path_different_query_must_not_share_an_attempt():
+    """query 常常就是文章 id：`?id=1` 與 `?id=2` 是兩篇不同報導。
+
+    寬鬆比對若忽略 query，沒查的那則會繼承查過那則的成功紀錄，被認證成 confirmed
+    並取得引用資格——在 fail-closed 的 guard 裡開了一個 fail-open 的洞。
+    """
+    a, b = "https://n.example/article?id=1", "https://n.example/article?id=2"
+    outcomes = vs.classify_outcomes(
+        [a, b], [_check(b, "confirmed")], [_attempt(a)],
+        fetch_limit=6, fetch_requests=1,
+    )
+    by_url = {o.url: o for o in outcomes}
+    assert by_url[a].attempted is True
+    assert by_url[b].attempted is False, "b 從未被開啟，不得繼承 a 的成功紀錄"
+    assert by_url[b].outcome not in vs.CHECKED
+    assert by_url[b].claimed_unbacked is True
+
+
+def test_tracking_params_still_match_when_unambiguous():
+    """但寬鬆比對本身要留著：同 path 只有一個 URL 時，utm 之類的差異仍該吸收掉。"""
+    out = _one(["https://n.example/article?utm_source=x"], [],
+               [_attempt("https://n.example/article")])
+    assert out.attempted is True
+
+
 def test_one_success_beats_a_previous_failure_on_same_url():
     """同一個 URL 開兩次、一次成功就算查過了（第二次成功不該被第一次失敗蓋掉）。"""
     url = "https://a.example/1"

@@ -136,7 +136,11 @@ def _norm_url(url: str | None) -> str:
     """與 `reports.verification_stats.normalize_url` 同一套規則。
 
     刻意複寫而不 import：guardrails 是被 reports 依賴的下層，反向 import 會把層級關係
-    倒過來。這裡只需要「去尾斜線 + host 小寫」這件小事。
+    倒過來。這裡只需要「去尾斜線 + host 小寫去 www + 保留 query」這件小事。
+
+    ⚠️ 兩邊的規則**必須一致**：這裡比對的 key 來自 `ClueOutcome.url`（已由那邊正規化過）。
+    規則漂移的後果不是比對不到而已——是把「已查證」的來源當成「未查證」刪掉。
+    `tests/test_guardrails.py::test_norm_url_matches_verification_stats` 釘住這件事。
     """
     raw = (url or "").strip()
     if not raw:
@@ -144,8 +148,9 @@ def _norm_url(url: str | None) -> str:
     parts = urlsplit(raw)
     if not parts.netloc:
         return raw.rstrip("/").lower()
+    host = parts.netloc.lower().removeprefix("www.")
     query = "?" + parts.query if parts.query else ""
-    return parts.scheme.lower() + "://" + parts.netloc.lower() + parts.path.rstrip("/") + query
+    return parts.scheme.lower() + "://" + host + parts.path.rstrip("/") + query
 
 
 def _quotes_claim(claim: str, text: str | None) -> bool:

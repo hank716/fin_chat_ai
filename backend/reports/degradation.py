@@ -34,14 +34,34 @@ def degradation_notes(cost: dict[str, Any] | None) -> list[str]:
         notes.append("本篇為預算節儉模式：無外部事件、無連網查證，僅依本地量化資料產出")
     if provider.endswith("fallback"):
         notes.append(f"決策層降級為 {provider}：本篇外部事件未經查證")
-    if not frugal:
+
+    # 查證層只在「有掛 web_fetch 的主路徑」存在。節儉模式與降級供應商都**沒有查證這回事**，
+    # 它們的降級已經各自有一句話講清楚了；再跑一次查證失敗分流只會疊出三、四句互相重複
+    # 的提示（「未經查證」講三遍），反而稀釋掉真正的訊息。
+    if _verification_ran(cost):
         notes.extend(_verification_notes(verification))
-    if verification.get("unadjudicated_n"):
-        notes.append(
-            f"{verification['unadjudicated_n']} 則外部線索未被裁決"
-            f"（召回 {verification.get('facts_n')} 則、僅查證 {verification.get('fact_checks_n')} 則）"
-        )
+        if verification.get("unadjudicated_n"):
+            notes.append(
+                f"{verification['unadjudicated_n']} 則外部線索未被裁決"
+                f"（召回 {verification.get('facts_n')} 則、"
+                f"僅查證 {verification.get('fact_checks_n')} 則）"
+            )
     return notes
+
+
+def _verification_ran(cost: dict[str, Any]) -> bool:
+    """這篇報告到底有沒有查證層可言。
+
+    `verification_active` 是 spec 023 之後才落地的欄位；舊報告沒有，退回用
+    `frugal_mode` + `decision_provider` 推導（那兩個欄位從 spec 022 起就一直都在）。
+    """
+    verification = cost.get("verification") or {}
+    active = verification.get("verification_active")
+    if active is not None:
+        return bool(active)
+    return not cost.get("frugal_mode") and not str(
+        cost.get("decision_provider") or ""
+    ).endswith("fallback")
 
 
 def _verification_notes(verification: dict[str, Any]) -> list[str]:
@@ -78,7 +98,9 @@ def _verification_notes(verification: dict[str, Any]) -> list[str]:
         notes.append(f"{budget_n} 則外部線索因查證額度不足而未核對{suffix}")
     if unreachable_n:
         notes.append(f"{unreachable_n} 則外部線索的來源無法開啟，未取得原文佐證")
-    if other_n > 0 and not (budget_n or unreachable_n):
+    if other_n > 0:
+        # 不能因為「已經報了額度不足/打不開」就省略這句：那樣 8 則線索只會交代 6 則，
+        # 剩下 2 則憑空消失——US2 要的是每一則都有去向，不是挑最大宗的講。
         notes.append(f"{other_n} 則外部線索未經查證（原因見報告 JSON 的 cost.verification）")
     if verification.get("claimed_unbacked_n"):
         # 最該讓讀者看到的一類：模型說「已查證」，但工具沒有對應的成功開啟紀錄。

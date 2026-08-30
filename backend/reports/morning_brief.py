@@ -337,12 +337,19 @@ def _decide_brief(
         if primary.name == "gemini":
             raise  # 已經是降級路徑本身，沒有更下層可退
         logger.warning("決策層(%s)失敗，降級回 Gemini 兩段式：%s", primary.name, exc)
+        # 主路徑倒下之前可能已經開過幾次原文（refusal / 續跑用盡都會走到這）。
+        # `claude_client._with_attempts` 把它掛在例外上，就是為了在這裡接住——
+        # 不接的話，那幾次查證行為連同 usage 一起從遙測裡消失，而它們是真的發生過。
+        pre_failure_attempts = list(getattr(exc, "fetch_attempts", None) or [])
 
     fallback = get_decision_llm("gemini")
-    draft, usage, attempts = fallback.draft_brief(
+    draft, usage, _attempts = fallback.draft_brief(
         feats, facts.to_prompt_json(), calibration_text or None,
     )
-    return Decision(_draft_to_result(draft), usage, "gemini-fallback", [], attempts)
+    # 降級路徑本身恆回空 attempts；帶出去的是主路徑倒下前留下的那些。
+    return Decision(
+        _draft_to_result(draft), usage, "gemini-fallback", [], pre_failure_attempts,
+    )
 
 
 def _draft_to_result(draft: Any) -> BriefResult:
@@ -358,9 +365,14 @@ def _draft_to_result(draft: Any) -> BriefResult:
 
 def _verification_stats(
     facts: retrieval.FactsPack, fact_checks: list[dict[str, Any]],
-    decision_usage: dict[str, int], fetch_attempts: list[Any], *, frugal: bool,
+    decision_usage: dict[str, int], fetch_attempts: list[Any], *, active: bool,
 ) -> tuple[dict[str, Any], list[ClueOutcome]]:
     """查證層遙測：回 (落地用的 dict, 每則線索的結局)。
+
+    `active=False` 代表**本篇根本沒有查證層**（節儉模式沒掛工具、或決策層降級到 Gemini
+    兩段式）。這種情況一律不做結局分類：那些線索不是「查證失敗」，是「沒有被查證這回事」。
+    分不清楚的代價很具體——把它們當成 `unchecked_*` 丟給 guardrail，會讓一篇與查證完全
+    無關的降級晨報被整批刪掉 news_digest / sources，再配上三、四句彼此重複的降級提示。
 
     存在的理由是 2026-08-12 盤點時發現的兩個盲點：
     ① `web_fetch` 不按次計費，查證層空轉在帳單上完全看不出來——連續多天 100% unverifiable
@@ -379,11 +391,14 @@ def _verification_stats(
 
     facts_n = len(facts.events)
     checks_n = len(fact_checks)
-    fetch_requests = int(decision_usage.get("web_fetch_requests", 0))
+    # 降級路徑的 `decision_usage` 來自 Gemini，不會有 web_fetch_requests；但 attempts 可能
+    # 帶著「Claude 倒下前已經開過的那幾次」。取兩者較大值，才不會回報 0 次卻列出 3 筆紀錄。
+    # 主路徑上兩者恆相等（每個 request 都會產生一筆 attempt，配不到結果的記為 no_result）。
+    fetch_requests = max(int(decision_usage.get("web_fetch_requests", 0)), len(fetch_attempts))
     search_requests = int(decision_usage.get("web_search_requests", 0))
     # 本篇的額度上限（FR-004）：有了它，「是否撞到上限」才是資料判定而非自然語言推測。
-    # 節儉模式沒掛工具，上限就是 0——那是「沒有查證這回事」，不是「額度為 0 的失敗」。
-    fetch_limit = 0 if frugal else int(settings.claude_brief_fetch_uses)
+    # 沒有查證層時上限就是 0——那是「沒有查證這回事」，不是「額度為 0 的失敗」。
+    fetch_limit = int(settings.claude_brief_fetch_uses) if active else 0
 
     outcomes = classify_outcomes(
         facts.events,
@@ -391,7 +406,7 @@ def _verification_stats(
         fetch_attempts,
         fetch_limit=fetch_limit,
         fetch_requests=fetch_requests,
-    )
+    ) if active else []
     counts = summarize(outcomes)
     attempts_ok = sum(1 for a in fetch_attempts if getattr(a, "ok", False))
     claimed_unbacked = [o for o in outcomes if o.claimed_unbacked]
@@ -403,7 +418,7 @@ def _verification_stats(
         )
     # 以下三條取代舊的「fetch_requests == 0 就喊空轉」——那個判斷只抓得到最極端的一種失效。
     budget_n = counts.get(verification_stats.UNCHECKED_BUDGET, 0)
-    if not frugal and budget_n:
+    if budget_n:
         logger.warning(
             "查證額度不足：%d 則線索未能核對（上限 %d 次、實際用 %d 次、成功 %d 次）",
             budget_n, fetch_limit, fetch_requests, attempts_ok,
@@ -432,6 +447,7 @@ def _verification_stats(
         "fetch_requests": fetch_requests,
         "search_requests": search_requests,
         # ── spec 023 新增 ──
+        "verification_active": active,
         "fetch_limit": fetch_limit,
         "fetch_ok": attempts_ok,
         "fetch_failed": len(fetch_attempts) - attempts_ok,
@@ -518,8 +534,13 @@ def generate_morning_brief(
     _backfill_caution(result, feats)
 
     # 查證結局分類（spec 023）：verification 落地到報告、clue_outcomes 餵給 guardrail。
+    # 只有 Claude 主路徑（非節儉模式）才有查證層可言：節儉模式沒掛工具，Gemini 降級路徑
+    # 沒有 web_fetch。這兩條路徑的「0 次查證」是預期行為而非失敗，不能當成未查證線索
+    # 餵給 guardrail——那會刪掉一份與查證無關的報告的內容。
+    verification_active = not frugal and provider == "anthropic"
     verification, clue_outcomes = _verification_stats(
-        facts, fact_checks, decision_usage, decision.fetch_attempts, frugal=frugal,
+        facts, fact_checks, decision_usage, decision.fetch_attempts,
+        active=verification_active,
     )
 
     month_total = tracker.month_total()

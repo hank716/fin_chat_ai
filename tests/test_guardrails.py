@@ -206,3 +206,29 @@ def test_guard_is_noop_without_clue_outcomes():
     cleaned, report = verify.run_guardrails(brief, _features())
     assert cleaned.sources == [url]
     assert report["counts"]["unverified_refs_dropped"] == 0
+
+
+def test_norm_url_matches_verification_stats():
+    """兩份正規化規則是複寫的（層級關係不允許反向 import），漂移就會誤刪已查證來源。
+
+    guard 拿到的 key 來自 `ClueOutcome.url`，那邊已經正規化過；這邊若少做一步（例如
+    不去 `www.`），比對就會落空——落空的方向是「把已查證的當未查證」，會靜默刪內容。
+    """
+    from reports.verification_stats import normalize_url
+
+    for raw in ("https://www.cnyes.com/news/id/1", "https://cnyes.com/news/id/1/",
+                "HTTPS://News.Example.COM/a?b=1#frag", "https://x.example/p",
+                "", None, "not-a-url/"):
+        assert verify._norm_url(raw) == normalize_url(raw), raw
+
+
+def test_www_variant_of_unverified_clue_is_still_blocked():
+    """線索是 www、報告寫裸網域（或反過來）時，guard 不得因此漏擋。"""
+    brief = _brief(sources=["https://cnyes.com/news/id/1"])
+    cleaned, report = verify.run_guardrails(
+        brief, _features(),
+        clue_outcomes=[_Clue("https://www.cnyes.com/news/id/1", "unchecked_budget")],
+    )
+    assert cleaned.sources == []
+    assert report["counts"]["unverified_refs_dropped"] == 1
+

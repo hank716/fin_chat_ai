@@ -133,3 +133,42 @@ def test_notes_carry_no_markdown_syntax():
     notes = degradation_notes(_cost({"unchecked_budget": 2, "unchecked_unreachable": 1},
                                     claimed_unbacked_n=1))
     assert notes and all("*" not in n for n in notes)
+
+
+def test_fallback_provider_does_not_stack_verification_notes():
+    """降級到 Gemini 兩段式時**沒有查證層可言**，不是「查證全失敗」。
+
+    把它當查證失敗會疊出四句意思重疊的提示（「未經查證」講三遍），真正的訊息反而被稀釋。
+    降級本身已經有專屬的一句話了。
+    """
+    cost = {"frugal_mode": False, "decision_provider": "gemini-fallback",
+            "verification": {"facts_n": 2, "fact_checks_n": 0, "unadjudicated_n": 2,
+                             "fetch_requests": 0, "fetch_limit": 6,
+                             "verification_active": False,
+                             "outcomes": {"unchecked_other": 2}, "checked_n": 0}}
+    notes = degradation_notes(cost)
+    assert len(notes) == 1 and "gemini-fallback" in notes[0]
+
+
+def test_legacy_fallback_report_without_active_flag_is_also_quiet():
+    """`verification_active` 是 spec 023 之後才有的欄位；舊的降級報告同樣不該被疊加。"""
+    cost = {"decision_provider": "gemini-fallback",
+            "verification": {"facts_n": 5, "fact_checks_n": 0, "unadjudicated_n": 5,
+                             "fetch_requests": 0}}
+    notes = degradation_notes(cost)
+    assert len(notes) == 1 and "gemini-fallback" in notes[0]
+
+
+def test_remaining_clues_are_reported_alongside_known_causes():
+    """8 則線索只交代 6 則、剩 2 則憑空消失＝US2 想解決的問題本身。
+
+    「已經報了額度不足」不是省略其他未查證線索的理由——每一則都要有去向。
+    """
+    notes = degradation_notes(_cost({
+        "confirmed": 3, "unchecked_budget": 2,
+        "unchecked_unreachable": 1, "unchecked_transient": 2,
+    }))
+    assert any("查證額度不足" in n for n in notes)
+    assert any("來源無法開啟" in n for n in notes)
+    assert any("2 則外部線索未經查證" in n for n in notes)
+
