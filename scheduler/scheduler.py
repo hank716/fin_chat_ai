@@ -41,8 +41,10 @@ CRAWL_TIMES = os.environ.get("CRAWL_TIMES", "")
 HISTORY_CRAWL_TIMES = os.environ.get("HISTORY_CRAWL_TIMES", "")
 HISTORY_TPEX_HOURLY_MIN = os.environ.get("HISTORY_TPEX_HOURLY_MIN", "")
 HISTORY_FUND_HOURLY_MIN = os.environ.get("HISTORY_FUND_HOURLY_MIN", "")
-# 整條管線（刷新台股/美股/加密 + Gemini）可能跑數分鐘，給足 read timeout
-GENERATE_TIMEOUT = float(os.environ.get("BRIEF_GENERATE_TIMEOUT", "900"))
+# 整條管線（刷新台股/美股/加密 + LLM + 回測迴圈）實測 21~34 分鐘（見 api/brief.py post_morning
+# 的註解與 /data/reports 落地時間）。逾時值**必須大於**伺服端已知工時，否則 client 每天必定
+# timeout：08-13~08-28 連續 12 個交易日都噴 ERROR，但晨報其實每天都成功產出——假警報會蓋掉真失敗。
+GENERATE_TIMEOUT = float(os.environ.get("BRIEF_GENERATE_TIMEOUT", "3600"))
 
 TZ = ZoneInfo(SCHEDULE_TZ)
 
@@ -85,8 +87,11 @@ def generate_brief(*, reason: str = "scheduled") -> None:
         resp = httpx.post(f"{BACKEND_URL}/brief/morning", timeout=GENERATE_TIMEOUT)
         if resp.status_code == 200:
             body = resp.json()
-            logger.info("晨報產生完成: report_id=%s url=%s",
-                        body.get("report_id"), body.get("url"))
+            if body.get("started") is False:      # backend 的單例鎖擋掉重複請求（省一份 LLM 錢）
+                logger.info("晨報已在產生中，本次不重跑: %s", body.get("reason"))
+            else:
+                logger.info("晨報產生完成: report_id=%s url=%s",
+                            body.get("report_id"), body.get("url"))
         else:
             logger.error("晨報產生失敗 HTTP %s: %s", resp.status_code, resp.text[:300])
     except Exception as exc:  # noqa: BLE001 — 排程不可因單次失敗而中止

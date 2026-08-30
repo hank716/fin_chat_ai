@@ -1,6 +1,7 @@
 """晨報端點（M1 step 5；M1 驗收：POST /brief/morning → 瀏覽器看得到完整頁面）。"""
 from __future__ import annotations
 
+import logging
 import secrets
 import threading
 
@@ -14,6 +15,11 @@ from reports.web_renderer import render_history_html, render_report_html
 
 router = APIRouter(tags=["brief"])
 
+logger = logging.getLogger("ai-market-backend.api.brief")
+
+# 晨報產生的單例守門：整條管線 20~35 分鐘，而 scheduler 的 catch-up 只看「今日是否已有報告」，
+# 若它在晨報跑到一半時重啟就會再打一次 → 同一天兩份 LLM 帳單。這道鎖是省錢的保險。
+_brief_state: dict[str, bool] = {"running": False}
 # 全市場財報慢爬的單例守門：同時只跑一個（可重入靠磁碟快取續跑）
 _crawl_state: dict[str, bool] = {"running": False}
 # 歷史行情慢爬的單例守門（軌道 A 上市 / 軌道 B 上櫃價各一）
@@ -71,6 +77,12 @@ async def post_morning(
     push_discord: bool = Query(default=True),
     publish: bool = Query(default=True),
 ) -> dict:
+    if _brief_state["running"]:
+        # 不排隊、不重跑：直接告訴呼叫端「已經在跑了」。scheduler 逾時後的補打、
+        # 或人工重按，都不該再燒一份 LLM 費用。
+        logger.warning("晨報已在產生中，忽略這次重複請求")
+        return {"started": False, "reason": "morning brief already running"}
+    _brief_state["running"] = True
     try:
         # ⚠️ **必須**走 threadpool：generate_morning_brief 是同步阻塞呼叫，且整條管線
         # （資料抓取 ~15 分 + LLM ~6 分 + 回測迴圈 ~12 分）動輒 30 分鐘以上。直接在
@@ -88,6 +100,8 @@ async def post_morning(
         ) from exc
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=f"LLM 暫時無法使用：{exc}") from exc
+    finally:
+        _brief_state["running"] = False
     return {
         "report_id": report["report_id"],
         "data_as_of": report["data_as_of"],
@@ -120,6 +134,8 @@ async def post_prefetch(
             _crawl_state["running"] = True
             try:
                 prefetch(scope="full", force=force, max_seconds=max_seconds)
+            except Exception:  # noqa: BLE001 — 背景執行緒的例外要落成 log，不能只留裸 traceback
+                logger.exception("全市場財報慢爬中止")
             finally:
                 _crawl_state["running"] = False
 
@@ -356,6 +372,25 @@ async def purge_future_rows(
     from storage import local_store
 
     return local_store.purge_future_rows(market)
+
+
+@router.post("/admin/data/scan-corrupt")
+async def scan_corrupt_parquet(
+    quarantine: bool = Query(default=False, description="True=把壞檔改名隔離（下次寫入自動重建）"),
+    x_admin_token: str | None = Header(default=None),
+) -> dict:
+    """掃全庫 parquet，找出打不開的死檔（可選隔離）。冪等、可重複執行。
+
+    2026-08-30 事故：容器 rebuild 把一次 `to_parquet` 砍在半路，`tw/_margin/5530.parquet`
+    被截斷成沒有結尾 magic bytes 的死檔，之後讀它就 ArrowInvalid，往上炸掉整個晨報特徵層。
+    寫入端已改原子寫入不再產生半截檔，這支是「萬一還是有」時的照明燈與清道夫。
+
+    需帶 `X-Admin-Token` 標頭，值＝.env 的 ADMIN_TOKEN。
+    """
+    _require_admin(x_admin_token)
+    from storage import local_store
+
+    return await run_in_threadpool(local_store.scan_corrupt_parquet, quarantine)
 
 
 @router.get("/brief/status")

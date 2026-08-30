@@ -10,6 +10,10 @@ Decimal → float 落地（parquet 無原生 Decimal 便利型，分析端用 fl
 """
 from __future__ import annotations
 
+import logging
+import os
+import time
+import uuid
 from dataclasses import asdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -18,8 +22,11 @@ from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 
 from config import settings
+
+logger = logging.getLogger("ai-market-backend.local_store")
 
 PARQUET_ROOT = Path(settings.local_storage_path) / "local_parquet"
 
@@ -61,14 +68,72 @@ def _rows_to_df(rows: Iterable[Any], columns: list[str]) -> pd.DataFrame:
     return df
 
 
+# ── parquet I/O 保險絲（2026-08-30 事故）────────────────────────────────────────
+# 容器 rebuild 把 `df.to_parquet(path)` 砍在半路，目的檔被截成「有 PAR1 開頭、沒 PAR1 結尾」的
+# 死檔。讀它的 read_margin 拋 ArrowInvalid 往上炸掉整個 build_tw_features（＝晨報）；而寫入端
+# _upsert_parquet 讀舊檔那行也炸 → 壞檔連覆寫自救都做不到，變成死結。兩道解法並行：
+#   寫入改原子（不再產生半截檔）、讀取遇壞檔隔離改名並回空（自癒 + 留證）。
+_TMP_SUFFIX = ".tmp-"          # 刻意不以 .parquet 結尾，免得被 rglob("*.parquet") 當成資料檔掃到
+_CORRUPT_SUFFIX = ".corrupt-"
+
+
+def write_parquet_atomic(df: pd.DataFrame, path: Path) -> None:
+    """原子寫 parquet：同目錄寫 tmp → fsync → os.replace。
+
+    目的檔在任何瞬間都是「完整舊版」或「完整新版」，程序被 SIGKILL（容器停機）也不會留半截檔。
+    tmp 必須與目的檔同目錄（同一 filesystem），os.replace 才具原子性。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # tmp 名帶 pid + 隨機碼：backend 是多執行緒（背景慢爬 + threadpool），
+    # 兩條執行緒同時寫同一檔時不能共用同一個 tmp，否則彼此把對方的半成品寫花。
+    tmp = path.with_name(f"{path.name}{_TMP_SUFFIX}{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    try:
+        df.to_parquet(tmp, engine="pyarrow", index=False)
+        try:
+            with open(tmp, "rb+") as fh:   # 先把 tmp 真正落磁碟，斷電也不會換上半截檔
+                os.fsync(fh.fileno())
+        except OSError as exc:             # 特殊 filesystem 不支援 fsync：仍可靠 replace 保原子
+            logger.debug("fsync %s 失敗（略過，仍走 replace）: %s", tmp, exc)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)        # replace 成功後 tmp 已不存在；失敗則清掉殘檔
+
+
+def _quarantine_corrupt(path: Path) -> None:
+    """把壞檔改名到 <name>.corrupt-<ts>：留證可鑑識，同時讓下次寫入視為「檔不存在」而重建。"""
+    if not path.exists():
+        return
+    dest = path.with_name(f"{path.name}{_CORRUPT_SUFFIX}{int(time.time())}")
+    try:
+        os.replace(path, dest)
+        logger.error("parquet 壞檔已隔離：%s → %s（本次回空資料，下次寫入會重建）", path, dest.name)
+    except OSError as exc:
+        logger.error("parquet 壞檔 %s 隔離失敗（仍回空資料）: %s", path, exc)
+
+
+def read_parquet_safe(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
+    """讀 parquet；檔案損毀就隔離改名 + 回空 DataFrame，不讓單一壞檔炸掉整條管線。
+
+    只捕「檔案打不開」這類 I/O 例外（ArrowInvalid / OSError）——schema 不合或邏輯錯誤照樣往上拋，
+    不把真 bug 吞成「資料默默消失」。
+    """
+    try:
+        return pd.read_parquet(path)
+    except (pa.ArrowInvalid, OSError) as exc:
+        logger.error("parquet 讀取失敗 %s: %s", path, exc)
+        _quarantine_corrupt(path)
+        return pd.DataFrame(columns=columns or [])
+
+
 def _upsert_parquet(path: Path, df_new: pd.DataFrame) -> int:
     """依 trade_date upsert 寫入 path，回傳該 symbol 落地後總列數。"""
     if df_new.empty:
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        df_old = pd.read_parquet(path)
-        df = pd.concat([df_old, df_new], ignore_index=True)
+        # 壞檔在此會被隔離並回空 → 本次寫入等同重建，不再讓單一死檔卡住整批 symbol 的落地。
+        df_old = read_parquet_safe(path, list(df_new.columns))
+        df = pd.concat([df_old, df_new], ignore_index=True) if not df_old.empty else df_new
     else:
         df = df_new
     df = (
@@ -76,7 +141,7 @@ def _upsert_parquet(path: Path, df_new: pd.DataFrame) -> int:
         .sort_values("trade_date")
         .reset_index(drop=True)
     )
-    df.to_parquet(path, engine="pyarrow", index=False)
+    write_parquet_atomic(df, path)
     return len(df)
 
 
@@ -123,7 +188,7 @@ def read_prices(symbol: str, market: str, *, adjusted: bool = False) -> pd.DataF
     path = PARQUET_ROOT / market / f"{symbol}.parquet"
     if not path.exists():
         return pd.DataFrame(columns=PRICE_COLUMNS)
-    df = pd.read_parquet(path)
+    df = read_parquet_safe(path, PRICE_COLUMNS)
     if adjusted and not df.empty:
         df = _apply_adjustment(df, symbol)
     return df
@@ -159,7 +224,7 @@ def read_chip(symbol: str, market: str) -> pd.DataFrame:
     path = PARQUET_ROOT / market / "_chip" / f"{symbol}.parquet"
     if not path.exists():
         return pd.DataFrame(columns=CHIP_COLUMNS)
-    return pd.read_parquet(path)
+    return read_parquet_safe(path, CHIP_COLUMNS)
 
 
 def read_margin(symbol: str, market: str) -> pd.DataFrame:
@@ -167,14 +232,14 @@ def read_margin(symbol: str, market: str) -> pd.DataFrame:
     path = PARQUET_ROOT / market / "_margin" / f"{symbol}.parquet"
     if not path.exists():
         return pd.DataFrame(columns=MARGIN_COLUMNS)
-    return pd.read_parquet(path)
+    return read_parquet_safe(path, MARGIN_COLUMNS)
 
 
 def read_adj_factors(symbol: str | None = None) -> pd.DataFrame:
     """讀回除權息因子表（不存在回空 DataFrame）。給 symbol 則只回該檔、依 ex_date 排序。"""
     if not ADJ_FACTORS_PATH.exists():
         return pd.DataFrame(columns=ADJ_FACTORS_COLUMNS)
-    df = pd.read_parquet(ADJ_FACTORS_PATH)
+    df = read_parquet_safe(ADJ_FACTORS_PATH, ADJ_FACTORS_COLUMNS)
     if symbol is not None:
         df = df[df["symbol"] == symbol].sort_values("ex_date").reset_index(drop=True)
     return df
@@ -188,7 +253,8 @@ def write_adj_factors(df_new: pd.DataFrame) -> int:
     df_new["ex_date"] = pd.to_datetime(df_new["ex_date"])
     ADJ_FACTORS_PATH.parent.mkdir(parents=True, exist_ok=True)
     if ADJ_FACTORS_PATH.exists():
-        df = pd.concat([pd.read_parquet(ADJ_FACTORS_PATH), df_new], ignore_index=True)
+        old = read_parquet_safe(ADJ_FACTORS_PATH, ADJ_FACTORS_COLUMNS)
+        df = pd.concat([old, df_new], ignore_index=True) if not old.empty else df_new
     else:
         df = df_new
     df["ex_date"] = pd.to_datetime(df["ex_date"])
@@ -197,7 +263,7 @@ def write_adj_factors(df_new: pd.DataFrame) -> int:
         .sort_values(["symbol", "ex_date"])
         .reset_index(drop=True)
     )
-    df.to_parquet(ADJ_FACTORS_PATH, engine="pyarrow", index=False)
+    write_parquet_atomic(df, ADJ_FACTORS_PATH)
     return len(df)
 
 
@@ -218,7 +284,10 @@ def purge_future_rows(market: str | None = None) -> dict[str, Any]:
             files_scanned += 1
             try:
                 df = pd.read_parquet(path)
-            except Exception:  # noqa: BLE001 — 壞檔跳過
+            except Exception as exc:  # noqa: BLE001 — 壞檔跳過，但要留聲音
+                # 2026-08-30：這裡原本靜默 continue，害被截斷的 5530 融資券檔潛伏到炸掉晨報
+                # 才曝光。清幽靈列不該順手改壞檔（那是 scan_corrupt_parquet 的事），但至少喊一聲。
+                logger.warning("purge 掃描跳過壞檔 %s（用 scan_corrupt_parquet 處理）: %s", path, exc)
                 continue
             if df.empty or "trade_date" not in df.columns:
                 continue
@@ -228,7 +297,7 @@ def purge_future_rows(market: str | None = None) -> dict[str, Any]:
             if n == 0:
                 continue
             kept = df.loc[~mask_future].reset_index(drop=True)
-            kept.to_parquet(path, engine="pyarrow", index=False)
+            write_parquet_atomic(kept, path)
             files_modified += 1
             rows_removed += n
     return {
@@ -237,3 +306,32 @@ def purge_future_rows(market: str | None = None) -> dict[str, Any]:
         "files_modified": files_modified,
         "rows_removed": rows_removed,
     }
+
+
+def scan_corrupt_parquet(quarantine: bool = False) -> dict[str, Any]:
+    """掃 PARQUET_ROOT 下所有 parquet，回報（可選隔離）打不開的死檔。冪等、可重複執行。
+
+    2026-08-30 事故的教訓：purge_future_rows 內建 `except: continue` 會默默跳過壞檔，
+    所以一個被截斷的 5530 融資券檔潛伏到炸掉晨報才被發現。這支是專門把它們照出來的燈。
+    quarantine=False（預設）＝純唯讀報告；True 才改名隔離（下次寫入自動重建）。
+    """
+    import pyarrow.parquet as pq  # noqa: PLC0415 — 只在維運掃描時才需要，不進 import 熱路徑
+
+    corrupt: list[dict[str, Any]] = []
+    files_scanned = 0
+    if not PARQUET_ROOT.exists():
+        return {"files_scanned": 0, "corrupt": [], "quarantined": 0}
+    for path in PARQUET_ROOT.rglob("*.parquet"):
+        files_scanned += 1
+        try:
+            pq.ParquetFile(path)                  # 只讀 footer，不載入資料，全庫掃很快
+        except (pa.ArrowInvalid, OSError) as exc:
+            corrupt.append({"path": str(path), "size": path.stat().st_size, "error": str(exc)[:120]})
+    quarantined = 0
+    if quarantine:
+        for item in corrupt:
+            p = Path(item["path"])
+            _quarantine_corrupt(p)
+            if not p.exists():
+                quarantined += 1
+    return {"files_scanned": files_scanned, "corrupt": corrupt, "quarantined": quarantined}

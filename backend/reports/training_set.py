@@ -497,7 +497,7 @@ def build_training_set(hs: list[int] | None = None, *, min_amount: float = MIN_A
     if ds.empty:
         return {"built": False, "reason": "no samples (forward labels not matured yet)"}
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    ds.to_parquet(out_path, engine="pyarrow", index=False)
+    local_store.write_parquet_atomic(ds, out_path)
 
     per_h = {int(h): int((ds["horizon"] == h).sum()) for h in hs}
     stats = {
@@ -521,7 +521,9 @@ def load_training_set(h: int, path: Path = TRAINING_SET_PATH) -> pd.DataFrame:
     """讀回某窗的歷史樣本（無檔回空）。"""
     if not path.exists():
         return pd.DataFrame()
-    df = pd.read_parquet(path)
+    df = local_store.read_parquet_safe(path)
+    if df.empty:                       # 含「訓練集壞檔已被隔離」：回空讓上游走既有的重建路徑
+        return pd.DataFrame()
     return df[df["horizon"] == h].reset_index(drop=True)
 
 

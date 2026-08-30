@@ -21,6 +21,7 @@ import pandas as pd
 
 from config import settings
 from data_sources import rate_limiter
+from storage import local_store   # 原子寫入 / 壞檔自癒的共用 parquet I/O
 
 logger = logging.getLogger("ai-market-backend.taifex")
 
@@ -126,13 +127,14 @@ def _upsert(df: pd.DataFrame) -> int:
     if df.empty:
         return 0
     if PCR_PATH.exists():
-        old = pd.read_parquet(PCR_PATH)
-        df = pd.concat([old, df], ignore_index=True)
+        old = local_store.read_parquet_safe(PCR_PATH, COLUMNS)
+        if not old.empty:
+            df = pd.concat([old, df], ignore_index=True)
     df["trade_date"] = pd.to_datetime(df["trade_date"])
     df = (df.drop_duplicates(subset=["trade_date"], keep="last")
             .sort_values("trade_date").reset_index(drop=True))
     _DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(PCR_PATH, engine="pyarrow", index=False)
+    local_store.write_parquet_atomic(df, PCR_PATH)
     return len(df)
 
 
@@ -167,7 +169,7 @@ def read_pcr() -> pd.DataFrame:
     """讀回 P/C 序列（不存在回空）。舊 parquet 缺 known_date 欄時回填為 trade_date（同語意）。"""
     if not PCR_PATH.exists():
         return pd.DataFrame(columns=COLUMNS)
-    df = pd.read_parquet(PCR_PATH)
+    df = local_store.read_parquet_safe(PCR_PATH, COLUMNS)
     if "known_date" not in df.columns:                   # 相容既有無 known_date 的落地檔
         df["known_date"] = pd.to_datetime(df["trade_date"])
     return df

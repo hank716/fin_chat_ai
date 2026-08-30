@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 
 from config import settings
+from storage import local_store   # 原子寫入 / 壞檔自癒的共用 parquet I/O
 from processor.fundamentals import (  # noqa: PLC2701 — 刻意重用同套期限/解析邏輯
     _pick,
     _pivot_by_date,
@@ -152,7 +153,7 @@ def _write(dir_path: Path, symbol: str, rows: list[dict[str, Any]]) -> int:
         return 0
     dir_path.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(rows).sort_values("known_date").reset_index(drop=True)
-    df.to_parquet(dir_path / f"{symbol}.parquet", engine="pyarrow", index=False)
+    local_store.write_parquet_atomic(df, dir_path / f"{symbol}.parquet")
     return len(df)
 
 
@@ -178,7 +179,9 @@ def read_history(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         path = dir_path / f"{symbol}.parquet"
         if not path.exists():
             return pd.DataFrame()
-        df = pd.read_parquet(path)
+        df = local_store.read_parquet_safe(path)
+        if df.empty:                   # 含「壞檔已被隔離」：回空，下次慢爬會重建這檔
+            return pd.DataFrame()
         df["known_date"] = pd.to_datetime(df["known_date"])
         return df.sort_values("known_date").reset_index(drop=True)
     return _read(FUND_REV_DIR), _read(FUND_FIN_DIR)
