@@ -41,6 +41,10 @@ CRAWL_TIMES = os.environ.get("CRAWL_TIMES", "")
 HISTORY_CRAWL_TIMES = os.environ.get("HISTORY_CRAWL_TIMES", "")
 HISTORY_TPEX_HOURLY_MIN = os.environ.get("HISTORY_TPEX_HOURLY_MIN", "")
 HISTORY_FUND_HOURLY_MIN = os.environ.get("HISTORY_FUND_HOURLY_MIN", "")
+# 壞檔巡檢：逗號分隔 HH:MM，留空＝關閉。建議排在 PREFETCH_TIMES/REPORT_TIMES 之前（如 07:00），
+# 壞檔要在晨報用到它之前先亮燈——2026-08-30 就是一個半截 parquet 潛伏到炸掉晨報才被發現。
+CORRUPT_SCAN_TIMES = os.environ.get("CORRUPT_SCAN_TIMES", "")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 # 整條管線（刷新台股/美股/加密 + LLM + 回測迴圈）實測 21~34 分鐘（見 api/brief.py post_morning
 # 的註解與 /data/reports 落地時間）。逾時值**必須大於**伺服端已知工時，否則 client 每天必定
 # timeout：08-13~08-28 連續 12 個交易日都噴 ERROR，但晨報其實每天都成功產出——假警報會蓋掉真失敗。
@@ -153,6 +157,39 @@ def crawl_fundamentals_history_job() -> None:
         logger.info("基本面歷史慢爬已啟動: HTTP %s %s", resp.status_code, resp.text[:200])
     except Exception as exc:  # noqa: BLE001
         logger.error("基本面歷史慢爬觸發例外: %s", exc)
+
+
+def scan_corrupt(*, reason: str = "scheduled") -> None:
+    """每日巡檢全庫 parquet 有無打不開的死檔。**唯讀**（quarantine=false）。
+
+    自癒歸讀取端的 read_parquet_safe——無人看管的排程不該自己改資料檔；這支只負責在
+    壞檔被晨報用到之前先亮燈。不限交易日：每小時的慢爬非交易日也在寫檔。
+    """
+    if not ADMIN_TOKEN:
+        # 端點 fail-closed 會回 503，與其每天噴一筆假 ERROR 蓋掉真警報，不如明講原因後略過。
+        logger.warning("未設 ADMIN_TOKEN，略過壞檔巡檢（管理端點未啟用）")
+        return
+    logger.info("觸發壞檔巡檢 (%s) → POST %s/admin/data/scan-corrupt", reason, BACKEND_URL)
+    try:
+        resp = httpx.post(
+            f"{BACKEND_URL}/admin/data/scan-corrupt",
+            params={"quarantine": "false"},
+            headers={"X-Admin-Token": ADMIN_TOKEN},
+            timeout=600,                      # 全庫 11k 檔只讀 footer，慢爬同時在跑時實測 ~2.3 分；留足餘裕
+        )
+        if resp.status_code != 200:
+            logger.error("壞檔巡檢失敗 HTTP %s: %s", resp.status_code, resp.text[:300])
+            return
+        body = resp.json()
+        corrupt = body.get("corrupt") or []
+        if corrupt:
+            logger.error("壞檔巡檢發現 %d 個死檔（掃描 %s 檔）: %s",
+                         len(corrupt), body.get("files_scanned"),
+                         ", ".join(str(c.get("path")) for c in corrupt[:20]))
+        else:
+            logger.info("壞檔巡檢正常：掃描 %s 檔，0 壞", body.get("files_scanned"))
+    except Exception as exc:  # noqa: BLE001 — 排程不可因單次失敗而中止
+        logger.error("壞檔巡檢請求例外: %s", exc)
 
 
 def history_catch_up() -> None:
@@ -322,6 +359,19 @@ def main() -> None:
             logger.info("基本面歷史慢爬排程：每小時 :%02d", minute)
         except ValueError:
             logger.warning("HISTORY_FUND_HOURLY_MIN 非整數，忽略: %r", HISTORY_FUND_HOURLY_MIN)
+
+    # 壞檔巡檢（唯讀）：不做 catch-up——掃描便宜、每日一次即可，錯過補跑沒有價值。
+    scan_times = _parse_times(CORRUPT_SCAN_TIMES) if CORRUPT_SCAN_TIMES.strip() else []
+    for h, m in scan_times:
+        scheduler.add_job(
+            scan_corrupt,
+            CronTrigger(hour=h, minute=m, timezone=TZ),
+            id=f"scancorrupt_{h:02d}{m:02d}",
+            misfire_grace_time=3600, coalesce=True, max_instances=1,
+        )
+    if scan_times:
+        logger.info("壞檔巡檢排程：每日 %s",
+                    ", ".join(f"{h:02d}:{m:02d}" for h, m in scan_times))
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

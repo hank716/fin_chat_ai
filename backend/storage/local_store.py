@@ -314,6 +314,11 @@ def scan_corrupt_parquet(quarantine: bool = False) -> dict[str, Any]:
     2026-08-30 事故的教訓：purge_future_rows 內建 `except: continue` 會默默跳過壞檔，
     所以一個被截斷的 5530 融資券檔潛伏到炸掉晨報才被發現。這支是專門把它們照出來的燈。
     quarantine=False（預設）＝純唯讀報告；True 才改名隔離（下次寫入自動重建）。
+
+    但別把這支當成唯一防線：那次事故實際壞了**兩**檔，`tw/_margin/5530.parquet`
+    在 19:50:37 被這支掃到隔離，`tw/_chip/5202.parquet` 卻是 19:56:02 才由讀取端的
+    read_parquet_safe 抓到——晚於這支的全庫掃描。掃描只是某一刻的快照，讀取端自癒
+    才是常態防線；排程掃描的價值在「提早亮燈」，不在「保證掃得完」。
     """
     import pyarrow.parquet as pq  # noqa: PLC0415 — 只在維運掃描時才需要，不進 import 熱路徑
 

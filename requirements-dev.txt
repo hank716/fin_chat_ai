@@ -1,0 +1,6 @@
+# 本機測試環境專用（正式 image 不裝）。執行期依賴一律以 backend/requirements.txt 為準，
+# 這裡只放測試工具，才不會讓測試環境悄悄多出正式環境沒有的套件。
+#
+# 測試碼的第三方 import 只有 pytest / httpx / numpy / pandas / pydantic，
+# 後四者已由 backend/requirements.txt 涵蓋，所以 dev 依賴就這一項。
+pytest>=9.0,<10.0

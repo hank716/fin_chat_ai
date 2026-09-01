@@ -99,6 +99,32 @@ pip install -r requirements.txt
 REDIS_URL=redis://localhost:6379/0 uvicorn main:app --reload
 ```
 
+## 本機測試
+
+測試**一律跑在 `.venv` 裡**，且該 venv 必須釘 **Python 3.12**——與正式 image 同版本。原因很實際：
+`backend/requirements.txt` 釘 `pandas>=2.2,<3.0`，而 pandas 2.x 沒有 cp314 wheel，用系統的新版
+Python 只會裝出 pandas 3.x，等於拿一個跟線上差一個 major 版本的環境在驗收。
+
+```bash
+python -m pip install --user uv          # 只當工具用，免管理員權限
+uv python install 3.12
+uv venv .venv --python 3.12
+uv pip install --python .venv -r backend/requirements.txt -r requirements-dev.txt
+.venv/Scripts/python -m pytest -q        # Linux/macOS: .venv/bin/python
+```
+
+`requirements-dev.txt` 只放測試工具（pytest）；執行期依賴一律以 `backend/requirements.txt` 為準，
+兩份分開才不會讓測試環境悄悄多出正式環境沒有的套件。
+
+驗收標準是 `pytest -q` **全綠且零 collection error**——不要用 `--ignore` 跳過跑不起來的檔案，
+那會把「環境沒裝好」偽裝成「測試通過」（2026-08-30 就是這樣讓 10 個檔長期沒被執行）。
+確認版本對齊：
+
+```bash
+.venv/Scripts/python -c "import sys,pandas,pyarrow;print(sys.version.split()[0],pandas.__version__,pyarrow.__version__)"
+docker exec ai-market-backend python -c "import sys,pandas,pyarrow;print(sys.version.split()[0],pandas.__version__,pyarrow.__version__)"
+```
+
 ## 目錄結構
 
 ```

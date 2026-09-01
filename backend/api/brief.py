@@ -383,6 +383,8 @@ async def scan_corrupt_parquet(
 
     2026-08-30 事故：容器 rebuild 把一次 `to_parquet` 砍在半路，`tw/_margin/5530.parquet`
     被截斷成沒有結尾 magic bytes 的死檔，之後讀它就 ArrowInvalid，往上炸掉整個晨報特徵層。
+    事後盤點壞的是**兩**檔（5530 融資券、5202 籌碼），且 5202 是這支掃過之後才由讀取端的
+    read_parquet_safe 抓到的——所以這支是照明燈而非保證，自癒仍歸 read_parquet_safe。
     寫入端已改原子寫入不再產生半截檔，這支是「萬一還是有」時的照明燈與清道夫。
 
     需帶 `X-Admin-Token` 標頭，值＝.env 的 ADMIN_TOKEN。
