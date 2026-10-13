@@ -57,6 +57,10 @@ _UNREACHABLE_CODES = frozenset({
     "url_not_accessible", "url_not_allowed", "unsupported_content_type", "url_too_long",
 })
 _TRANSIENT_CODES = frozenset({"too_many_requests", "unavailable"})
+# 工具回報成功、但帶回的原文短到不可能含有可核對的內文（付費牆、空殼頁、純導覽列）。
+# 這不是 SDK 的 error_code，是本模組合成的；歸在「來源打不開」。
+EMPTY_CONTENT = "empty_content"
+_MIN_CONTENT_CHARS = 200
 
 
 def _host_of(netloc: str) -> str:
@@ -183,7 +187,7 @@ def _failure_outcome(
     if attempted:
         if error_code in _BUDGET_CODES:
             return UNCHECKED_BUDGET
-        if error_code in _UNREACHABLE_CODES:
+        if error_code in _UNREACHABLE_CODES or error_code == EMPTY_CONTENT:
             return UNCHECKED_UNREACHABLE
         if error_code in _TRANSIENT_CODES:
             return UNCHECKED_TRANSIENT
@@ -253,6 +257,9 @@ def classify_outcomes(
         attempted = att is not None
         ok = bool(_attr(att, "ok")) if attempted else False
         error_code = None if ok else (_attr(att, "error_code") if attempted else None)
+        chars = _attr(att, "content_chars") if attempted else None
+        if ok and chars is not None and int(chars) < _MIN_CONTENT_CHARS:
+            ok, error_code = False, EMPTY_CONTENT
         verdict = _pick_verdict([v for v in checks.get(url, []) if v])
 
         if ok and verdict in ADJUDICATED:

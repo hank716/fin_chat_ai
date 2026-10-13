@@ -23,6 +23,8 @@ SDK 內建重試、streaming、structured outputs，自己刻沒有價值。
    來源追蹤走我們自己的 `fact_checks` 欄位。
 6. **不可另外宣告 `code_execution`** — `_20260209` 版工具內建 dynamic filtering
    （底層自己會跑 code execution），重複宣告會造成兩個執行環境、讓模型混亂。
+   同理 **`allowed_callers` 必須釘 `["direct"]`**：不釘的話 Opus 5 預設從 code execution
+   裡呼叫 `web_fetch`，原文只落在沙箱變數、模型只看得到自己 print 的片段。見 `build_tools`。
 7. **不要再包 tenacity** — SDK 自己有 `max_retries`。`tests/test_gemini_retry.py` 就是在防
    「3×4=12 次」的重複重試 bug，同一個坑不踩第二次。
 """
@@ -77,6 +79,9 @@ def reset_client() -> None:
     _client_singleton = None
 
 
+_DIRECT_ONLY = ("direct",)
+
+
 def build_tools(fetch_uses: int, search_uses: int) -> list[dict[str, Any]]:
     """組出連網查證工具清單。
 
@@ -102,11 +107,18 @@ def build_tools(fetch_uses: int, search_uses: int) -> list[dict[str, Any]]:
             "max_uses": int(fetch_uses),
             # 防單頁爆量：一篇長報導可上萬 token，而它會跟著後續每一輪重送。
             "max_content_tokens": int(settings.claude_fetch_max_content_tokens),
+            # ⚠️ 必須釘 direct。2026-10-13 重現：預設下 Opus 5 是在 code execution 裡
+            # `await web_fetch(...)`，結果只進沙箱變數，模型看到的是自己 print 的前幾千字
+            # （多半是頁首 meta）或一個解析失敗的 traceback，然後回報「無法開啟原文」——
+            # 工具端卻記成成功。8/31–10/13 的 63 次成功 fetch 只換到 12 則裁決就是這個原因。
+            # 同一則線索實測：經 code execution 34.3k input / 790 output，direct 10.8k / 197。
+            "allowed_callers": list(_DIRECT_ONLY),
         },
         {
             "type": "web_search_20260209",
             "name": "web_search",
             "max_uses": int(search_uses),
+            "allowed_callers": list(_DIRECT_ONLY),
         },
     ]
 
@@ -202,6 +214,12 @@ class FetchAttempt:
     ok: bool
     error_code: str | None
     retrieved_at: str | None
+    # 回到手上的原文長度（字元）。None＝失敗或非純文字（如 PDF）。「成功但幾乎沒內容」
+    # 與「成功且讀得到內文」在工具端都是 ok=True，不記長度就分不出來。
+    content_chars: int | None = None
+    # True＝這次 fetch 是從 code execution 裡發出的（原文不直接進模型視野）。
+    # `build_tools` 已釘 direct，這個欄位正常應恆為 False——出現 True 代表那個設定失效了。
+    via_code: bool = False
 
 
 def _fetch_url_of(block: Any) -> str:
@@ -213,6 +231,15 @@ def _fetch_url_of(block: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("url") or "")
     return str(getattr(payload, "url", "") or "")
+
+
+def _content_chars_of(result: Any) -> int | None:
+    """`web_fetch_result` 帶回的純文字長度；結構對不上或非文字來源回 None（不猜）。"""
+    source = getattr(getattr(result, "content", None), "source", None)
+    data = getattr(source, "data", None)
+    if isinstance(data, str) and getattr(source, "type", "text") == "text":
+        return len(data)
+    return None
 
 
 def _collect_fetch_attempts(content: Any) -> list[FetchAttempt]:
@@ -243,6 +270,8 @@ def _collect_fetch_attempts(content: Any) -> list[FetchAttempt]:
             ok=error_code is None,
             error_code=str(error_code) if error_code else None,
             retrieved_at=str(getattr(inner, "retrieved_at", "") or "") or None,
+            content_chars=None if error_code else _content_chars_of(inner),
+            via_code=getattr(block, "caller", None) is not None,
         ))
         requested.pop(tool_id, None)
     # 請求了卻沒有對應結果 block（理論上不該發生，pause_turn 切在工具中間時可能出現）。

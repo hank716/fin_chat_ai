@@ -223,6 +223,31 @@ def test_tools_are_stable_and_fetch_has_no_citations():
     assert fetch["max_content_tokens"] > 0
 
 
+def test_server_tools_are_pinned_to_direct_calls():
+    """不釘 direct，Opus 5 會從 code execution 裡呼叫 web_fetch：原文只進沙箱變數，
+    模型看不到內文卻被記成「已開啟」。2026-10-13 查出這是查證成功率只有 6% 的根因。"""
+    for tool in cc.build_tools(3, 2):
+        assert tool["allowed_callers"] == ["direct"]
+
+
+def test_fetch_attempt_records_content_length_and_route():
+    doc = SimpleNamespace(source=SimpleNamespace(type="text", data="x" * 4321))
+    direct = SimpleNamespace(
+        type="web_fetch_tool_result", tool_use_id="a", caller=None,
+        content=SimpleNamespace(url="https://e.com/1", retrieved_at="t", content=doc))
+    via_code = SimpleNamespace(
+        type="web_fetch_tool_result", tool_use_id="b",
+        caller=SimpleNamespace(type="code_execution_20260120", tool_id="srv"),
+        content=SimpleNamespace(url="https://e.com/2", retrieved_at="t", content=doc))
+    failed = SimpleNamespace(
+        type="web_fetch_tool_result", tool_use_id="c", caller=None,
+        content=SimpleNamespace(error_code="url_not_accessible"))
+    a, b, c = cc._collect_fetch_attempts([direct, via_code, failed])
+    assert (a.content_chars, a.via_code) == (4321, False)
+    assert b.via_code is True
+    assert (c.ok, c.content_chars) == (False, None)
+
+
 def test_brief_prompt_is_cached_by_default(monkeypatch):
     """晨報要開快取——工具迴圈在單一請求內把同一個 ~55k 前綴重讀多輪，讀取只要 0.1×。
 

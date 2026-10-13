@@ -292,3 +292,19 @@ def test_aggregate_counts_claimed_unbacked(tmp_path):
         "verification": {"clues": [_clue(vs.UNCHECKED_BUDGET, claimed=True)]},
     })
     assert vs.aggregate(tmp_path)["claimed_unbacked_n"] == 1
+
+
+def test_successful_fetch_with_no_readable_content_is_unreachable():
+    """工具回報成功但原文幾乎是空的（付費牆、空殼頁）＝沒查到，不得算「已核對」。"""
+    empty = {"url": "https://a.example/1", "ok": True, "error_code": None, "content_chars": 40}
+    out = _one(["https://a.example/1"], [_check("https://a.example/1", "confirmed")], [empty])
+    assert out.outcome == vs.UNCHECKED_UNREACHABLE
+    assert out.error_code == vs.EMPTY_CONTENT
+    assert out.claimed_unbacked is True       # 空頁撐不起 confirmed
+
+
+def test_missing_content_length_keeps_old_behaviour():
+    """舊報告與 PDF 來源沒有 content_chars——不得因此被判成空頁。"""
+    out = _one(["https://a.example/1"], [_check("https://a.example/1", "unverifiable")],
+               [_attempt("https://a.example/1")])
+    assert out.outcome == vs.CHECKED_INSUFFICIENT

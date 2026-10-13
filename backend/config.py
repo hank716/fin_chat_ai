@@ -68,12 +68,20 @@ class Settings(BaseSettings):
     # 那 55k 最多被重送 12 次。2026-08-06 實測：12 次上限跑出 NT$73.83/篇（≈NT$1,550/月）。
     # 2026-08-07 再降一階（5→3 / 3→2）：實測 8/7 那篇 7 條 fact_checks **全部 unverifiable**、
     # 8/6 那篇 6 條有 4 條 contradicted——這筆支出目前買到的是「證明線索不可信」，有價值但
-    # 不值得付到 5 次。真正該修的是召回層的 URL 品質，不是多買幾次 fetch。
+    # 不值得付到 5 次。
+    # ⚠️ 當時接著寫的「真正該修的是召回層的 URL 品質」**未經驗證且結論錯誤**。spec 023 的
+    # 30 篇實測（8/31–10/13，192 則線索）：額度不足 55%、來源打不開 8%，而成功開啟的 63 次
+    # 只換到 12 則裁決——根因是 web_fetch 經 code execution 間接呼叫、原文沒進模型視野
+    # （見 claude_client.build_tools），既不是 URL 品質也不是額度。額度維持 3，待 direct
+    # 呼叫上線後的新資料再議（specs/023 tasks.md「觀察結果」）。
     claude_brief_fetch_uses: int = 3                  # 晨報：查證用 web_fetch 次數上限
     claude_brief_search_uses: int = 2                 # 晨報：補漏用 web_search 次數上限
     claude_chat_fetch_uses: int = 4                   # 問答：互動情境對延遲敏感，壓低
     claude_chat_search_uses: int = 2
-    claude_fetch_max_content_tokens: int = 3000       # 單頁擷取上限（防長文把 input 撐爆）
+    # 單頁擷取上限（防長文把 input 撐爆）。2026-10-13 由 3000 調到 8000，依據是實測各站在
+    # 不同上限下拿到的中文內文字數：money.udn 358→1,927、ctee 573→2,224（3000 時幾乎只有
+    # 頁首 meta 與導覽列，文章本體在 5–6k token 之後才開始）；news.cnyes 在 5000 就到頂。
+    claude_fetch_max_content_tokens: int = 8000
     # pause_turn 續跑上限（防無窮迴圈），同時也是「整份晨報壓在單次呼叫」的實際旋鈕：
     # 每多一輪就多一次完整輸出 + 一次前綴重讀。調低的風險是查證做到一半被切斷，
     # 靠報告 JSON 的 `cost.tokens.rounds` 監控：連續多篇頂到上限就代表被切，再調回。

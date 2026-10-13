@@ -461,7 +461,9 @@ def _verification_stats(
             {"url": getattr(a, "url", ""), "domain": verification_stats.domain_of(
                 getattr(a, "url", "")),
              "ok": bool(getattr(a, "ok", False)),
-             "error_code": getattr(a, "error_code", None)}
+             "error_code": getattr(a, "error_code", None),
+             "content_chars": getattr(a, "content_chars", None),
+             "via_code": bool(getattr(a, "via_code", False))}
             for a in fetch_attempts
         ],
     }
