@@ -65,6 +65,9 @@ def _budget_features(features: dict[str, Any]) -> dict[str, Any]:
         f["news"] = [_truncate_news_item(n) for n in news[:MAX_BRIEF_NEWS]]
     tw = f.get("tw")
     if isinstance(tw, dict):
+        # 小型股候選由模型直接出名單（spec 024），決策層不參與也不該看到——留著只會增加輸入成本，
+        # 還可能讓它把小型股挑進主名單（Symbol Guard 會擋，但白花 token）。
+        tw.pop("smallcap", None)
         stocks = tw.get("stocks")
         if isinstance(stocks, dict) and len(stocks) > MAX_BRIEF_STOCKS:
             tw["stocks"] = _cap_stocks(stocks, _movers_symbols(tw.get("movers")), MAX_BRIEF_STOCKS)

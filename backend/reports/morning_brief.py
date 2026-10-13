@@ -627,6 +627,14 @@ def generate_morning_brief(
     except Exception as exc:  # noqa: BLE001
         logger.warning("sizing/曝險失敗（不影響晨報）: %s", exc)
 
+    # 小型股候選（spec 024）：模型直接出名單，不經決策層；任何失敗都不影響晨報
+    smallcap: dict[str, Any] = {}
+    try:
+        from reports import smallcap_sleeve
+        smallcap = smallcap_sleeve.build(feats.get("tw") or {})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("小型股候選產生失敗（不影響晨報）: %s", exc)
+
     # 回測迴圈：回測已到期的過去晨報 → 重建校準 → 訓練模型（本機運算、零 LLM 花費）
     backtest_summary = _run_backtest_loop()
 
@@ -655,6 +663,8 @@ def generate_morning_brief(
         report["fusion_weights"] = fusion_weights   # 各方向模型的正規化融合權重（超 gate 幅度）
     if size_weights:
         report["size_weights"] = size_weights
+    if smallcap:
+        report["tw_smallcap"] = smallcap
     if market_fear:
         report["market_fear"] = market_fear
     if calibration_text:
@@ -667,7 +677,7 @@ def generate_morning_brief(
     report["features"] = feats
     report["landed_symbols"] = landed
     report["markdown"] = build_markdown(
-        result, generated_at=generated_at, raw_query=raw_query, cost=cost_info
+        result, generated_at=generated_at, raw_query=raw_query, cost=cost_info, smallcap=smallcap
     )
     report["copy_for_ai"] = build_copy_for_ai(
         result, generated_at=generated_at, raw_query=raw_query

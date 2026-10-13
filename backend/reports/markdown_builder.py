@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -34,6 +36,7 @@ def build_markdown(
     raw_query: str | None = None,
     generated_at: datetime | None = None,
     cost: dict | None = None,
+    smallcap: dict[str, Any] | None = None,
 ) -> str:
     ts = (generated_at or _now()).strftime("%Y-%m-%d %H:%M %Z")
     parts: list[str] = []
@@ -74,6 +77,21 @@ def build_markdown(
         parts.append(_watch_block("偏多觀察標的（含目標價/止損）", "技術面偏多；目標價/止損為技術參考，非保證，請自行判斷。", result.tw_watchlist))
     if result.tw_caution:
         parts.append(_watch_block("偏空/要注意標的", "技術面偏空或有追高/籌碼風險；目標價/止損為技術參考，非保證。", result.tw_caution))
+
+    if smallcap and (smallcap.get("picks") or smallcap.get("reason")):
+        lines = ["## 小型股候選（模型排序・低流動性）", ""]
+        if smallcap.get("picks"):
+            lines += [f"_{smallcap.get('note', '')}由排序模型直接選出，未經人工或語言模型增刪。_", ""]
+            for p in smallcap["picks"]:
+                sector = f"〔{p['sector']}〕" if p.get("sector") else ""
+                lines.append(f"### {p['rank']}. {p['symbol']} {p['name']} {sector}")
+                lines.append("訊號：" + "、".join(p.get("signals") or []))
+                if p.get("risk_score") is not None and p["risk_score"] >= 0.6:
+                    lines.append(f"\n> ⚠️ 回撤風險偏高（{p['risk_score'] * 100:.0f}%）")
+                lines.append("")
+        else:
+            lines.append(f"今日不列：{smallcap['reason']}")
+        parts.append("\n".join(lines).rstrip())
 
     if result.risks:
         parts.append("## 今日風險提醒\n\n" + "\n".join(f"- {r}" for r in result.risks))

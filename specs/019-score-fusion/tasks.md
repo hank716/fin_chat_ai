@@ -28,7 +28,7 @@
 - [X] T014 rebuild backend image + up -d（部署融合/分流碼）
 - [X] T015 晨報實跑（可選，~NT$8）：report JSON 含 fused_scores/fusion_weights（若有方向模型過 gate）；guardrail 正常（SC-001）
       **2026-10-13 以排程晨報驗收**：8/28–10/13 的 31 篇中 26 篇帶 `fused_scores`，`fusion_weights` 以 rank 為主（qlib 偶爾 1–13%）；主池 rank-IC 未過 gate 的日子（如 10/13）正確地不重排。
-      ⚠️ **小型股帶模型在 serving 從未被用到**：候選池（`tw_features._movers`）只收成交額 ≥ 5,000 萬的個股，且 `_amount` 在進 `_candidate_list` 前已被剝除，`score_rank` 一律走主池。WP2.3 的 alpha 要落地需另開規格擴充候選池（見 `EVAL_BASELINE.md`「選股歸因」）。
+      ⚠️ **小型股帶模型在 serving 從未被用到**：候選池（`tw_features._movers`）只收成交額 ≥ 5,000 萬的個股，且 `_amount` 在進 `_candidate_list` 前已被剝除，`score_rank` 一律走主池。WP2.3 的 alpha 要落地需另開規格擴充候選池（見 `EVAL_BASELINE.md`「選股歸因」）→ **已由 spec 024 處理**。
 
 ## 驗收對照
 

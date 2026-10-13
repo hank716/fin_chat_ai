@@ -32,7 +32,7 @@ RISK_META_PATH = STRATEGY_DIR / "risk_model_meta.json"
 RANK_META_PATH = STRATEGY_DIR / "rank_model_meta.json"
 # WP2.3 小型股帶 rank 模型（spec 019）：候選 amount∈[5M,50M) 走此帶模型（OOS rank-IC 遠強於主池，
 # baseline 實測小型股 h5 ~0.076 vs 主池 ~0.034）。routing 在 score_rank 依候選 _amount 分流。
-SMALLCAP_MIN_TWD = 5_000_000
+SMALLCAP_MIN_TWD = settings.smallcap_min_amount_twd       # spec 024：訓練帶與線上候選帶一致
 SMALLCAP_MAX_TWD = 50_000_000                            # = training_set.MIN_AMOUNT_TWD（主池下界）
 SMALLCAP_TRAINING_SET_PATH = STRATEGY_DIR / "training_set_smallcap.parquet"
 RANK_META_SMALLCAP_PATH = STRATEGY_DIR / "rank_model_meta_smallcap.json"
@@ -260,6 +260,12 @@ def evaluate_effectiveness(lookback: int | None = None) -> dict[str, Any]:
         "rank_model": {"per_horizon_rank_ic": rank_ics, "trained": rank.get("trained")},
         "verdict": verdict,
     }
+    try:
+        from reports import smallcap_sleeve  # noqa: PLC0415 — 避免循環匯入
+        # 小型股候選的線上成效，與主名單分列（spec 024 FR-005）；停損判定也看這份
+        out["smallcap"] = smallcap_sleeve.live_stats(scorecards)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("小型股候選成效統計失敗: %s", exc)
     STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
     EVAL_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     return out
@@ -1144,7 +1150,7 @@ def run_battlefield_experiment(smallcap_min: float = 5_000_000) -> dict[str, Any
     return out
 
 
-def backtest_smallcap_sleeve(*, smallcap_min: float = 5_000_000, top_k: int = 3,
+def backtest_smallcap_sleeve(*, smallcap_min: float = SMALLCAP_MIN_TWD, top_k: int = 3,
                              costs_pct: tuple[float, ...] = (0.4, 0.6, 0.9, 1.2),
                              horizon: int | None = None) -> dict[str, Any]:
     """小型股 5 日 rank sleeve 的「扣成本淨報酬」回測（純離線、不存模型、不動晨報）。

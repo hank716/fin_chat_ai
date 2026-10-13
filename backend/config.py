@@ -174,6 +174,12 @@ class Settings(BaseSettings):
     enable_strategy_calibration: bool = True      # 把回測校準文字注入晨報 prompt（自我修正）
     enable_edge_model: bool = True                # 啟用本地 ML edge 模型（樣本不足時自動跳過）
     edge_model_min_samples: int = 150             # 訓練 edge 模型所需最少已到期樣本數
+    # 小型股候選（spec 024）：由小型股帶 rank 模型直接產生的每日名單，與主名單分開呈現與追蹤。
+    # 下限 1,000 萬為 2026-10-13 定案（訓練時原為 500 萬；提高是為了排除最難成交的一段）。
+    # 同截止日回測：1,000 萬–5,000 萬每日前 3 檔，5 日贏同池 1.44 個百分點、扣 0.6% 成本後淨 +1.54%。
+    enable_smallcap_candidates: bool = True
+    smallcap_min_amount_twd: int = 10_000_000
+    smallcap_top_k: int = 3
     # 回撤風險模型（方向 edge 撞效率牆，改預測「未來會不會深跌」＝波動持續性，OOS AUC 高很多）。
     enable_risk_model: bool = True                # 啟用本地回撤風險模型（與方向 edge 並存、不取代）
     risk_model_min_auc: float = 0.58              # 風險模型 OOS AUC ≥ 此值才用於排序/標記（比 edge 0.52 嚴）

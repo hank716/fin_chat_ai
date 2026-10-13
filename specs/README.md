@@ -42,7 +42,7 @@
 | 020 | feature-batch | `OPTIMIZATION_PLAN` WP2.4 子項 1 | （已回退，無程式） | ✅ 已量測、回退 |
 | 021 | narrative-number-guard | `OPTIMIZATION_PLAN` WP3.3 | `backend/guardrails/narrative_numbers.py`,`verify.py` | ✅ 程式／live⏳ |
 | 022 | llm-tiering | `f56f2f0` | `backend/ai/claude_client.py`,`retrieval.py`,`llm_client.py` | ✅ |
-| 024 | smallcap-candidates | 2026-10-13 選股歸因 | `backend/processor/tw_features.py`,`reports/morning_brief.py` | 🟡 規格定案，待實作 |
+| 024 | smallcap-candidates | 2026-10-13 選股歸因 | `backend/processor/tw_features.py`,`reports/morning_brief.py` | 🟡 第一階段（模型名單）✅／live⏳；第二階段（決策層說明）未開始 |
 | 023 | verification-efficacy | `d3d64fe` | `backend/reports/verification_stats.py`,`guardrails/verify.py` | ✅ US1+US2；US3/US4 暫緩（待 direct 呼叫後的觀察窗） |
 
 **回溯歷程（風險優先）**：第一批 004/009/005 → 第二批 006/008/010 → 第三批 001/003/002 →

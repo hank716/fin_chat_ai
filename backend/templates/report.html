@@ -83,6 +83,23 @@
 </div>
 {% endif %}
 
+{% if report.tw_smallcap and (report.tw_smallcap.picks or report.tw_smallcap.reason) %}
+<div class="card">
+  <h2>小型股候選 <span class="badge">模型排序・低流動性</span></h2>
+  {% if report.tw_smallcap.picks %}
+  <div class="uncertain">{{ report.tw_smallcap.note }}由排序模型直接選出，未經人工或語言模型增刪。</div>
+  {% for p in report.tw_smallcap.picks %}
+  <div class="watch">
+    <h3>{{ p.rank }}. {{ p.symbol }} {{ p.name }}{% if p.sector %} <span class="sector">〔{{ p.sector }}〕</span>{% endif %}{% if p.risk_score is not none and p.risk_score >= 0.6 %} <span class="badge">⚠ 高回撤風險 {{ (p.risk_score * 100) | round | int }}%</span>{% endif %}</h3>
+    {% if p.signals %}<div class="signals">{% for s in p.signals %}<span>{{ s }}</span>{% endfor %}</div>{% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="uncertain">今日不列：{{ report.tw_smallcap.reason }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if report.risks %}
 <div class="card">
   <h2>今日風險提醒</h2>

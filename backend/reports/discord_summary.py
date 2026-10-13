@@ -88,6 +88,11 @@ def build_discord_summary(report: dict[str, Any]) -> str:
         parts.append("**要注意（負向）**\n"
                      + "\n".join(f"- {w['symbol']} {w['name']}" for w in caution))
 
+    small = (report.get("tw_smallcap") or {}).get("picks") or []
+    if small:
+        parts.append("**小型股候選（模型排序・低流動性）**\n"
+                     + "\n".join(f"- {p['symbol']} {p['name']}" for p in small))
+
     # 策略回測校準（依過去預估準確度自動修正；有資料才附）
     bt = report.get("backtest_summary") or {}
     if bt.get("sample_n"):

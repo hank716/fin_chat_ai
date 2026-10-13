@@ -71,7 +71,11 @@ def _parse_price(s: Any) -> float | None:
 
 
 def _stock_entry(report: dict[str, Any], sym: str) -> dict[str, Any]:
-    return ((report.get("features", {}) or {}).get("tw", {}) or {}).get("stocks", {}).get(sym, {}) or {}
+    tw = (report.get("features", {}) or {}).get("tw", {}) or {}
+    entry = (tw.get("stocks") or {}).get(sym)
+    if not entry:                                   # 小型股候選的明細另放一處（spec 024）
+        entry = ((tw.get("smallcap") or {}).get("stocks") or {}).get(sym)
+    return entry or {}
 
 
 def _entry_close(report: dict[str, Any], sym: str, as_of: pd.Timestamp) -> float | None:
@@ -351,9 +355,31 @@ def evaluate_report(report: dict[str, Any], hs: list[int] | None = None) -> dict
                 "horizons": per_h,
             })
 
+    # 小型股候選（spec 024）：偏多語意、無目標價/止損。**另放一個鍵**而不併入 items——
+    # 校準與模型訓練會掃 items 並把非 watchlist 的一律當成偏空，混進去會污染兩者。
+    smallcap_items: list[dict[str, Any]] = []
+    for it in ((report.get("tw_smallcap") or {}).get("picks") or []):
+        sym = it.get("symbol")
+        if not sym or as_of is None:
+            continue
+        entry = _entry_close(report, sym, as_of)
+        per_h = {}
+        for h in hs:
+            if not matured[h]:
+                per_h[str(h)] = {"outcome": "pending", "n_days": 0}
+                continue
+            per_h[str(h)] = evaluate_item(
+                "watchlist", entry or 0.0, None, None, _forward_window(sym, as_of, h), index_ret[h],
+                entry_adj=_entry_close_adj(sym, as_of),
+                fwd_adj=_forward_window(sym, as_of, h, adjusted=True),
+            )
+        smallcap_items.append({"symbol": sym, "name": it.get("name") or sym, "rank": it.get("rank"),
+                               "rank_score": it.get("rank_score"), "entry": entry, "horizons": per_h})
+
     return {
         "report_id": report.get("report_id"),
         "report_date": report.get("report_date"),
+        "smallcap_items": smallcap_items,
         "as_of": as_of_str,
         "generated_at": report.get("generated_at"),
         "horizons": hs,

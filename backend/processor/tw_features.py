@@ -245,9 +245,50 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
         "stocks": stocks,
         "sectors": sectors,
         "movers": movers,
+        "smallcap": _smallcap_pool(all_stocks),
         "notes": "stocks 僅含 movers 涉及之標的明細（全市場共 universe_size 檔，完整資料在系統內）；"
         "籌碼單位張(=股/1000)；vs_index_20d_pct=個股20日報酬減大盤(相對強弱)；net_streak 正=連買天數負=連賣。",
     }
+
+
+def _smallcap_pool(all_stocks: dict[str, Any], top: int = 8) -> dict[str, Any]:
+    """小型股候選池（spec 024）：成交額落在小型股帶、非 ETF 的 5 日漲幅榜 ∪ 外資 5 日買超榜。
+
+    定義刻意與 `training_set._emit_samples` 的偏多候選一字不差（同一個帶、同兩個榜、同樣各取
+    前 8）——小型股 rank 模型的排序力是在這個池子上量到的，線上換一個池子就不是同一件事了。
+    這份明細**不進決策層的 prompt**（`prompts._budget_features` 會拿掉），只給模型打分與落地報告用。
+    """
+    from data_sources.finmind_loader import FinMindBackoff
+    from processor.fundamentals import build_fundamentals
+
+    lo, hi = float(settings.smallcap_min_amount_twd), float(MIN_AMOUNT_TWD)
+    band = {
+        s: e for s, e in all_stocks.items()
+        if lo <= (e.get("_amount") or 0) < hi and e.get("sector") not in _ETF_SECTORS
+    }
+
+    def _top(key: str) -> list[str]:
+        ranked = sorted(((s, e[key]) for s, e in band.items() if e.get(key) is not None),
+                        key=lambda x: x[1], reverse=True)
+        return [s for s, _ in ranked[:top]]
+
+    picked = dict.fromkeys(_top("return_5d_pct") + _top("foreign_net_buy_5d_lots"))
+    stocks: dict[str, Any] = {}
+    fundamentals_ok = True
+    for s in picked:
+        entry = {k: v for k, v in band[s].items() if not k.startswith("_")}
+        entry["amount_twd"] = band[s].get("_amount")
+        if fundamentals_ok:
+            try:
+                fu = build_fundamentals(s)
+                if fu:
+                    entry["fundamentals"] = fu
+            except FinMindBackoff as exc:
+                # 與主名單同紀律：額度耗盡就不再抓，其餘候選缺基本面照樣打分（模型原生吃缺值）
+                logger.warning("小型股候選基本面抓取因 FinMind 退避中止: %s", exc)
+                fundamentals_ok = False
+        stocks[s] = entry
+    return {"band_twd": [lo, hi], "stocks": stocks}
 
 
 def _attach_sector_rs(stocks: dict[str, Any]) -> None:
