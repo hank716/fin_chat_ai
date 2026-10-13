@@ -38,6 +38,7 @@
 | 016 | market-regime-taifex | `8772d76` | `backend/data_sources/taifex_loader.py`,`processor/market_regime.py` | ✅ |
 | 017 | adjusted-prices | `OPTIMIZATION_PLAN` WP1.1+1.2 | `backend/processor/adj_factors.py`,`storage/local_store.py` | ✅ US1+US2 |
 | 019 | score-fusion | `OPTIMIZATION_PLAN` WP2.2+2.3 | `backend/reports/strategy_calibration.py`,`morning_brief.py` | ✅（小型股帶未進候選池，見 tasks T015） |
+| 021 | narrative-number-guard | `OPTIMIZATION_PLAN` WP3.3 | `backend/guardrails/narrative_numbers.py`,`verify.py` | ✅ 程式／live⏳ |
 | 022 | llm-tiering | `f56f2f0` | `backend/ai/claude_client.py`,`retrieval.py`,`llm_client.py` | ✅ |
 | 023 | verification-efficacy | `d3d64fe` | `backend/reports/verification_stats.py`,`guardrails/verify.py` | ✅ US1+US2；US3/US4 暫緩（待 direct 呼叫後的觀察窗） |
 

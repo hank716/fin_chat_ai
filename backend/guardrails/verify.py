@@ -5,7 +5,8 @@
 標記警示。回傳清理後的 result + guardrail 報告（存進 report JSON、頁面顯示攔截狀態）。
 
 六道 guard：Source(Metric) / Symbol / News Citation / Advice / Intermarket Causality / Data Age，
-外加 spec 023 的 Verification guard（未經查證的外部線索不得被當已查證事實引用）。
+外加 spec 023 的 Verification guard（未經查證的外部線索不得被當已查證事實引用）
+與 spec 021 的 Narrative Number guard（候選說明裡的數字須與 features 相符，只警示不移除）。
 另做新聞分層強制：social 來源比對後標 tier，頁面以情緒訊號呈現。
 """
 from __future__ import annotations
@@ -18,6 +19,8 @@ from urllib.parse import urlsplit
 
 from config import settings
 from ai.schemas import BriefResult
+
+from . import narrative_numbers
 
 _MISSING = object()
 
@@ -179,7 +182,9 @@ def run_guardrails(
         "news_checked": 0, "news_dropped": 0,
         "symbols_dropped": 0, "phrase_warnings": 0,
         "unverified_refs_dropped": 0, "unverified_refs_flagged": 0,
+        "narrative_numbers_checked": 0, "narrative_numbers_mismatched": 0,
     }
+    number_mismatches: list[dict[str, Any]] = []
 
     def add(guard: str, severity: str, detail: str) -> None:
         violations.append({"guard": guard, "severity": severity, "detail": detail})
@@ -282,6 +287,25 @@ def run_guardrails(
                     add("verification", "warning",
                         f"候選 {w.symbol} 的理由引用了未經查證的線索（{outcome}），已標示")
 
+    # ── Narrative Number Guard：候選說明裡的數字須與 features 相符（spec 021）──
+    # 只警示、不移除也不改寫：規則式比對必有誤判，為一個可能誤判的數字擋掉整檔候選不划算。
+    # 放在 Symbol Guard 之後，被移除的候選不再核對。
+    stocks = (features.get("tw", {}) or {}).get("stocks", {}) or {}
+    try:
+        for w in cleaned.tw_watchlist + cleaned.tw_caution:
+            for claim in narrative_numbers.check_item(w, stocks.get(w.symbol) or {}):
+                counts["narrative_numbers_checked"] += 1
+                if claim.ok:
+                    continue
+                counts["narrative_numbers_mismatched"] += 1
+                number_mismatches.append(claim.as_dict())
+                add("narrative_number", "warning",
+                    f"候選 {w.symbol} 的說明「{claim.text[:40]}」與資料不符"
+                    f"（{claim.metric} 資料值 {claim.actual:g}）")
+    except Exception as exc:  # noqa: BLE001
+        # 驗證器自己壞掉不得讓報告無聲通過（FR-008）：留下 error 層級紀錄，其餘護欄照常。
+        add("narrative_number", "error", f"敘事數字驗證器異常，本篇數字未經核對：{exc}")
+
     # ── Advice / Intermarket Causality Guard：掃描所有敘事文字禁語 ──
     texts: list[tuple[str, str]] = [("簡短結論", cleaned.headline)]
     for sec in cleaned.sections:
@@ -312,5 +336,10 @@ def run_guardrails(
         "error_count": errors,
         "warning_count": sum(1 for v in violations if v["severity"] == "warning"),
         "violations": violations,
+        "narrative_number": {
+            "checked": counts["narrative_numbers_checked"],
+            "mismatched": counts["narrative_numbers_mismatched"],
+            "mismatches": number_mismatches,
+        },
     }
     return cleaned, report

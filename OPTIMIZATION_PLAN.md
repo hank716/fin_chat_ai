@@ -17,7 +17,7 @@
 | 3.2 ask.py guardrail | ✅ | |
 | 3.4 prompt 預算+降溫 | ✅ | |
 | 3.5 高風險測試 | ✅ | cost/guardrail/local_store |
-| 3.3 narrative 數字驗證 | ⏸ 待規格 | 需 /speckit-specify 定容忍度/策略 |
+| 3.3 narrative 數字驗證 | ✅ | spec 021；90 篇回放 3,566 個數字核對、0 誤報 |
 | 1.1 除權息因子表 | ✅ | spec 017；`adj_factors.py` + 表 upsert + 斷點回補；14 測試綠、live 驗證 2330/0056；全市場回補背景跑 |
 | 1.2 讀取端還原+重訓 | ✅ | spec 017 US2–US3（`5470f6b`）；D1 對照 risk/小型股 h5 小升、無紅旗 |
 | 1.3 TWII 回補 | ✅(此機) | Jay 機 TWII 已 497 列（≥480）；非空率待 WP1.2 重建後確認 |
