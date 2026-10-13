@@ -82,6 +82,23 @@ on-demand 抓取並算衍生指標，餵進 grounded 研究稿，仍受 guardrai
 > `brief_should_degrade()` 在月餘額見底或當日已花滿日上限（補跑）時降級——照常出報，
 > 但關掉外部事件與連網查證。降級會直接標在報告、Discord 與網頁上，不是無聲發生。
 > 每份晨報 JSON 的 `cost.month_remaining_twd` 也會攤出剩餘額度。
+>
+> **2026-10-13 更新**：9 月實支 NT$566、10 月單篇均值 NT$25.4。Gemini 的 `*-latest` 別名已換代
+> （flash→3.8 Flash、flash-lite→3.5 Flash-Lite），牌價表已校正，往後換代會在 log 留下 warning、
+> 並把實際版本寫進 `cost.retrieval_model_version`。
+
+### 查證成功率怎麼看
+
+`web_fetch` 不按次計費，查證層有沒有在做事從帳單看不出來，只能看遙測：
+
+```bash
+docker compose exec -T backend python -m reports.verification_stats
+```
+
+8/31–10/13 的 30 個交易日：線索 192 則，裁決成功（confirmed + contradicted）**6%**，
+額度不足未查 55%、開了但無法裁決 27%、來源打不開 8%。根因是 `web_fetch` 被模型從 code execution
+間接呼叫、原文沒進模型視野；2026-10-13 已改釘 direct 呼叫並把單頁上限調到 8000 token。
+修正後的成功率要等累積 ≥10 個交易日再看，細節見 `specs/023-verification-efficacy/tasks.md`。
 
 ## 本機啟動（M0）
 

@@ -30,7 +30,8 @@
 
 - [X] T017 `eval_snapshot --tag adj_prices --max-date 2026-07-03`：同 max_date 重跑（`20260706_214519_adj_prices.json`）（FR-006）
 - [X] T018 `--compare baseline adj_prices`：delta 表入 commit（risk +0.005~0.009、smallcap-h5 +0.0074、edge +0.007；h20 rank 噪音級退）（SC-005）
-- [ ] T019 晨報實跑：rebuild backend image 部署還原碼後，`POST /brief/morning` 確認顯示名目價、guardrail 正常（FR-004）
+- [X] T019 晨報實跑：rebuild backend image 部署還原碼後，`POST /brief/morning` 確認顯示名目價、guardrail 正常（FR-004）
+      **2026-10-13 以排程晨報驗收**：`morning_20261013` 的 46 檔 `features.close` 全數等於原始收盤（其中 41 檔有除權息還原差異），guardrail error/warning 皆 0。
 
 ## 驗收對照
 

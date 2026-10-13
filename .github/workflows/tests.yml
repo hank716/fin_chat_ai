@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 與正式 image 同版本（README「本機測試」：pandas 2.x 沒有更新版 Python 的 wheel）
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            requirements-dev.txt
+      - run: pip install -r backend/requirements.txt -r requirements-dev.txt
+      # 全綠且零 collection error；不用 --ignore 跳過跑不起來的檔案
+      - run: python -m pytest -q

@@ -4,7 +4,7 @@
 > **不得自行做架構判斷**——所有架構決策已在「全域決策」定案。
 > 一次只做一個 WP,完成驗收後才進下一個。
 
-## 執行進度(2026-07-06,分支 feat/optimization-phase0)
+## 執行進度(2026-10-13 更新)
 
 | WP | 狀態 | 備註 |
 |----|------|------|
@@ -19,13 +19,19 @@
 | 3.5 高風險測試 | ✅ | cost/guardrail/local_store |
 | 3.3 narrative 數字驗證 | ⏸ 待規格 | 需 /speckit-specify 定容忍度/策略 |
 | 1.1 除權息因子表 | ✅ | spec 017；`adj_factors.py` + 表 upsert + 斷點回補；14 測試綠、live 驗證 2330/0056；全市場回補背景跑 |
-| 1.2 讀取端還原+重訓 | ⏳ 進行 | spec 017 US2–US3；待因子表回補完成後接 read_prices(adjusted) |
+| 1.2 讀取端還原+重訓 | ✅ | spec 017 US2–US3（`5470f6b`）；D1 對照 risk/小型股 h5 小升、無紅旗 |
 | 1.3 TWII 回補 | ✅(此機) | Jay 機 TWII 已 497 列（≥480）；非空率待 WP1.2 重建後確認 |
-| 2.1–2.4 模型重分配 | ⛔ 阻塞 | 需 Phase 1 完成後重定基線 |
+| 2.1 基線重定 + qlib | ✅ | `28ac967`；Alpha158 rank-IC 未過 gate＝方向牆確認 |
+| 2.2 分數融合 | ✅ | spec 019（`db22198`）；線上 26/31 篇帶 fused_scores |
+| 2.3 小型股 sleeve | 🟡 模型✅／serving 未生效 | 候選池只收成交額 ≥5,000 萬，小型股帶模型從未被路由到（2026-10-13 查出） |
+| 2.4 新特徵 A/B | ⏸ 待規格 | spec 020；建議先處理候選池（見 `EVAL_BASELINE.md`「選股歸因」） |
 
 > **機器差異（2026-07-06）**：上表「阻塞」多為 hank Linux 機（無 redis/docker、資料 3 個月）之限；
 > **Jay Windows 機 docker 6 服務全在跑、資料已 ~2 年、憑證齊 → Phase 1 可執行**。baseline 已於此機
 > 重跑並釘 `max_date=2026-07-03`（`eval_history/20260706_162137_baseline.json`）。
+
+> 以下兩行是 2026-07 hank Linux 機的舊限制，Jay 機不適用（docker 7 服務、資料回溯至 2024-06）。
+> 另有計畫外完成的 spec 022（LLM 分層）、023（查證閉環）——見 `specs/README.md`。
 
 **環境**:測試用 `.venv`(見 `EVAL_BASELINE.md`);本機無 redis/docker→live 抓取全部無法跑。
 **最大前置**:parquet 僅 ~3 個月深度,h20 統計力不足;Phase 1/2 準確度改動前須先把 history_crawl

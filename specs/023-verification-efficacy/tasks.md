@@ -96,7 +96,7 @@
 
 ## Phase 8 — Polish
 
-- [ ] T031 [P] `README.md`：成本/預算段落補充查證成功率的現況與量測方式。
+- [x] T031 [P] `README.md`：成本/預算段落補充查證成功率的現況與量測方式。
 - [x] T032 [P] `backend/config.py`：更新 `claude_brief_fetch_uses` 上方那段註解——現行內容主張「真正該修的是召回層的 URL 品質，不是多買幾次 fetch」，該主張寫於轉址 bug 期、未經驗證，應改為引用 T023 的實測結論。
 - [x] T033 全套測試綠燈（容器內 `python -m pytest`），且 `cost.verification` 的舊報告相容性經 T015 驗證。
 

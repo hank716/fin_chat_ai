@@ -71,6 +71,7 @@
 
 ## 部署
 
-- [ ] **T026** `.env` 補 `ANTHROPIC_API_KEY`（勿 commit）→ `docker compose up -d --build backend`。
-- [ ] **T027** 實測：`count_tokens` 量真實 features + 連跑 3 天晨報看 `usage` 與
+- [x] **T026** `.env` 補 `ANTHROPIC_API_KEY`（勿 commit）→ `docker compose up -d --build backend`。
+- [x] **T027** 實測：`count_tokens` 量真實 features + 連跑 3 天晨報看 `usage` 與
       `fact_checks` 分布，把 `max_uses` 從拍腦袋值收斂成實測值。
+      **由 spec 023 接手完成**：42 個交易日的遙測見 `specs/023-verification-efficacy/tasks.md`「觀察結果」。
