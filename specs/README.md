@@ -37,9 +37,12 @@
 | 015 | qlib-offline | `271bf6f` | `qlib_offline/` | ✅ |
 | 016 | market-regime-taifex | `8772d76` | `backend/data_sources/taifex_loader.py`,`processor/market_regime.py` | ✅ |
 | 017 | adjusted-prices | `OPTIMIZATION_PLAN` WP1.1+1.2 | `backend/processor/adj_factors.py`,`storage/local_store.py` | ✅ US1+US2 |
+| 018 | corporate-actions | 2026-10-13 盤點 | `backend/processor/adj_factors.py`,`data_sources/price_integrity.py` | ✅ 程式／部署⏳ |
 | 019 | score-fusion | `OPTIMIZATION_PLAN` WP2.2+2.3 | `backend/reports/strategy_calibration.py`,`morning_brief.py` | ✅（小型股帶未進候選池，見 tasks T015） |
+| 020 | feature-batch | `OPTIMIZATION_PLAN` WP2.4 子項 1 | （已回退，無程式） | ✅ 已量測、回退 |
 | 021 | narrative-number-guard | `OPTIMIZATION_PLAN` WP3.3 | `backend/guardrails/narrative_numbers.py`,`verify.py` | ✅ 程式／live⏳ |
 | 022 | llm-tiering | `f56f2f0` | `backend/ai/claude_client.py`,`retrieval.py`,`llm_client.py` | ✅ |
+| 024 | smallcap-candidates | 2026-10-13 選股歸因 | `backend/processor/tw_features.py`,`reports/morning_brief.py` | 🟡 規格定案，待實作 |
 | 023 | verification-efficacy | `d3d64fe` | `backend/reports/verification_stats.py`,`guardrails/verify.py` | ✅ US1+US2；US3/US4 暫緩（待 direct 呼叫後的觀察窗） |
 
 **回溯歷程（風險優先）**：第一批 004/009/005 → 第二批 006/008/010 → 第三批 001/003/002 →

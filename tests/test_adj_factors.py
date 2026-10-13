@@ -244,49 +244,6 @@ def test_build_resumable_and_backoff_stop(tmp_adj_path, tmp_path, monkeypatch):
     assert res2["stopped"] is None
 
 
-# ── spec 020：股利事件特徵（只回看，point-in-time）──────────────────────
-
-def _factors(*rows):
-    return pd.DataFrame(rows, columns=["ex_date", "adj_factor"]).assign(symbol="2330", source="finmind")
-
-
-def test_dividend_features_only_look_back():
-    from processor.adj_factors import dividend_features
-
-    factors = _factors(("2026-03-10", 0.98), ("2026-06-10", 0.96))
-    dates = pd.to_datetime(["2026-03-09", "2026-03-10", "2026-03-20", "2026-06-10", "2027-08-01"])
-    out = dividend_features(factors, pd.Series(dates))
-    # 除息日前一天：事件尚未發生，兩個特徵都必須是空值（不得偷看隔天的除息）
-    assert out.iloc[0].isna().all()
-    assert out.loc[1, "days_since_ex_div"] == 0
-    assert out.loc[2, "days_since_ex_div"] == 10
-    assert out.loc[2, "div_yield_ttm_pct"] == pytest.approx(round((1 / 0.98 - 1) * 100, 2))
-    # 一年內兩次事件要合計
-    assert out.loc[3, "div_yield_ttm_pct"] == pytest.approx(
-        round(((1 / 0.98 - 1) + (1 / 0.96 - 1)) * 100, 2), abs=0.01)
-    # 超過一年沒除息：天數封頂、殖利率回到空值（不是 0）
-    assert out.loc[4, "days_since_ex_div"] == 365
-    assert pd.isna(out.loc[4, "div_yield_ttm_pct"])
-
-
-def test_dividend_features_empty_for_never_paid():
-    from processor.adj_factors import dividend_features
-
-    out = dividend_features(_factors(), pd.Series(pd.to_datetime(["2026-03-09"])))
-    assert out.isna().all().all()
-
-
-def test_future_ex_date_does_not_change_past_features():
-    """break-proof：往因子表加一筆未來事件，過去日期的特徵不得改變。"""
-    from processor.adj_factors import dividend_features
-
-    dates = pd.Series(pd.to_datetime(["2026-03-20", "2026-04-20"]))
-    base = dividend_features(_factors(("2026-03-10", 0.98)), dates)
-    more = dividend_features(_factors(("2026-03-10", 0.98), ("2026-05-01", 0.9)), dates)
-    pd.testing.assert_frame_equal(base, more)
-
-
-
 # ── spec 018：大比例配股 / 分割 / 減資（範圍外的因子須經股價驗證）──────────
 
 def _ohlc(rows):
@@ -376,19 +333,6 @@ def test_same_day_events_from_different_sources_coexist(tmp_adj_path):
     assert adj["close"].iloc[0] == pytest.approx(100 * 0.96 * 2.0)
 
 
-def test_dividend_features_ignore_splits_and_reductions():
-    from processor.adj_factors import dividend_features
-
-    factors = pd.DataFrame([
-        _row("X", "2026-03-10", 0.98),
-        _row("X", "2026-04-10", 0.1, adj_factors.SOURCE_SPLIT),
-        _row("X", "2026-05-10", 0.335),                                # 大比例配股不算殖利率
-    ])
-    out = dividend_features(factors, pd.Series(pd.to_datetime(["2026-06-01"])))
-    assert out.loc[0, "div_yield_ttm_pct"] == pytest.approx(round((1 / 0.98 - 1) * 100, 2))
-    assert out.loc[0, "days_since_ex_div"] == 83
-
-
 def test_find_unexplained_jumps(tmp_adj_path, monkeypatch):
     days = pd.bdate_range("2024-01-01", periods=15)
     closes = [100.0] * 12 + [30.0, 30.0, 31.0]                         # 第 13 根 -70%
@@ -397,3 +341,4 @@ def test_find_unexplained_jumps(tmp_adj_path, monkeypatch):
     jumps = adj_factors.find_unexplained_jumps(symbols=["X"])
     assert jumps == [{"symbol": "X", "date": days[12].date().isoformat(), "return_pct": -70.0}]
     assert adj_factors.find_unexplained_jumps(symbols=["X"], since="2025-01-01") == []
+

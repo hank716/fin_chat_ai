@@ -35,7 +35,6 @@ import logging
 from datetime import date, timedelta
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from storage import local_store
@@ -368,45 +367,6 @@ def refresh_recent(*, buckets: int = 14, lookback_days: int = 120) -> dict[str, 
 def read_adj_factors(symbol: str | None = None) -> pd.DataFrame:
     """便利轉發（讀取實作在 storage.local_store）。"""
     return local_store.read_adj_factors(symbol)
-
-
-DIVIDEND_FEATURES = ("days_since_ex_div", "div_yield_ttm_pct")
-_DIV_LOOKBACK_DAYS = 365
-
-
-def dividend_features(factors: pd.DataFrame, dates: pd.Series) -> pd.DataFrame:
-    """每個交易日的股利事件特徵（spec 020），訓練端與線上端共用同一份計算。
-
-    - `days_since_ex_div`：距最近一次除權息已過的日曆天數（上限 365；從未除權息為 NaN）
-    - `div_yield_ttm_pct`：近 365 天各次除權息幅度 `(1/factor - 1) × 100` 的合計（無事件為 NaN）
-
-    **只回看**：某日只用 ex_date <= 該日的事件。因子表沒有公告日，尚未發生的除權息日即使
-    已公告也不得使用（憲章 IV point-in-time）。`factors` 為單一個股的因子列。
-    """
-    dates = pd.to_datetime(pd.Series(dates).reset_index(drop=True))
-    out = pd.DataFrame({name: np.nan for name in DIVIDEND_FEATURES}, index=dates.index, dtype=float)
-    if factors is None or factors.empty or dates.empty:
-        return out
-    # 只算一般配息：分割/減資不是股利，大比例配股的「殖利率」也沒有可比性
-    factors = factors[(factors["source"] == SOURCE_DIVIDEND)
-                      & (factors["adj_factor"].astype(float) > _FACTOR_MIN)
-                      & (factors["adj_factor"].astype(float) <= _FACTOR_MAX)]
-    if factors.empty:
-        return out
-    events = factors.assign(ex_date=pd.to_datetime(factors["ex_date"])).sort_values("ex_date")
-    ex = events["ex_date"].to_numpy()
-    gain = (1.0 / events["adj_factor"].astype(float).to_numpy() - 1.0) * 100
-    cum = np.concatenate([[0.0], np.cumsum(gain)])
-    day = dates.to_numpy()
-    upto = np.searchsorted(ex, day, side="right")                       # ex_date <= 當日 的事件數
-    start = np.searchsorted(ex, day - np.timedelta64(_DIV_LOOKBACK_DAYS, "D"), side="right")
-    has_any = upto > 0
-    last_ex = ex[np.clip(upto - 1, 0, len(ex) - 1)]
-    since = (day - last_ex) / np.timedelta64(1, "D")
-    out.loc[has_any, "days_since_ex_div"] = np.minimum(since[has_any], _DIV_LOOKBACK_DAYS)
-    in_window = upto > start
-    out.loc[in_window, "div_yield_ttm_pct"] = np.round((cum[upto] - cum[start])[in_window], 2)
-    return out
 
 
 def main() -> None:
