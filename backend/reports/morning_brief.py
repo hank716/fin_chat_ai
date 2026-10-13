@@ -258,6 +258,13 @@ def _run_backtest_loop() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("TAIFEX 增量失敗（不影響晨報）: %s", exc)
     try:
+        # 上市行情缺日自癒（spec 018 US4）：近 45 天內整天沒抓到的交易日重抓，一次最多 5 天。
+        # 每日刷新只回看近幾天，漏掉的那天過了窗口就永遠是洞——2026-10-08 就是這樣缺的。
+        from data_sources import price_integrity
+        price_integrity.repair(lookback_days=45, max_dates=5)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("行情完整性自癒失敗（不影響晨報）: %s", exc)
+    try:
         from processor import adj_factors             # 除權息因子表增量（分桶輪替；spec 017；guarded）
         adj_factors.refresh_recent()
     except Exception as exc:  # noqa: BLE001
