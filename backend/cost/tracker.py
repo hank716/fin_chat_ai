@@ -11,9 +11,10 @@
 仍為估算（latest 別名實際指向哪個版本、匯率會變動），精確金額以 Google 後台為準，
 但已涵蓋造成後台落差的三大來源（cache 折扣、>200k 級距、grounding）。
 
-⚠️ 本檔費率對應 `*-latest` 別名「當前」指向的版本（pro-latest→Gemini 3.1 Pro、
-flash-latest→Gemini 3.5 Flash，於 2026-06-03 核對）。Google 把別名重新指向新版時，
-這張表必須同步更新，否則會再次低估。
+⚠️ 本檔費率對應 `*-latest` 別名「當前」指向的版本（2026-10-13 以回應的 `modelVersion`
+實測核對：pro-latest→gemini-3.1-pro-preview、flash-latest→gemini-3.8-flash、
+flash-lite-latest→gemini-3.5-flash-lite）。Google 把別名重新指向新版時這張表必須同步更新；
+換代由 `gemini_client._note_model_version` 偵測並 warn，核對對象見 `PRICED_MODEL_VERSIONS`。
 
 Anthropic 側費率於 **2026-08-12** 對照官方定價重新核實，全數正確：Opus 5 $5/$25、
 Sonnet 5 $3/$15、Haiku 4.5 $1/$5、快取讀 0.1×、快取寫 1.25×(5m)/2×(1h)、
@@ -22,7 +23,7 @@ web_search $10/1,000 次、web_fetch 不按次計費。
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from config import settings
@@ -32,23 +33,34 @@ logger = logging.getLogger("ai-market-backend.cost")
 
 # 官方定價（USD / 百萬 token）。每個模型分 prompt「<=200k」(small) 與「>200k」(large) 兩級距，
 # 欄位＝(input, output, cached_input)。Flash 無級距，兩級距相同。
-# 對應 *-latest 當前版本：pro→Gemini 3.1 Pro、flash→Gemini 3.5 Flash（2026-06-03 核對）。
+# 對應 *-latest 當前版本（2026-10-13 核對，見 PRICED_MODEL_VERSIONS）。
 _PRICING = {
     "pro": {
         "small": (2.00, 12.0, 0.20),    # prompt <= 200k tokens
         "large": (4.00, 18.0, 0.40),    # prompt >  200k tokens
     },
+    # 3.8 Flash 不分級距。這是 **2027-01-01 起**的牌價；2026-12-31 前的優惠價見 _FLASH_PROMO。
     "flash": {
-        "small": (1.50, 9.00, 0.15),    # 3.5 Flash 不分級距
-        "large": (1.50, 9.00, 0.15),
+        "small": (1.50, 7.50, 0.15),
+        "large": (1.50, 7.50, 0.15),
     },
-    # Flash-Lite（意圖分類用）：對應 flash-lite-latest →Gemini 3.1 Flash-Lite（與 pro/flash 同屬 3.x
-    # 別名世代）。官方定價（標準層、text）input $0.25 / output $1.50 / cache $0.025，不分級距
-    # （https://ai.google.dev/gemini-api/docs/pricing，2026-06-03 核對）。
+    # Flash-Lite（意圖分類用）：flash-lite-latest→Gemini 3.5 Flash-Lite。官方定價（標準層）
+    # input $0.30 / output $2.50 / cache $0.03，不分級距
+    # （https://ai.google.dev/gemini-api/docs/pricing，2026-10-13 核對；3.1 Flash-Lite 時為 0.25/1.50/0.025）。
     "flash-lite": {
-        "small": (0.25, 1.50, 0.025),
-        "large": (0.25, 1.50, 0.025),
+        "small": (0.30, 2.50, 0.03),
+        "large": (0.30, 2.50, 0.03),
     },
+}
+# 3.8 Flash 上市優惠：官方定價頁載明 input $0.75 / output $3.75 / cache $0.075「through December 31, 2026」，
+# 之後回到上表的 $1.50 / $7.50 / $0.15。以日期切換，免得跨年那天開始靜默低估一半。
+_FLASH_PROMO = (0.75, 3.75, 0.075)
+_FLASH_PROMO_UNTIL = date(2026, 12, 31)
+# 上表各 family 核對時別名實際指向的版本。回應的 `modelVersion` 與此不符＝別名已換代、牌價待核對。
+PRICED_MODEL_VERSIONS = {
+    "pro": "gemini-3.1-pro-preview",
+    "flash": "gemini-3.8-flash",
+    "flash-lite": "gemini-3.5-flash-lite",
 }
 _TIER_THRESHOLD = 200_000               # prompt tokens 超過此值套用 large 級距
 # Google 搜尋 grounding：每月前 5,000 次免費（Gemini 3 共用），之後 $14 / 1,000 次（每請求計價）。
@@ -86,15 +98,22 @@ def _rates(model: str, prompt_tokens: int) -> tuple[float, float, float]:
     # 決策層先判：`claude-opus-5` 不含 lite/pro/flash 任何字串，落到下面會被當 flash 算。
     if _is_anthropic(m):
         return _PRICING_ANTHROPIC.get(m, _ANTHROPIC_DEFAULT)
-    # 先判 lite（"flash-lite" 也含 "flash"，順序不可顛倒），再判 pro，最後才 flash。
-    if "lite" in m:
-        fam = "flash-lite"
-    elif "pro" in m:
-        fam = "pro"
-    else:
-        fam = "flash"
+    fam = gemini_family(m)
+    if fam == "flash" and _now().date() <= _FLASH_PROMO_UNTIL:
+        return _FLASH_PROMO
     tier = "large" if prompt_tokens > _TIER_THRESHOLD else "small"
     return _PRICING[fam][tier]
+
+
+def gemini_family(model: str) -> str:
+    """Gemini model 名稱 → 牌價 family。"""
+    m = model.lower()
+    # 先判 lite（"flash-lite" 也含 "flash"，順序不可顛倒），再判 pro，最後才 flash。
+    if "lite" in m:
+        return "flash-lite"
+    if "pro" in m:
+        return "pro"
+    return "flash"
 
 
 def estimate_cost_twd(

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import universe
 from config import settings
-from ai import retrieval
+from ai import gemini_client, retrieval
 from ai.errors import LLMError
 from ai.llm_client import get_decision_llm
 from ai.schemas import BriefResult
@@ -562,6 +562,9 @@ def generate_morning_brief(
         "retrieval_twd": round(facts_cost, 4),
         "decision_twd": round(decision_cost, 4),
         "month_by_provider": tracker.month_by_provider(),
+        # 召回層別名當天實際指向的版本（`*-latest` 會靜默換代；沒呼叫到召回層則為 None）
+        "retrieval_model": facts_model,
+        "retrieval_model_version": gemini_client.resolved_version(facts_model),
         # 查證層是否真的動過（spec 022 的核心宣稱），以及線索有沒有被逐條裁決。
         # 這幾個數字在成本上留不下痕跡（web_fetch 不按次計費），不落地就永遠無從查核。
         "verification": verification,

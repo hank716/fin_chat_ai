@@ -96,6 +96,44 @@ def _usage_of(body: dict) -> dict[str, int]:
     }
 
 
+# 別名（`*-latest`）→ 本 process 最近一次回應的實際 `modelVersion`。
+_resolved_versions: dict[str, str] = {}
+
+
+def resolved_version(model: str) -> str | None:
+    """`model`（通常是 `*-latest` 別名）最近一次實際指向的版本；本 process 尚未呼叫過則 None。"""
+    return _resolved_versions.get(model)
+
+
+def _note_model_version(model: str, body: dict) -> None:
+    """記下別名實際指向的版本，換代時 warn。
+
+    `*-latest` 會被 Google 靜默換代，而 `cost.tracker` 的牌價是對著特定版本核對的——
+    不留痕跡的話，換代後成本估算與召回品質的變動都無從歸因。純觀測，任何失敗都不得影響呼叫。
+    """
+    version = body.get("modelVersion")
+    if not version or _resolved_versions.get(model) == version:
+        return
+    _resolved_versions[model] = version
+    try:
+        from cost import tracker
+        from redis_client import redis_client
+
+        key = f"gemini:model_version:{model}"
+        previous = redis_client.get(key)
+        redis_client.set(key, version)
+        priced = tracker.PRICED_MODEL_VERSIONS.get(tracker.gemini_family(model))
+        if previous and previous != version:
+            logger.warning("Gemini 別名 %s 已換代：%s → %s", model, previous, version)
+        if priced and not version.startswith(priced):
+            logger.warning(
+                "Gemini %s 實際為 %s，但 cost.tracker 牌價核對的是 %s——請對照官方定價更新",
+                model, version, priced,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("記錄 Gemini modelVersion 失敗（不影響呼叫）：%s", exc)
+
+
 def _grounding_sources(candidate: dict) -> list[tuple[str, str]]:
     """從 groundingMetadata 取 (標題, url) 清單。"""
     gm = candidate.get("groundingMetadata", {}) or {}
@@ -140,6 +178,7 @@ def _generate_json(
     if resp.status_code != 200:
         raise GeminiError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
     body = resp.json()
+    _note_model_version(url.rsplit("/", 1)[-1].split(":")[0], body)
     candidates = body.get("candidates") or []
     if not candidates:
         raise GeminiError(f"Gemini 無 candidates: {json.dumps(body)[:300]}")
@@ -243,6 +282,7 @@ def generate_text_with_candidate(
     if resp.status_code != 200:
         raise GeminiError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
     body = resp.json()
+    _note_model_version(url.rsplit("/", 1)[-1].split(":")[0], body)
     candidates = body.get("candidates") or []
     if not candidates:
         raise GeminiError(f"Gemini 無 candidates: {json.dumps(body)[:300]}")

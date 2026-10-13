@@ -1,6 +1,8 @@
 """WP3.5：成本計價數學（對照 Google 官方定價手算）。純函式，不碰 redis。"""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from cost import tracker as ct
@@ -34,16 +36,25 @@ def test_tool_tokens_billed_as_input():
 
 
 def test_rates_model_routing_and_tier_boundary():
-    assert ct._rates("gemini-flash-lite-latest", 1_000) == (0.25, 1.50, 0.025)   # lite 先於 flash
+    assert ct._rates("gemini-flash-lite-latest", 1_000) == (0.30, 2.50, 0.03)    # lite 先於 flash
     assert ct._rates("gemini-pro-latest", 1_000) == (2.00, 12.0, 0.20)
-    assert ct._rates("gemini-flash-latest", 1_000) == (1.50, 9.00, 0.15)
     assert ct._rates("gemini-pro-latest", 200_000) == (2.00, 12.0, 0.20)         # 邊界=small（>200k 才 large）
     assert ct._rates("gemini-pro-latest", 200_001) == (4.00, 18.0, 0.40)
 
 
 def test_flash_lite_pricing():
     twd = ct.estimate_cost_twd(100_000, 1_000, "gemini-flash-lite-latest")
-    assert twd == pytest.approx((100_000 / 1e6 * 0.25 + 1_000 / 1e6 * 1.50) * USD_TWD)  # 0.848
+    assert twd == pytest.approx((100_000 / 1e6 * 0.30 + 1_000 / 1e6 * 2.50) * USD_TWD)  # 1.04
+
+
+@pytest.mark.parametrize("today, expect", [
+    (datetime(2026, 12, 31, 23, 0), (0.75, 3.75, 0.075)),   # 3.8 Flash 優惠價最後一天
+    (datetime(2027, 1, 1, 0, 0), (1.50, 7.50, 0.15)),       # 隔天回到牌價
+])
+def test_flash_promo_price_expires(monkeypatch, today, expect):
+    monkeypatch.setattr(ct, "_now", lambda: today)
+    assert ct._rates("gemini-flash-latest", 1_000) == expect
+    assert ct._rates("gemini-flash-lite-latest", 1_000) == (0.30, 2.50, 0.03)   # lite 不受優惠切換影響
 
 
 def test_cost_of_usage_maps_usage_fields():
