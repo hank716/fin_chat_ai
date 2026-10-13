@@ -259,7 +259,8 @@ def write_adj_factors(df_new: pd.DataFrame) -> int:
         df = df_new
     df["ex_date"] = pd.to_datetime(df["ex_date"])
     df = (
-        df.drop_duplicates(subset=["symbol", "ex_date"], keep="last")
+        # 同一天可有不同來源的事件並存（除息＋減資），還原時連乘；同來源才互相覆蓋
+        df.drop_duplicates(subset=["symbol", "ex_date", "source"], keep="last")
         .sort_values(["symbol", "ex_date"])
         .reset_index(drop=True)
     )

@@ -221,6 +221,27 @@ def get_dividend_result(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     )
 
 
+def get_split_price(start_date: str) -> list[dict[str, Any]]:
+    """全市場股票分割/反分割/面額變更的參考價（TaiwanStockSplitPrice）。
+
+    與除權息結果表不同，這個資料集**免費層可不帶 data_id**，一次請求涵蓋全市場
+    （2024-06 起約 27 筆）。每列 date / stock_id / type / before_price / after_price。
+    """
+    return _request("TaiwanStockSplitPrice", {"start_date": start_date})
+
+
+def get_capital_reduction(stock_id: str, start_date: str) -> list[dict[str, Any]]:
+    """單檔減資恢復買賣參考價（TaiwanStockCapitalReductionReferencePrice；免費層僅能逐檔）。
+
+    每列 date / ClosingPriceonTheLastTradingDay（停止買賣前收盤）/ PostReductionReferencePrice
+    （恢復買賣參考價）。還原因子 = 參考價 ÷ 前收盤，彌補虧損型減資會大於 1。
+    """
+    return _request(
+        "TaiwanStockCapitalReductionReferencePrice",
+        {"data_id": stock_id, "start_date": start_date},
+    )
+
+
 def get_taiwan_stock_news(stock_id: str, start_date: str) -> list[dict[str, Any]]:
     """單檔近期新聞（date / stock_id / link / source / title）。"""
     return _request("TaiwanStockNews", {"data_id": stock_id, "start_date": start_date})

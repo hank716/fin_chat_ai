@@ -59,7 +59,7 @@ def test_compute_factor_rejects_bad(before, after):
 def test_rows_from_results_filters_and_shapes():
     raw = [
         {"date": "2026-06-11", "before_price": 2255.0, "after_price": 2248.99},  # ok
-        {"date": "2026-06-12", "before_price": 100.0, "after_price": 101.0},     # factor>1 丟
+        {"date": "2026-06-12", "before_price": 100.0, "after_price": 0.0},       # 非正 丟
         {"date": None, "before_price": 100.0, "after_price": 90.0},              # 無日期 丟
         {"date": "2026-06-13", "before_price": None, "after_price": 90.0},       # 缺 before 丟
     ]
@@ -242,3 +242,158 @@ def test_build_resumable_and_backoff_stop(tmp_adj_path, tmp_path, monkeypatch):
     assert calls == ["CCC", "DDD"]
     assert res2["remaining"] == 0
     assert res2["stopped"] is None
+
+
+# ── spec 020：股利事件特徵（只回看，point-in-time）──────────────────────
+
+def _factors(*rows):
+    return pd.DataFrame(rows, columns=["ex_date", "adj_factor"]).assign(symbol="2330", source="finmind")
+
+
+def test_dividend_features_only_look_back():
+    from processor.adj_factors import dividend_features
+
+    factors = _factors(("2026-03-10", 0.98), ("2026-06-10", 0.96))
+    dates = pd.to_datetime(["2026-03-09", "2026-03-10", "2026-03-20", "2026-06-10", "2027-08-01"])
+    out = dividend_features(factors, pd.Series(dates))
+    # 除息日前一天：事件尚未發生，兩個特徵都必須是空值（不得偷看隔天的除息）
+    assert out.iloc[0].isna().all()
+    assert out.loc[1, "days_since_ex_div"] == 0
+    assert out.loc[2, "days_since_ex_div"] == 10
+    assert out.loc[2, "div_yield_ttm_pct"] == pytest.approx(round((1 / 0.98 - 1) * 100, 2))
+    # 一年內兩次事件要合計
+    assert out.loc[3, "div_yield_ttm_pct"] == pytest.approx(
+        round(((1 / 0.98 - 1) + (1 / 0.96 - 1)) * 100, 2), abs=0.01)
+    # 超過一年沒除息：天數封頂、殖利率回到空值（不是 0）
+    assert out.loc[4, "days_since_ex_div"] == 365
+    assert pd.isna(out.loc[4, "div_yield_ttm_pct"])
+
+
+def test_dividend_features_empty_for_never_paid():
+    from processor.adj_factors import dividend_features
+
+    out = dividend_features(_factors(), pd.Series(pd.to_datetime(["2026-03-09"])))
+    assert out.isna().all().all()
+
+
+def test_future_ex_date_does_not_change_past_features():
+    """break-proof：往因子表加一筆未來事件，過去日期的特徵不得改變。"""
+    from processor.adj_factors import dividend_features
+
+    dates = pd.Series(pd.to_datetime(["2026-03-20", "2026-04-20"]))
+    base = dividend_features(_factors(("2026-03-10", 0.98)), dates)
+    more = dividend_features(_factors(("2026-03-10", 0.98), ("2026-05-01", 0.9)), dates)
+    pd.testing.assert_frame_equal(base, more)
+
+
+
+# ── spec 018：大比例配股 / 分割 / 減資（範圍外的因子須經股價驗證）──────────
+
+def _ohlc(rows):
+    """rows: (date, open, close)。"""
+    d = pd.to_datetime([r[0] for r in rows])
+    return pd.DataFrame({
+        "trade_date": d, "open": [float(r[1]) for r in rows], "high": [float(r[2]) for r in rows],
+        "low": [float(r[2]) for r in rows], "close": [float(r[2]) for r in rows],
+        "volume": 1, "amount": 1e8, "source": "t",
+    })[local_store.PRICE_COLUMNS]
+
+
+def _row(sym, day, factor, source=adj_factors.SOURCE_DIVIDEND):
+    return {"symbol": sym, "ex_date": pd.Timestamp(day), "adj_factor": factor, "source": source}
+
+
+def test_wide_factor_requires_opt_in():
+    """預設仍只收一般配息範圍；wide=True 才回範圍外的值（呼叫端須再驗證）。"""
+    assert adj_factors.compute_factor(7800.0, 2614.99) is None
+    assert adj_factors.compute_factor(7800.0, 2614.99, wide=True) == pytest.approx(0.335255, abs=1e-6)
+    assert adj_factors.compute_factor(6.6, 23.86, wide=True) == pytest.approx(3.615152, abs=1e-6)
+    assert adj_factors.compute_factor(100.0, 0.05, wide=True) is None         # 超出絕對界線
+
+
+def test_large_stock_dividend_is_kept_when_prices_agree():
+    """6669 2026-09-02 的實例：7,800 → 參考價 2,614.99，當日開 2,615。舊下限 0.5 會把它丟掉。"""
+    prices = _ohlc([("2026-08-31", 7095, 7095), ("2026-09-01", 7800, 7800), ("2026-09-02", 2615, 2610)])
+    rows = adj_factors.rows_from_results("6669", [
+        {"date": "2026-09-02", "before_price": 7800.0, "after_price": 2614.99}])
+    kept = adj_factors.confirm_with_prices(rows, prices)
+    assert [r["adj_factor"] for r in kept] == [pytest.approx(0.335255, abs=1e-6)]
+
+
+def test_out_of_range_factor_is_dropped_when_prices_disagree():
+    """來源填錯（或事件其實沒發生）：股價沒有對應的跳動，就不得把大倍率套到整段歷史。"""
+    flat = _ohlc([("2026-09-01", 100, 100), ("2026-09-02", 101, 102)])
+    assert adj_factors.confirm_with_prices([_row("X", "2026-09-02", 0.3)], flat) == []
+    assert adj_factors.confirm_with_prices([_row("X", "2026-09-02", 3.0)], flat) == []
+
+
+def test_out_of_range_factor_waits_for_prices():
+    """事件日行情還沒入庫：先不寫，下一輪再驗（fail-closed）。"""
+    before_only = _ohlc([("2026-09-01", 100, 100)])
+    assert adj_factors.confirm_with_prices([_row("X", "2026-09-02", 0.3)], before_only) == []
+
+
+def test_ordinary_dividend_needs_no_price_check():
+    empty = _ohlc([])
+    assert len(adj_factors.confirm_with_prices([_row("X", "2026-09-02", 0.97)], empty)) == 1
+
+
+def test_split_and_reduction_rows():
+    splits = adj_factors.rows_from_splits([
+        {"date": "2026-09-07", "stock_id": "6949", "type": "面額變更",
+         "before_price": 1490.0, "after_price": 74.5}])
+    assert (splits[0]["symbol"], splits[0]["source"]) == ("6949", adj_factors.SOURCE_SPLIT)
+    assert splits[0]["adj_factor"] == pytest.approx(0.05)
+    red = adj_factors.rows_from_reductions("2380", [
+        {"date": "2026-06-29", "ClosingPriceonTheLastTradingDay": 6.6,
+         "PostReductionReferencePrice": 23.86}])
+    assert red[0]["source"] == adj_factors.SOURCE_REDUCTION
+    assert red[0]["adj_factor"] == pytest.approx(23.86 / 6.6, abs=1e-6)
+
+
+def test_split_and_reduction_make_returns_continuous(tmp_adj_path):
+    """因子 <0.5（分割）與 >1（減資）都要讓跨事件日的報酬連續。"""
+    local_store.write_adj_factors(_df([
+        _row("S", "2024-01-04", 0.1, adj_factors.SOURCE_SPLIT),
+        _row("R", "2024-01-04", 3.0, adj_factors.SOURCE_REDUCTION),
+    ]))
+    split = local_store._apply_adjustment(
+        _raw(["2024-01-02", "2024-01-03", "2024-01-04"], [1000, 1000, 100]), "S")
+    assert abs(split["close"].pct_change().iloc[2]) < 1e-9
+    reduction = local_store._apply_adjustment(
+        _raw(["2024-01-02", "2024-01-03", "2024-01-04"], [6, 6, 18]), "R")
+    assert abs(reduction["close"].pct_change().iloc[2]) < 1e-9
+
+
+def test_same_day_events_from_different_sources_coexist(tmp_adj_path):
+    """除息與減資同一天：兩筆都要留、還原時連乘；同來源重寫才覆蓋。"""
+    local_store.write_adj_factors(_df([_row("X", "2024-01-04", 0.95)]))
+    local_store.write_adj_factors(_df([_row("X", "2024-01-04", 2.0, adj_factors.SOURCE_REDUCTION)]))
+    local_store.write_adj_factors(_df([_row("X", "2024-01-04", 0.96)]))          # 同來源 → 覆蓋
+    table = local_store.read_adj_factors("X")
+    assert sorted(table["adj_factor"]) == [0.96, 2.0]
+    adj = local_store._apply_adjustment(_raw(["2024-01-03", "2024-01-04"], [100, 192]), "X")
+    assert adj["close"].iloc[0] == pytest.approx(100 * 0.96 * 2.0)
+
+
+def test_dividend_features_ignore_splits_and_reductions():
+    from processor.adj_factors import dividend_features
+
+    factors = pd.DataFrame([
+        _row("X", "2026-03-10", 0.98),
+        _row("X", "2026-04-10", 0.1, adj_factors.SOURCE_SPLIT),
+        _row("X", "2026-05-10", 0.335),                                # 大比例配股不算殖利率
+    ])
+    out = dividend_features(factors, pd.Series(pd.to_datetime(["2026-06-01"])))
+    assert out.loc[0, "div_yield_ttm_pct"] == pytest.approx(round((1 / 0.98 - 1) * 100, 2))
+    assert out.loc[0, "days_since_ex_div"] == 83
+
+
+def test_find_unexplained_jumps(tmp_adj_path, monkeypatch):
+    days = pd.bdate_range("2024-01-01", periods=15)
+    closes = [100.0] * 12 + [30.0, 30.0, 31.0]                         # 第 13 根 -70%
+    monkeypatch.setattr(local_store, "read_prices",
+                        lambda sym, market, adjusted=False: _raw(days, closes))
+    jumps = adj_factors.find_unexplained_jumps(symbols=["X"])
+    assert jumps == [{"symbol": "X", "date": days[12].date().isoformat(), "return_pct": -70.0}]
+    assert adj_factors.find_unexplained_jumps(symbols=["X"], since="2025-01-01") == []
