@@ -23,13 +23,13 @@
 ## Phase 3 — 測試基線（未竟，高優先）
 
 - [x] T011 建立 `tests/processor/`（parquet fixtures + FinMind mock）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T012 [P] test：`build_tw_features` 型別 JSON-safe、NaN→None、籌碼單位「張」（US1 / FR-001）
-- [ ] T013 [P] test：相對強弱/連買天數計算正確（US1 / FR-002）
-- [ ] T014 [P] test：混入未來日列 → 特徵/as_of 不受影響（US2 / FR-003 / SC-001）
-- [ ] T015 [P] test：`build_fundamentals` 衍生指標數值正確（離線）（US3 / FR-005 / SC-002）
-- [ ] T016 [P] test：某資料源缺 → 略過該區塊、其餘完整（US3 / FR-006 / SC-003）
-- [ ] T017 [P] test：lru + 日曆感知——同日重複查不重抓（US3 / FR-004）
-- [ ] T018 test：跨市場相關性對齊交易日（US / FR-007）
+- [x] T012 [P] test：`build_tw_features` 型別 JSON-safe、NaN→None、籌碼單位「張」（US1 / FR-001）——`tests/test_feature_processing.py`
+- [x] T013 [P] test：相對強弱/連買天數計算正確（US1 / FR-002）——`tests/test_feature_processing.py`
+- [x] T014 [P] test：混入未來日列 → 特徵/as_of 不受影響（US2 / FR-003 / SC-001）——`tests/test_feature_processing.py`
+- [x] T015 [P] test：`build_fundamentals` 衍生指標數值正確（離線）（US3 / FR-005 / SC-002）——`tests/test_feature_processing.py`
+- [x] T016 [P] test：某資料源缺 → 略過該區塊、其餘完整（US3 / FR-006 / SC-003）——`tests/test_feature_processing.py`（揭露並修正：FinMind 退避時其餘 focus 整筆消失）
+- [x] T017 [P] test：lru + 日曆感知——同日重複查不重抓（US3 / FR-004）——`tests/test_feature_processing.py`（現行為磁碟快取 + 日曆感知，非 process lru）
+- [x] T018 test：跨市場相關性對齊交易日（US / FR-007）——`tests/test_feature_processing.py`（揭露並修正：原本先算報酬再對齊）
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -40,6 +40,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 技術/籌碼特徵 | T001–T006, T012–T013 | 程式✅ / 測試⬜ |
-| US2 point-in-time | T010, T014 | 程式✅ / 測試⬜ |
-| US3 基本面衍生指標 | T007–T009, T015–T018 | 程式✅ / 測試⬜ |
+| US1 技術/籌碼特徵 | T001–T006, T012–T013 | 程式✅ / 測試✅ |
+| US2 point-in-time | T010, T014 | 程式✅ / 測試✅ |
+| US3 基本面衍生指標 | T007–T009, T015–T018 | 程式✅ / 測試✅ |
