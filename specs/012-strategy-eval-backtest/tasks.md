@@ -30,7 +30,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T015 scorecard schema 版本化（featurize 欄位變更相容）
-- [ ] T016 `/speckit-converge` 掃描 backtest.py / strategy_calibration.py 與本 spec 落差
+- [x] T016 `/speckit-converge` 掃描 backtest.py / strategy_calibration.py 與本 spec 落差——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 

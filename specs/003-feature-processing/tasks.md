@@ -34,7 +34,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T019 衍生指標與 FinMind 原始欄位對應的黃金樣本回歸測試
-- [ ] T020 `/speckit-converge` 掃描 processor/ 與本 spec 落差、補未列任務
+- [x] T020 `/speckit-converge` 掃描 processor/ 與本 spec 落差、補未列任務——2026-10-15 已跑：FR-004 文件過時→T021
 
 ## 驗收對照
 
@@ -43,3 +43,7 @@
 | US1 技術/籌碼特徵 | T001–T006, T012–T013 | 程式✅ / 測試✅ |
 | US2 point-in-time | T010, T014 | 程式✅ / 測試✅ |
 | US3 基本面衍生指標 | T007–T009, T015–T018 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [x] T021 Rewrite FR-004 in spec.md to match the implemented disk cache with filing-calendar freshness (`fundamentals._cached`/`_section_fresh`) instead of process-level lru per FR-004 (contradicts)——已在 spec.md 標註（2026-10-15）

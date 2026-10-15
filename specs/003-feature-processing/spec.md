@@ -81,7 +81,8 @@ JSON-safe（NaN→None），籌碼單位為「張」。
 - **FR-001**: 特徵層 MUST 只算數字、MUST NOT 呼叫 LLM（憲章 I）；輸出 MUST 為 JSON-safe（NaN→None）。
 - **FR-002**: `build_tw_features` MUST 產出 index/stocks/sectors/movers，含技術面 + 籌碼面 + 相對強弱。
 - **FR-003**: 所有時間索引 MUST 以 trade_date（公布日）對齊；MUST NOT 引入未來日或前視偏誤。
-- **FR-004**: 基本面 MUST on-demand（焦點標的）+ process 內 lru 快取；日曆感知（無新一期不重抓）。
+- **FR-004**: ~~基本面 MUST on-demand（焦點標的）+ process 內 lru 快取；日曆感知（無新一期不重抓）。~~
+  **（實作已改為更強的機制）** 改為：基本面 on-demand（焦點標的）+ **磁碟快取**（跨重啟保留，`fundamentals._cached`）；新鮮度依法定申報期限判斷（`_section_fresh`：快取已是應公布的最新期別就不重抓，新一期到期才重抓；查無資料走負快取 TTL）。
 - **FR-005**: 衍生指標 MUST 由 FinMind 原始數字推算，並以 `features...fundamentals.*` 路徑暴露供 guardrail 驗證。
 - **FR-006**: 任一資料源失敗 MUST 只略過該區塊，MUST NOT 讓整體特徵建構失敗。
 - **FR-007**: 跨市場特徵 MUST 對齊交易日後再算報酬相關性。

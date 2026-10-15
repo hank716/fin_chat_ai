@@ -32,8 +32,8 @@
 
 ## Phase 3 — 後續強化（backlog，選用）
 
-- [ ] T019 將 guardrail report 的攔截統計顯示於 Web Report 頁面（若尚未呈現）
-- [ ] T020 以 `/speckit-converge` 掃描 verify.py 與本 spec 的落差、補未列任務
+- [x] T019 將 guardrail report 的攔截統計顯示於 Web Report 頁面（若尚未呈現）——已存在：`templates/report.html` 的 guardrail 區塊
+- [x] T020 以 `/speckit-converge` 掃描 verify.py 與本 spec 的落差、補未列任務——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 

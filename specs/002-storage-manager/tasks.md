@@ -31,7 +31,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T016 footprint 估計剩餘天數 heuristic 的實測校準（ASSUMED_DAILY_GROWTH_MB）
-- [ ] T017 `/speckit-converge` 掃描 storage/ 與本 spec 落差、補未列任務
+- [x] T017 `/speckit-converge` 掃描 storage/ 與本 spec 落差、補未列任務——2026-10-15 已跑：FR-004 文件落後→T018
 
 ## 驗收對照
 
@@ -40,3 +40,7 @@
 | US1 parquet SSOT upsert | T001, T003, T009 | 程式✅ / 測試✅ |
 | US2 未來日寫入閘 | T002, T010–T011 | 程式✅ / 測試✅ |
 | US3 預算/retention/pCloud | T004–T007, T012–T015 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [x] T018 Amend FR-004 in spec.md to record the delisted-history exception (`retention.ADHOC_MAX_ROWS`: non-universe parquet with ≥120 rows is kept; unreadable files left to scan_corrupt) per FR-004 (unrequested)——已在 spec.md 標註（2026-10-15）

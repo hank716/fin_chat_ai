@@ -29,7 +29,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T014 qlib_meta gate 閾值與實際 OOS 表現的監控
-- [ ] T015 `/speckit-converge` 掃描 qlib_offline/ 與 serving gate 與本 spec 落差
+- [x] T015 `/speckit-converge` 掃描 qlib_offline/ 與 serving gate 與本 spec 落差——2026-10-15 已跑：FR-004 被 019 取代→T016
 
 ## 驗收對照
 
@@ -38,3 +38,7 @@
 | US1 離線評估 | T001–T004, T013 | 程式✅ / 測試✅ |
 | US2 訓練/打分/gate | T005, T007, T009–T011 | 程式✅ / 測試✅ |
 | US3 隔離 + 自帶排程 | T006, T008, T012 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [x] T016 Mark FR-004 in spec.md as superseded by [019-score-fusion] (`score_qlib` gated by rank-IC feeds `fuse_scores`; `_apply_qlib_scores` no longer exists) per FR-004 (contradicts)——已在 spec.md 標註（2026-10-15）

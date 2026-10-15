@@ -30,7 +30,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T015 若日後可取 VIX：加入 regime（spec Assumptions）
-- [ ] T016 `/speckit-converge` 掃描 taifex_loader / market_regime 與本 spec 落差
+- [x] T016 `/speckit-converge` 掃描 taifex_loader / market_regime 與本 spec 落差——2026-10-15 已跑：FR-005 與 FEATURE_COLUMNS 矛盾→T017（待決策）
 
 ## 驗收對照
 
@@ -39,3 +39,7 @@
 | US1 P/C 資料管線 | T001–T004, T009–T011 | 程式✅ / 測試✅ |
 | US2 市場特徵一致 | T005, T012 | 程式✅ / 測試✅ |
 | US3 恐慌 gauge | T006–T007, T013–T014 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [ ] T017 Resolve FR-005 contradiction: `backend/reports/backtest.py` FEATURE_COLUMNS includes market-level `pc_oi_ratio`/`pc_oi_z20`/`pc_vol_ratio`/`pc_oi_chg5` as cross-sectional stock features — either remove them from FEATURE_COLUMNS (retrain) or amend FR-005 with the measured rationale (needs owner decision) per FR-005 (contradicts)

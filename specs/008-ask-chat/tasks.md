@@ -36,7 +36,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T021 若下游改 async：redis 原子預扣守 TOCTOU（見 [009]）
-- [ ] T022 `/speckit-converge` 掃描 ask.py / history.py 與本 spec 落差
+- [x] T022 `/speckit-converge` 掃描 ask.py / history.py 與本 spec 落差——2026-10-15 已跑：FR-006 補註→T023
 
 ## 驗收對照
 
@@ -45,3 +45,7 @@
 | US1 預算/管理放行 | T002–T003, T008, T014 | 程式✅ / 測試✅ |
 | US2 意圖過濾 | T004, T015 | 程式✅ / 測試✅ |
 | US3 grounding/記憶/降級 | T005–T007, T010–T012, T016–T020 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [x] T023 Annotate FR-006 in spec.md: default Q&A path is Claude (`cache_control`, [022]); Gemini explicit cache applies only on the Gemini/fallback path per FR-006 (partial)——已在 spec.md 標註（2026-10-15）

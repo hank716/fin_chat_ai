@@ -33,7 +33,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T018 把 job 邏輯拆到 `scheduler/jobs/` 以利測試與擴充（目前集中在 scheduler.py）
-- [ ] T019 `/speckit-converge` 掃描 scheduler.py 與本 spec 落差、補未列任務
+- [x] T019 `/speckit-converge` 掃描 scheduler.py 與本 spec 落差、補未列任務——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 

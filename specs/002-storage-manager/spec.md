@@ -82,6 +82,7 @@ retention 清舊報告（本機留最近 90 篇，其餘已備份 pCloud）與�
 - **FR-002**: 落地 MUST 過未來日寫入閘（trade_date ≤ today + `_FUTURE_GRACE_DAYS`），擋所有來源的未來列。
 - **FR-003**: 容量監控 MUST 用 st_blocks 計 footprint，回 footprint vs budget 與 host disk 雙視角 + 整體 alert（取最嚴重）。
 - **FR-004**: retention MUST 本機保留最近 `KEEP_REPORTS_LOCAL` 篇報告、清除逾 `ADHOC_PARQUET_TTL_DAYS` 的 adhoc parquet（保留 watchlist+TWII）。
+  **（補註，2026-10-15）** 清單外 parquet 只在列數 < `ADHOC_MAX_ROWS`（120）時才視為 adhoc 快取清除；列數達門檻者是下市股歷史，一律保留（回測不帶倖存者偏差的前提，見 `SURVIVORSHIP_AUDIT.md`）；讀不到的壞檔交給 scan_corrupt、不在 retention 刪除。
 - **FR-005**: MUST 支援 pCloud 冷備份（`backup_report`）與 on-demand 回補（`restore_report`）；失敗只記 log。
 - **FR-006**: retention/pCloud/監控任一失敗 MUST NOT 阻斷產報主流程。
 - **FR-007**: storage footprint 子目錄 MUST 對齊 §28 layout（local_parquet/features/reports/raw/cache/logs）。

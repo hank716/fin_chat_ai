@@ -37,9 +37,9 @@
 
 ## Phase 4 — 後續強化（backlog，選用）
 
-- [ ] T021 latest 別名版本/費率的自動核對提醒（避免靜默低估，FR-003）
+- [x] T021 latest 別名版本/費率的自動核對提醒（避免靜默低估，FR-003）——同 005 T021（e0d8d57）：PRICED_MODEL_VERSIONS 對照 + 換代/牌價不符 warn
 - [ ] T022 若日後下游改 async：改 redis 原子預扣（Lua/INCR）守 TOCTOU（見 spec Edge Cases）
-- [ ] T023 `/speckit-converge` 掃描 tracker.py 與本 spec 落差、補未列任務
+- [x] T023 `/speckit-converge` 掃描 tracker.py 與本 spec 落差、補未列任務——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 

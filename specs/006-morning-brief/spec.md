@@ -74,9 +74,11 @@ edge/risk/rank/qlib/meta/sizing 打分與回測迴圈以本機模型執行；任
 
 ### Functional Requirements
 
-- **FR-001**: 系統 MUST 以兩段式 grounded LLM（[005]）產生 `BriefResult`，並注入策略校準提示（若有）。
+- **FR-001**: ~~系統 MUST 以兩段式 grounded LLM（[005]）產生 `BriefResult`，並注入策略校準提示（若有）。~~
+  **（superseded by [022-llm-tiering]）** 改為：①Gemini + google_search 廣度召回待查證線索（不分析、不挑股）→ ②決策層（預設 Claude）單次產出 `BriefResult` 並以 web_fetch 逐條查證；②失敗退回 Gemini 兩段式。策略校準提示仍注入決策層。
 - **FR-002**: 系統 MUST 在落地前執行 `run_guardrails`（[004]）清理輸出。
-- **FR-003**: 系統 MUST 計入晨報成本（研究段 grounded + 格式化段）並 `record_cost`（[009]）。
+- **FR-003**: ~~系統 MUST 計入晨報成本（研究段 grounded + 格式化段）並 `record_cost`（[009]）。~~
+  **（superseded by [022-llm-tiering]）** 改為：召回層以實際使用的模型、`grounded=True` 計價並記入 gemini 桶；決策層非 grounded、依供應商記入對應桶（`record_cost(provider=...)`）；兩筆分別入帳，彙總桶不變。
 - **FR-004**: 系統 MUST 落地 `{report_id}.json` 與 `.md`，report 含 `report_id`/`report_date`/`markdown`/`copy_for_ai`/`features`/`guardrail`/`cost`。
 - **FR-005**: 打分層（edge/risk/rank/qlib/meta/sizing）與回測迴圈 MUST guarded：任一失敗僅記 warning，MUST NOT 阻斷晨報。
 - **FR-006**: 系統 MUST 提供讀取 API：`latest_report_id`、`load_report`、`load_markdown`、`list_reports`、`report_date_exists`。

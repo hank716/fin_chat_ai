@@ -32,7 +32,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [ ] T017 訓練集/模型的黃金樣本回歸（特徵欄位變更相容）
-- [ ] T018 `/speckit-converge` 掃描 training_set.py / strategy_calibration.py 與本 spec 落差
+- [x] T018 `/speckit-converge` 掃描 training_set.py / strategy_calibration.py 與本 spec 落差——2026-10-15 已跑：FR-005 被 019 取代→T019
 
 ## 驗收對照
 
@@ -41,3 +41,7 @@
 | US1 回放訓練集 | T001–T005, T011–T013 | 程式✅ / 測試✅ |
 | US2 per-horizon edge | T006–T008, T014, T016 | 程式✅ / 測試✅ |
 | US3 guarded serving | T009, T015 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [x] T019 Mark FR-005 in spec.md as superseded by [019-score-fusion] (`score_candidates`/`score_rank` feed `fuse_scores`; `_apply_edge_scores`/`_apply_rank_scores` no longer exist) per FR-005 (contradicts)——已在 spec.md 標註（2026-10-15）

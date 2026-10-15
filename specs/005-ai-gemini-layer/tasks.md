@@ -37,9 +37,9 @@
 
 ## Phase 4 — 後續強化（backlog，選用）
 
-- [ ] T021 `*-latest` 別名版本與 [009-cost-control] 費率表的一致性檢查（避免低估）
+- [x] T021 `*-latest` 別名版本與 [009-cost-control] 費率表的一致性檢查（避免低估）——已由 e0d8d57 完成：`_note_model_version` 換代與牌價不符時 warn（tests/test_gemini_model_version.py）
 - [ ] T022 明確快取命中率/降級率的觀測指標
-- [ ] T023 `/speckit-converge` 掃描 ai/ 與本 spec 落差、補未列任務
+- [x] T023 `/speckit-converge` 掃描 ai/ 與本 spec 落差、補未列任務——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 

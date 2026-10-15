@@ -34,7 +34,7 @@
 ## Phase 4 — 後續強化（backlog，選用）
 
 - [x] T019 `_backfill_caution` 補齊邏輯的單元覆蓋（movers 數據正確映射）——`tests/test_morning_brief_pipeline.py`
-- [ ] T020 `/speckit-converge` 掃描 morning_brief.py 與本 spec 落差、補未列任務
+- [x] T020 `/speckit-converge` 掃描 morning_brief.py 與本 spec 落差、補未列任務——2026-10-15 已跑：FR-001/003 被 022 取代→T021
 
 ## 驗收對照
 
@@ -43,3 +43,7 @@
 | US1 產出可驗證晨報 | T001–T009, T014–T015 | 程式✅ / 測試✅ |
 | US2 護欄+成本落地 | T004, T006–T007, T017–T018 | 程式✅ / 測試✅ |
 | US3 打分/回測 guarded | T010–T011, T016 | 程式✅ / 測試✅ |
+
+## Phase 5: Convergence
+
+- [x] T021 Mark FR-001/FR-003 in spec.md as superseded by [022-llm-tiering] (Gemini recall + Claude decision; costs split by layer/provider), following the 005 strike-through format per FR-001, FR-003 (contradicts)——已在 spec.md 標註（2026-10-15）

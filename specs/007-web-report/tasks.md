@@ -25,7 +25,7 @@
 ## Phase 3 — 後續強化（backlog，選用）
 
 - [ ] T013 頁面快照/視覺回歸（深色/RWD）
-- [ ] T014 `/speckit-converge` 掃描 web_renderer/templates 與本 spec 落差
+- [x] T014 `/speckit-converge` 掃描 web_renderer/templates 與本 spec 落差——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 

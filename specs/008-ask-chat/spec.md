@@ -80,6 +80,7 @@ Discord 討論串（有 conversation_id）帶最近數輪對話記憶，一般�
 - **FR-004**: MUST 以最新晨報為 grounding；無晨報回 404。
 - **FR-005**: MUST 對問題中台股代號 on-demand 抓基本面；FinMind 退避時 MUST 略過該區塊而非失敗。
 - **FR-006**: MUST 用明確快取（[005]）省 token；不相容（400）MUST 降級為完整 prompt。
+  **（補註，[022-llm-tiering] 後）** 問答預設走 Claude，穩定前綴以 `cache_control` 快取；Gemini 明確快取（cachedContents）只在 `LLM_DECISION_PROVIDER=gemini` 或降級路徑使用，400 降級規則不變。
 - **FR-007**: 有 conversation_id MUST 帶討論串記憶並於答後寫入（截斷、限 `MAX_TURNS`、TTL 3 天）；無則無狀態。
 - **FR-008**: MUST 計入問答成本（含分類）並 `record_cost`（[009]）；check→spend 之間 MUST NOT await。
 - **FR-009**: 回覆 MUST 附輔助參考免責句；寫入記憶 MUST 存不含免責句的乾淨答案。

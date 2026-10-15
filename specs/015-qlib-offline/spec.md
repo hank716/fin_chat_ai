@@ -77,7 +77,8 @@ serving 永不 import qlib、只讀 JSON。
 - **FR-001**: 離線 image MUST 用 Qlib Alpha158 + LightGBM 做 purged walk-forward；`--eval` 落地 `qlib_eval.json`。
 - **FR-002**: rank 指標定義 MUST 對齊 backend `_evaluate_rank_oos`（[013]）；風險用未來 h 日 MAE OOS AUC。
 - **FR-003**: `--score` MUST 訓練 + 打分最近交易日流動性股池，落地 `qlib_scores/{date}.json` + `qlib_meta.json`。
-- **FR-004**: serving `_apply_qlib_scores` MUST 過 rank-IC gate 才重排；無檔/未過 gate MUST 不動（guarded）。
+- **FR-004**: ~~serving `_apply_qlib_scores` MUST 過 rank-IC gate 才重排；無檔/未過 gate MUST 不動（guarded）。~~
+  **（superseded by [019-score-fusion]）** 改為：`score_qlib` 只讀離線 JSON、過 rank-IC gate 才回分數，交 `fuse_scores` 與其他方向模型融合；無檔/未過 gate 回空、不參與融合。
 - **FR-005**: serving（backend）MUST NOT import qlib；只讀 JSON。
 - **FR-006**: `--loop` MUST 容器自帶排程（每日 off-peak 03:00），不依賴 [010] scheduler。
 - **FR-007**: 全流程 MUST 零 LLM/外部 API；防未來洩漏（purged walk-forward）。

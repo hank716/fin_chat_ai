@@ -80,7 +80,8 @@
 - **FR-002**: MUST 防未來洩漏：特徵/排行只用 `≤ D`、標籤只用 `> D`；訓練端 walk-forward 切分。
 - **FR-003**: MUST 訓練 per-horizon 方向模型（HistGradientBoosting）並落地；樣本不足 MUST 自動跳過。
 - **FR-004**: MUST 以 walk-forward 算 OOS 指標（含 precision@k、機率校準器）。
-- **FR-005**: `_apply_edge_scores`/`_apply_rank_scores` MUST guarded：無模型/未過 gate 不重排；例外只記 warning。
+- **FR-005**: ~~`_apply_edge_scores`/`_apply_rank_scores` MUST guarded：無模型/未過 gate 不重排；例外只記 warning。~~
+  **（superseded by [019-score-fusion]）** 改為：`score_candidates`（edge）與 `score_rank` 各自過 gate 後交 `fuse_scores` 融合，只重排偏多一次；無模型/未過 gate 回空、不參與融合；例外只記 warning。
 - **FR-006**: 重疊樣本 MUST 降權（`_overlap_weights`）。
 - **FR-007**: 全流程 MUST 零 LLM/外部 API（純本地 CPU）；`build_if_stale` 控重建頻率。
 

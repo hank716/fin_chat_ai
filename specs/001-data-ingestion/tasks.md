@@ -39,7 +39,7 @@
 ## Phase 5 — 後續強化（backlog，選用）
 
 - [ ] T021 反爬 307 斷路器狀態的可觀測指標（避免空轉假進度）
-- [ ] T022 `/speckit-converge` 掃描 data_sources/ 與本 spec 落差、補未列任務
+- [x] T022 `/speckit-converge` 掃描 data_sources/ 與本 spec 落差、補未列任務——2026-10-15 已跑：converged，無缺口
 
 ## 驗收對照
 
