@@ -222,3 +222,16 @@ def test_sizing_plan_reads_gate_and_respects_switch(tmp_path, monkeypatch):
     assert sc.sizing_plan() == "meta"
     monkeypatch.setattr(sc.settings, "enable_sizing", False)
     assert sc.sizing_plan() is None
+
+
+def test_serving_uses_configured_single_name_cap(monkeypatch):
+    """serving 與 backtest_sizing 必須用同一個單檔上限（settings.sizing_max_weight），
+    否則改設定後回測證據與實際建議權重會對不起來。"""
+    monkeypatch.setattr(sc, "sizing_plan", lambda: "meta")
+    monkeypatch.setattr(sc, "market_exposure_scalar", lambda: (1.0, {}))
+    monkeypatch.setattr(sc.settings, "sizing_max_weight", 1.0)
+    r = _result()
+    for w, p in zip(r.tw_watchlist, (0.2, 0.6, 0.2)):
+        w.conviction_score = p
+    weights, _ = mb._apply_sizing(r, FEATS)
+    assert weights == pytest.approx({"A": 0.2, "B": 0.6, "C": 0.2})   # 0.6 沒被預設 0.30 壓掉

@@ -234,7 +234,9 @@ def _apply_sizing(result: Any, feats: dict[str, Any]) -> dict[str, float]:
     stocks = (feats.get("tw", {}) or {}).get("stocks", {}) or {}
     items = [{"meta_p": w.conviction_score, "risk_p": w.risk_score,
               "vol": (stocks.get(w.symbol, {}) or {}).get("volatility_20d_pct")} for w in wl]
-    base = strategy_calibration._size_weights(items, scheme or "equal")  # 無方案則等權，僅供曝險縮放
+    # 單檔上限與 backtest_sizing 同一個設定：回測證據才對得上實際建議的權重
+    base = strategy_calibration._size_weights(items, scheme or "equal",   # 無方案則等權，僅供曝險縮放
+                                              max_w=settings.sizing_max_weight)
     out: dict[str, float] = {}
     for w, wt in zip(wl, base):
         w.size_weight = round(float(wt) * scalar, 4)                     # 乘市場曝險係數（Σ=scalar、其餘現金）
