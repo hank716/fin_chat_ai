@@ -21,11 +21,11 @@
 
 - [x] T008 建立 OHLC/樣本 fixtures + monkeypatch 模型路徑——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [x] T009 [P] test：`_triple_barrier` 先觸上/下/時間障礙的標籤正確（US1 / FR-001）——`tests/test_training_set_leakage.py::test_triple_barrier_window_is_strictly_forward_and_bounded`、`test_triple_barrier_same_day_double_touch_takes_lower_bound`
-- [ ] T010 [P] test：meta 標把握度但方向不變（US1 / FR-002 / SC-001）
-- [ ] T011 [P] test：`_apply_risk_scores` 對偏多標高風險、強化避雷（US2 / FR-003）
-- [ ] T012 [P] test：`_apply_sizing` 兩道 gate 未過 → no-op；過 gate → 權重×曝險（US3 / FR-004, FR-006）
-- [ ] T013 [P] test：market_fear 高 → 總曝險下降（US3 / FR-004）
-- [ ] T014 test：淨 P&L 回測把風險側分數對應到損益（US / FR-005 / SC-003）
+- [x] T010 [P] test：meta 標把握度但方向不變（US1 / FR-002 / SC-001）——`tests/test_meta_sizing.py`
+- [x] T011 [P] test：`_apply_risk_scores` 對偏多標高風險、強化避雷（US2 / FR-003）——`tests/test_meta_sizing.py`
+- [x] T012 [P] test：`_apply_sizing` 兩道 gate 未過 → no-op；過 gate → 權重×曝險（US3 / FR-004, FR-006）——`tests/test_meta_sizing.py`
+- [x] T013 [P] test：market_fear 高 → 總曝險下降（US3 / FR-004）——`tests/test_meta_sizing.py`
+- [x] T014 test：淨 P&L 回測把風險側分數對應到損益（US / FR-005 / SC-003）——`tests/test_meta_sizing.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -36,6 +36,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 triple-barrier + meta | T001–T002, T004, T009–T010 | 程式✅ / 測試⬜ |
-| US2 風險模型 | T003, T005, T011 | 程式✅ / 測試⬜ |
-| US3 sizing × 曝險 | T006–T007, T012–T014 | 程式✅ / 測試⬜ |
+| US1 triple-barrier + meta | T001–T002, T004, T009–T010 | 程式✅ / 測試✅ |
+| US2 風險模型 | T003, T005, T011 | 程式✅ / 測試✅ |
+| US3 sizing × 曝險 | T006–T007, T012–T014 | 程式✅ / 測試✅ |
