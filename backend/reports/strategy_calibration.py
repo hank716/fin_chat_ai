@@ -1422,13 +1422,15 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
     """候選池回測（spec 025 Step 0；純離線、不存模型、不動晨報）。
 
     在歷史回放上，以**與線上同一套選股規則**（training_set._mover_lists）逐日重建各排行榜，
-    量每個榜與幾種候選池變體的 h 日**橫斷面超額**（相對當日流動性股池中位數，與訓練標籤同基準）：
+    量每個榜與幾種候選池變體的 h 日**橫斷面超額**（相對當日流動性股池**等權平均**）。
+    ⚠️ 基準不可用中位數：報酬右偏、平均數 > 中位數，高波動名單會因此「看起來」全部贏。
       - bull_current＝漲幅榜∪外資買超榜（現行偏多池）、bull_no_gainers＝只留外資買超榜
       - bear_current＝現行四個偏空榜、bear_plus_gainers＝把漲幅榜移進偏空池
       - risk_filter＝現行偏多池中，OOS risk 機率 ≤ 當日中位數者（purged walk-forward，同 backtest_sizing）
     回答「改候選池定義，偏多/偏空池的超額會怎麼變」。
     """
     import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
 
     from reports import training_set as T  # noqa: PLC0415
 
@@ -1446,6 +1448,7 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
     per_list: dict[str, dict[int, list[float]]] = {k: {h: [] for h in hs} for k in T._MOVER_RULES}
     per_pool: dict[str, dict[int, list[float]]] = {k: {h: [] for h in hs} for k in pool_defs}
     members: dict[str, list[int]] = {k: [] for k in T._MOVER_RULES}
+    pool_mean: dict[tuple[str, int], float] = {}
     n_days = 0
     for _d, day in big.groupby("trade_date"):
         amt = day["amount"].fillna(0)
@@ -1461,7 +1464,9 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
             fwd = liquid.set_index("symbol")[col].dropna()
             if fwd.empty:
                 continue
-            excess = fwd - float(fwd.median())
+            mu = float(fwd.mean())
+            pool_mean[(pd.Timestamp(_d).date().isoformat(), h)] = mu
+            excess = fwd - mu
             for name, syms in lists.items():
                 vals = excess.reindex(list(syms)).dropna()
                 if len(vals):
@@ -1490,8 +1495,10 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
         if sc_all is None or sc_all.empty:
             break
         df = sc_all[(sc_all["horizon"] == h) & (sc_all["side"] == "watchlist")
-                    & sc_all["risk_label"].notna() & sc_all["excess_vs_market_pct"].notna()]
-        df = df.sort_values("as_of").reset_index(drop=True)
+                    & sc_all["risk_label"].notna() & sc_all["fwd_return_pct"].notna()].copy()
+        # 與逐榜統計同基準：當日流動性股池等權平均（樣本自帶的 excess 是中位數基準，不用）
+        df["excess_mean_basis"] = df["fwd_return_pct"] - df["as_of"].map(lambda d: pool_mean.get((d, h)))
+        df = df[df["excess_mean_basis"].notna()].sort_values("as_of").reset_index(drop=True)
         dates = sorted(df["as_of"].unique().tolist())
         nd = len(dates)
         if nd < 10:
@@ -1521,9 +1528,9 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
         for _d, g in oos.groupby("as_of"):
             if len(g) < 2:
                 continue
-            unfilt.append(float(g["excess_vs_market_pct"].mean()))
+            unfilt.append(float(g["excess_mean_basis"].mean()))
             keep = g[g["risk_p"] <= g["risk_p"].median()]
-            filt.append(float(keep["excess_vs_market_pct"].mean()))
+            filt.append(float(keep["excess_mean_basis"].mean()))
         fm, ft, fn = _daily_stats(filt)
         um, _ut, _un = _daily_stats(unfilt)
         risk_out[str(h)] = {"oos_days": fn, "filtered_mean_excess_pct": fm, "filtered_t_stat": ft,
@@ -1534,7 +1541,7 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
         "ran": True, "horizons": hs, "n_days": n_days, "top_n": T._TOP,
         "min_amount_twd": T.MIN_AMOUNT_TWD,
         "lists": lists_out, "pools": pools_out, "risk_filter": risk_out,
-        "note": ("超額＝h 日報酬減『當日流動性股池中位數』（與訓練標籤同基準；線上歸因用大盤指數，兩者口徑不同）。"
+        "note": ("超額＝h 日報酬減『當日流動性股池等權平均』（不用中位數：右偏下會系統性高估；線上歸因用大盤指數，口徑不同）。"
                  "逐日平均再跨日平均；h 日窗重疊使 t 值偏高，僅供變體間相對比較。未扣交易成本。"),
         "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
     }

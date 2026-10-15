@@ -101,6 +101,23 @@ def test_no_data_returns_reason(tmp_path, monkeypatch):
     assert sc.backtest_candidate_pools()["ran"] is False
 
 
+def test_baseline_is_pool_mean_not_median(tmp_path, monkeypatch):
+    """右偏分布下平均數 > 中位數：若用中位數當基準，任何高波動名單都會「看起來」贏。
+    這裡每檔報酬都是隨機、與名單無關——任何榜的平均超額都應趨近 0。"""
+    rng = np.random.default_rng(1)
+    big = _big()
+    lognormal = rng.lognormal(0, 0.8, len(big)) * 10 - 12          # 強右偏、與名單無關
+    for h in (5, 20):
+        big[f"fwd_return_{h}"] = lognormal
+    monkeypatch.setattr(T, "_build_big", lambda hs: big.copy())
+    monkeypatch.setattr(sc, "_new_model", _VolModel)
+    monkeypatch.setattr(sc, "STRATEGY_DIR", tmp_path)
+    monkeypatch.setattr(sc, "CANDIDATE_POOLS_PATH", tmp_path / "x.json")
+    out = sc.backtest_candidate_pools(horizons=(5, 20))
+    for name, v in out["lists"].items():
+        assert abs(v["5"]["mean_excess_pct"]) < 1.0, name
+
+
 def test_daily_stats_mean_and_t():
     m, t, n = sc._daily_stats([1.0, 2.0, 3.0])
     assert (m, n) == (2.0, 3) and t == pytest.approx(2.0 / (1.0 / np.sqrt(3)), abs=0.01)
