@@ -15,7 +15,7 @@
 
 ## Phase 3 — 部署驗收
 
-- [ ] T006 rebuild backend image 後，以隔日排程晨報確認 `guardrail.narrative_number` 落地（SC-004）；不為驗收多跑付費晨報
+- [x] T006 rebuild backend image 後，以隔日排程晨報確認 `guardrail.narrative_number` 落地（SC-004）；不為驗收多跑付費晨報——10/14 checked 61/mismatched 0；10/15 checked 35/mismatched 1（6716 量增倍數說明寫 2.77、實際 1.77）
 - [x] T007 全套 `pytest -q` 綠燈
 
 ## 後續（不在本期）

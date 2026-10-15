@@ -24,7 +24,7 @@
 
 - [x] T010 [P] `tests/test_smallcap_sleeve.py`：候選池定義、不進 prompt、排序取前 K、受限排除、四道關卡各自的不列原因、空池不遞補、成效統計與停損、scorecard 隔離、Markdown 呈現、名單 fail-closed
 - [x] T011 真實資料乾跑（不經 LLM）：候選池、排除、名單（結果見 plan.md）
-- [ ] T012 rebuild 部署後，以隔日排程晨報確認 `tw_smallcap` 落地與三個介面呈現（SC-001、SC-002）
+- [x] T012 rebuild 部署後，以隔日排程晨報確認 `tw_smallcap` 落地與三個介面呈現（SC-001、SC-002）——10/14、10/15 晨報 JSON 與 Markdown 皆有 `tw_smallcap`
 - [ ] T013 上線滿 20 個到期交易日後檢視 `evaluation.json["smallcap"]`（SC-003）
 
 ## 第二階段（未開始）

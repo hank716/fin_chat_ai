@@ -79,6 +79,9 @@ def fetch_intermarket(*, period: str = "3mo") -> dict[str, list[PriceRow]]:
     for yf_symbol, symbol, market in INTERMARKET_SYMBOLS:
         try:
             rows = fetch_history(yf_symbol, symbol, period=period)
+            if market == "tw":
+                # Yahoo 偶爾給出週末的 ^TWII 列（2026-09-20），台股週末不開盤，直接丟掉
+                rows = [r for r in rows if r.trade_date.weekday() < 5]
             by_market.setdefault(market, []).extend(rows)
         except Exception as exc:  # noqa: BLE001 — 單一標的失敗不阻斷其他
             logger.warning("yfinance fetch %s failed: %s", yf_symbol, exc)

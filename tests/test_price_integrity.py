@@ -76,3 +76,21 @@ def test_purge_only_touches_named_dates(store):
     left = pd.read_parquet(store / "tw" / "1101.parquet")
     assert len(left) == 5 and pd.Timestamp("2026-03-08") not in set(pd.to_datetime(left["trade_date"]))
     assert pi.purge_dates([]) == {"files_modified": 0, "rows_removed": 0}
+
+
+def test_index_rows_are_not_the_trading_calendar(store):
+    """TWII（yfinance）有一筆週日列：不得讓該日變成交易日、被判上市缺日；應判幽靈日並清掉。"""
+    days = _calendar()
+    _write(store, "8001", days, "finmind")
+    for i in range(10):
+        _write(store, f"11{i:02d}", days, "twse")
+    _write(store, "TWII", days + ["2026-03-08"], "yfinance")
+    assert "index" in pi.coverage().columns
+    found = pi.diagnose()
+    assert found["missing_dates"] == []
+    assert found["ghost_dates"] == ["2026-03-08"]
+    result = pi.repair()
+    assert result["purged"] == {"files_modified": 1, "rows_removed": 1}
+    assert result["still_missing"] == [] and result["still_ghost"] == []
+    left = pd.read_parquet(store / "tw" / "TWII.parquet")
+    assert len(left) == len(days)

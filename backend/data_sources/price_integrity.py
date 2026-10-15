@@ -32,6 +32,8 @@ logger = logging.getLogger("ai-market-backend.price_integrity")
 
 TW_MARKET = "tw"
 LISTED_SOURCE = "twse"
+# 指數（TWII）走 yfinance，偶爾會給出非交易日的列，不能拿來當交易日曆
+INDEX_SOURCE = "yfinance"
 REPORT_PATH = PARQUET_ROOT / "_price_integrity.json"
 # 當日上市列數低於「鄰近交易日中位數」的這個比例，就算缺日
 _MISSING_RATIO = 0.5
@@ -42,8 +44,9 @@ _COMMON_STOCK = re.compile(r"[1-9]\d{3}")
 
 
 def coverage() -> pd.DataFrame:
-    """每個日期的列數，分上市（twse）與其他來源（上櫃）。index=date。"""
+    """每個日期的列數，分上市（twse）、指數（yfinance）與其他來源（上櫃）。index=date。"""
     listed: Counter[date] = Counter()
+    index: Counter[date] = Counter()
     other: Counter[date] = Counter()
     for path in (PARQUET_ROOT / TW_MARKET).glob("*.parquet"):
         try:
@@ -55,10 +58,13 @@ def coverage() -> pd.DataFrame:
             continue
         days = pd.to_datetime(df["trade_date"]).dt.date
         is_listed = (df["source"] == LISTED_SOURCE).to_numpy()
+        is_index = (df["source"] == INDEX_SOURCE).to_numpy()
         listed.update(days[is_listed])
-        other.update(days[~is_listed])
-    idx = sorted(set(listed) | set(other))
+        index.update(days[is_index])
+        other.update(days[~is_listed & ~is_index])
+    idx = sorted(set(listed) | set(index) | set(other))
     return pd.DataFrame({"listed": [listed.get(d, 0) for d in idx],
+                         "index": [index.get(d, 0) for d in idx],
                          "other": [other.get(d, 0) for d in idx]}, index=idx)
 
 
@@ -71,11 +77,14 @@ def diagnose(*, since: date | None = None, jumps: list[dict[str, Any]] | None = 
     cov = coverage()
     if cov.empty:
         return {"ghost_dates": [], "missing_dates": [], "suspect_dates": []}
-    # 上櫃（FinMind 逐檔）沒有錯置日問題，拿它當交易日曆：上櫃沒列而上市有列＝不存在的交易日
+    # 上櫃（FinMind 逐檔）沒有錯置日問題，拿它當交易日曆：上櫃沒列而上市或指數有列＝不存在的交易日
     with_other = cov.index[cov["other"] > 0]
+    if with_other.empty:  # 沒有上櫃日曆可對照，不做判斷
+        return {"ghost_dates": [], "missing_dates": [], "suspect_dates": []}
     lo, hi = with_other.min(), with_other.max()
     in_range = (cov.index >= lo) & (cov.index <= hi)
-    ghost = [d for d in cov.index[in_range & (cov["other"] == 0) & (cov["listed"] > 0)]]
+    stray = (cov["listed"] > 0) | (cov["index"] > 0)
+    ghost = [d for d in cov.index[in_range & (cov["other"] == 0) & stray]]
 
     real = cov[cov["other"] > 0]
     typical = real["listed"].rolling(21, center=True, min_periods=5).median()
