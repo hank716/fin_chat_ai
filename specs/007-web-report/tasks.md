@@ -16,11 +16,11 @@
 ## Phase 2 — 測試基線（未竟，中優先）
 
 - [x] T007 建立 `tests/web/`（FastAPI TestClient + 樣本 report dict）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T008 [P] test：`GET /report/{id}` 回 200 HTML、含候選/evidence（US1 / FR-001）
-- [ ] T009 [P] test：`.json`/`.md` 後綴回對應格式（US1 / FR-002）
-- [ ] T010 [P] test：不存在 report_id → 404（US1 / FR-005）
-- [ ] T011 [P] test：HTML autoescape 生效（含特殊字元的欄位被跳脫）（FR-003 / SC-003）
-- [ ] T012 test：首頁面板缺資料時略過、不報錯（US2 / FR-004）
+- [x] T008 [P] test：`GET /report/{id}` 回 200 HTML、含候選/evidence（US1 / FR-001）——`tests/test_web_report.py`
+- [x] T009 [P] test：`.json`/`.md` 後綴回對應格式（US1 / FR-002）——`tests/test_web_report.py`
+- [x] T010 [P] test：不存在 report_id → 404（US1 / FR-005）——`tests/test_web_report.py`
+- [x] T011 [P] test：HTML autoescape 生效（含特殊字元的欄位被跳脫）（FR-003 / SC-003）——`tests/test_web_report.py`
+- [x] T012 test：首頁面板缺資料時略過、不報錯（US2 / FR-004）——`tests/test_web_report.py`
 
 ## Phase 3 — 後續強化（backlog，選用）
 
@@ -31,6 +31,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 單篇報告 | T001, T003–T005, T008–T011 | 程式✅ / 測試⬜ |
-| US2 首頁歷史/面板 | T002, T012 | 程式✅ / 測試⬜ |
-| US3 深色/RWD | T006, T013 | 程式✅ / 測試⬜ |
+| US1 單篇報告 | T001, T003–T005, T008–T011 | 程式✅ / 測試✅ |
+| US2 首頁歷史/面板 | T002, T012 | 程式✅ / 測試✅ |
+| US3 深色/RWD | T006, T013 | 程式✅ / 測試✅ |
