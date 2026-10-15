@@ -25,13 +25,13 @@
 ## Phase 3 — 測試基線（未竟，高優先）
 
 - [x] T013 建立 `tests/api/`（FastAPI TestClient + monkeypatch tracker/gemini/redis）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T014 [P] test：逾限無權杖 → 婉拒 `budget_exceeded`；有權杖 → 放行且計費（US1 / FR-001–002）
-- [ ] T015 [P] test：非財務題早退僅計分類成本；分類器失敗 fail-open（US2 / FR-003）
-- [ ] T016 [P] test：無晨報 → 404（US3 / FR-004）
-- [ ] T017 [P] test：明確快取 400 → 降級完整 prompt（US3 / FR-006）
-- [ ] T018 [P] test：FinMind 退避 → 缺基本面但照常回答（US3 / FR-005）
-- [ ] T019 [P] test：`history.load/append` 截斷、限輪數、TTL；讀寫失敗回空不拋（FR-007）
-- [ ] T020 test：記憶存乾淨答案、回覆含免責句（FR-009）
+- [x] T014 [P] test：逾限無權杖 → 婉拒 `budget_exceeded`；有權杖 → 放行且計費（US1 / FR-001–002）——`tests/test_ask_endpoint.py`
+- [x] T015 [P] test：非財務題早退僅計分類成本；分類器失敗 fail-open（US2 / FR-003）——`tests/test_ask_endpoint.py`
+- [x] T016 [P] test：無晨報 → 404（US3 / FR-004）——`tests/test_ask_endpoint.py`
+- [x] T017 [P] test：明確快取 400 → 降級完整 prompt（US3 / FR-006）——`tests/test_ask_endpoint.py`
+- [x] T018 [P] test：FinMind 退避 → 缺基本面但照常回答（US3 / FR-005）——`tests/test_ask_endpoint.py`
+- [x] T019 [P] test：`history.load/append` 截斷、限輪數、TTL；讀寫失敗回空不拋（FR-007）——`tests/test_ask_endpoint.py`
+- [x] T020 test：記憶存乾淨答案、回覆含免責句（FR-009）——`tests/test_ask_endpoint.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -42,6 +42,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 預算/管理放行 | T002–T003, T008, T014 | 程式✅ / 測試⬜ |
-| US2 意圖過濾 | T004, T015 | 程式✅ / 測試⬜ |
-| US3 grounding/記憶/降級 | T005–T007, T010–T012, T016–T020 | 程式✅ / 測試⬜ |
+| US1 預算/管理放行 | T002–T003, T008, T014 | 程式✅ / 測試✅ |
+| US2 意圖過濾 | T004, T015 | 程式✅ / 測試✅ |
+| US3 grounding/記憶/降級 | T005–T007, T010–T012, T016–T020 | 程式✅ / 測試✅ |
