@@ -28,13 +28,13 @@
 ## Phase 4 — 測試基線（未竟，高優先）
 
 - [x] T013 建立 `tests/data_sources/`（fakeredis + httpx mock + freeze time）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T014 [P] test：`acquire` token 足夠即回、不足阻塞、逾時 `RateLimitTimeout`（US1 / FR-002–003）
-- [ ] T015 [P] test：整點配額用罄 `RateLimitExhausted`；退回增量不永久灌大計數（US1 / FR-003）
-- [ ] T016 [P] test：wall-clock 補 token；時鐘回退不扣 token（FR-001, FR-004）
-- [ ] T017 [P] test：FinMind 402→Quota、403→IPBanned；本機額度先擋（US2 / FR-005）
-- [ ] T018 [P] test：`ingest_tw_prices` TPEx 失敗 → TWSE 仍落地、tpex 帶 error（US3 / FR-006）
-- [ ] T019 [P] test：`_fetch_with_fallback` 假日回退；`_dq_filter` 濾掉 invalid 列（US3 / FR-007–008）
-- [ ] T020 test：Redis 故障時 `_check_hourly_budget` 放行（edge）
+- [x] T014 [P] test：`acquire` token 足夠即回、不足阻塞、逾時 `RateLimitTimeout`（US1 / FR-002–003）——`tests/test_data_ingestion.py`
+- [x] T015 [P] test：整點配額用罄 `RateLimitExhausted`；退回增量不永久灌大計數（US1 / FR-003）——`tests/test_data_ingestion.py`
+- [x] T016 [P] test：wall-clock 補 token；時鐘回退不扣 token（FR-001, FR-004）——`tests/test_data_ingestion.py`
+- [x] T017 [P] test：FinMind 402→Quota、403→IPBanned；本機額度先擋（US2 / FR-005）——`tests/test_data_ingestion.py`
+- [x] T018 [P] test：`ingest_tw_prices` TPEx 失敗 → TWSE 仍落地、tpex 帶 error（US3 / FR-006）——`tests/test_data_ingestion.py`
+- [x] T019 [P] test：`_fetch_with_fallback` 假日回退；`_dq_filter` 濾掉 invalid 列（US3 / FR-007–008）——`tests/test_data_ingestion.py`
+- [x] T020 test：Redis 故障時 `_check_hourly_budget` 放行（edge）——`tests/test_data_ingestion.py`
 
 ## Phase 5 — 後續強化（backlog，選用）
 
@@ -45,6 +45,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 跨 process 節流 | T001–T005, T014–T016, T020 | 程式✅ / 測試⬜ |
-| US2 配額退避止血 | T006, T017 | 程式✅ / 測試⬜ |
-| US3 多來源 ingest/backfill | T009–T012, T018–T019 | 程式✅ / 測試⬜ |
+| US1 跨 process 節流 | T001–T005, T014–T016, T020 | 程式✅ / 測試✅ |
+| US2 配額退避止血 | T006, T017 | 程式✅ / 測試✅ |
+| US3 多來源 ingest/backfill | T009–T012, T018–T019 | 程式✅ / 測試✅ |
