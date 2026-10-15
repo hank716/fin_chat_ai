@@ -25,10 +25,10 @@
 - [x] T012 [P] test：捏造 source_ref 之 evidence 被移除 + `metric` error（US1 / SC-001）——`tests/test_guardrails.py::test_metric_guard_drops_fabricated_source_ref`
 - [x] T013 [P] test：候選 symbol 不在 stocks 被移除（US1）——`tests/test_guardrails.py::test_symbol_guard_keeps_known_drops_unknown`
 - [x] T014 [P] test：**stocks 為空 → 全部候選移除**（US2 / SC-002，fail-closed 回歸守門）——`tests/test_guardrails.py::test_symbol_guard_fail_closed_when_stocks_empty`
-- [ ] T015 [P] test：news 無法比對被移除；比對成功缺 url 則回填不丟（US1 / edge case）
+- [x] T015 [P] test：news 無法比對被移除；比對成功缺 url 則回填不丟（US1 / edge case）——`tests/test_guardrails_baseline.py`
 - [x] T016 [P] test：`_resolve` 方言——`$.tw.stocks["2408"]`、尾註解截斷、數字索引（FR-009）——`tests/test_guardrails.py::test_resolve_dialects_and_missing`
-- [ ] T017 [P] test：禁語標 warning 但不刪內容；缺 data_as_of 記 error（US3）
-- [ ] T018 test：輸入物件不被 mutate（FR-008）；相同輸入 report 可重現（SC-003）
+- [x] T017 [P] test：禁語標 warning 但不刪內容；缺 data_as_of 記 error（US3）——`tests/test_guardrails_baseline.py`
+- [x] T018 test：輸入物件不被 mutate（FR-008）；相同輸入 report 可重現（SC-003）——`tests/test_guardrails_baseline.py`
 
 ## Phase 3 — 後續強化（backlog，選用）
 
@@ -39,6 +39,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 捏造內容移除 | T002–T004, T006, T012–T013, T015–T016 | 程式✅ / 測試⬜ |
-| US2 fail-closed | T005, T014 | 程式✅ / 測試⬜ |
-| US3 禁語與時效 | T007–T008, T017 | 程式✅ / 測試⬜ |
+| US1 捏造內容移除 | T002–T004, T006, T012–T013, T015–T016 | 程式✅ / 測試✅ |
+| US2 fail-closed | T005, T014 | 程式✅ / 測試✅ |
+| US3 禁語與時效 | T007–T008, T017 | 程式✅ / 測試✅ |
