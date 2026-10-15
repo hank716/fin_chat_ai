@@ -97,17 +97,44 @@ def test_retention_evicts_oldest_reports_json_and_md(store):
     assert sorted(p.stem for p in reports.glob("*.md")) == ids[2:]
 
 
+def _parquet(path, rows, age_days=0):
+    pd.DataFrame({"trade_date": pd.bdate_range("2024-01-01", periods=rows), "close": 1.0}).to_parquet(path)
+    t = time.time() - age_days * 86400
+    os.utime(path, (t, t))
+
+
 def test_retention_keeps_universe_and_index_prunes_stale_adhoc(store):
     _, parquet = store
     tw = parquet / "tw"
-    _touch(tw / "2330.parquet", age_days=60)              # 全市場標的：再舊也留
-    _touch(tw / "TWII.parquet", age_days=60)              # 大盤：留
-    _touch(tw / "9999.parquet", age_days=30)              # 清單外、過期：清
-    _touch(tw / "8888.parquet", age_days=1)               # 清單外、還新：留
-    _touch(tw / "_chip" / "9999.parquet", age_days=30)
+    _parquet(tw / "2330.parquet", 5, age_days=60)          # 全市場標的：再舊也留
+    _parquet(tw / "TWII.parquet", 5, age_days=60)          # 大盤：留
+    _parquet(tw / "9999.parquet", 5, age_days=30)          # 清單外、過期的零碎快取：清
+    _parquet(tw / "8888.parquet", 5, age_days=1)           # 清單外、還新：留
+    _parquet(tw / "_chip" / "9999.parquet", 5, age_days=30)
     out = retention.enforce_retention()
     assert out["adhoc_parquet_pruned"] == 2
     assert sorted(p.name for p in tw.glob("*.parquet")) == ["2330.parquet", "8888.parquet", "TWII.parquet"]
+
+
+def test_retention_never_deletes_delisted_history(store):
+    """下市股不在當前 universe、也不再更新——但它的歷史是回測無倖存者偏差的依據（SURVIVORSHIP_AUDIT），
+    不能被當成清單外快取清掉。"""
+    _, parquet = store
+    tw = parquet / "tw"
+    _parquet(tw / "1234.parquet", retention.ADHOC_MAX_ROWS, age_days=400)
+    _parquet(tw / "_chip" / "1234.parquet", 300, age_days=400)
+    (tw / "_margin").mkdir()
+    _parquet(tw / "_margin" / "1234.parquet", 300, age_days=400)
+    out = retention.enforce_retention()
+    assert out["adhoc_parquet_pruned"] == 0
+    assert (tw / "1234.parquet").exists() and (tw / "_chip" / "1234.parquet").exists()
+    assert (tw / "_margin" / "1234.parquet").exists()
+
+
+def test_unreadable_parquet_is_not_deleted(store):
+    _, parquet = store
+    _touch(parquet / "tw" / "7777.parquet", age_days=30)    # 壞檔交給 scan_corrupt，不在這裡刪
+    assert retention.enforce_retention()["adhoc_parquet_pruned"] == 0
 
 
 # ── T014 restore_report 從 pCloud 下載回本機 ──

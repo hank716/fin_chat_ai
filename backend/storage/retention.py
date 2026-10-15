@@ -23,6 +23,10 @@ PARQUET_ROOT = Path(settings.local_storage_path) / "local_parquet"
 
 KEEP_REPORTS_LOCAL = 90          # 本機保留最近幾篇報告（~3 個月日報）
 ADHOC_PARQUET_TTL_DAYS = 14      # 清單外即時查標的 parquet 超過幾天未更新就清
+# 只清「零碎快取」：列數達此值的清單外檔案＝下市股的歷史，一律保留。
+# 下市股不在當前 universe、也不再更新，光看「清單外 + 久未更新」會把它們當快取刪掉，
+# 而那正是回測不帶倖存者偏差的依據（SURVIVORSHIP_AUDIT.md）。即時查一檔頂多抓幾個月。
+ADHOC_MAX_ROWS = 120
 
 
 def _evict_old_reports() -> int:
@@ -50,12 +54,26 @@ def _prune_adhoc_parquet() -> int:
             if p.stem in keep:
                 continue
             try:
-                if p.stat().st_mtime < cutoff:
-                    p.unlink()
-                    pruned += 1
+                if p.stat().st_mtime >= cutoff:
+                    continue
+                rows = _row_count(p)
+                if rows is None or rows >= ADHOC_MAX_ROWS:
+                    continue                  # 讀不到（壞檔交給 scan_corrupt）或是下市股歷史：保留
+                p.unlink()
+                pruned += 1
             except OSError:
                 pass
     return pruned
+
+
+def _row_count(path: Path) -> int | None:
+    """只讀 parquet footer 取列數（不載入資料）；讀不到回 None。"""
+    try:
+        import pyarrow.parquet as pq
+
+        return pq.ParquetFile(path).metadata.num_rows
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def enforce_retention() -> dict[str, Any]:
