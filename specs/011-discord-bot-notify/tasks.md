@@ -20,12 +20,12 @@
 ## Phase 3 — 測試基線（未竟，中優先）
 
 - [x] T008 建立 `tests/bot/`、`tests/notify/`（mock discord.Message + httpx mock）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T009 [P] test：對應 user 在專屬頻道 → 轉 /ask；越權/他人 → 忽略（US1 / FR-002）
-- [ ] T010 [P] test：daily-report 頻道（含 thread）不互動（US1 / FR-003）
-- [ ] T011 [P] test：thread 帶 conversation_id；一般頻道不帶（US2 / FR-004）
-- [ ] T012 [P] test：`_ask_backend` 非 200/例外 → 友善字串；逾限不附成本行（US1 / FR-006）
-- [ ] T013 [P] test：`send_message` 未設 token/channel → False；HTTP 失敗只記 log（US3 / FR-007）
-- [ ] T014 test：回覆截斷至 Discord 長度限制（FR-005）
+- [x] T009 [P] test：對應 user 在專屬頻道 → 轉 /ask；越權/他人 → 忽略（US1 / FR-002）——`tests/test_discord_bot.py`
+- [x] T010 [P] test：daily-report 頻道（含 thread）不互動（US1 / FR-003）——`tests/test_discord_bot.py`
+- [x] T011 [P] test：thread 帶 conversation_id；一般頻道不帶（US2 / FR-004）——`tests/test_discord_bot.py`
+- [x] T012 [P] test：`_ask_backend` 非 200/例外 → 友善字串；逾限不附成本行（US1 / FR-006）——`tests/test_discord_bot.py`
+- [x] T013 [P] test：`send_message` 未設 token/channel → False；HTTP 失敗只記 log（US3 / FR-007）——`tests/test_discord_bot.py`
+- [x] T014 test：回覆截斷至 Discord 長度限制（FR-005）——`tests/test_discord_bot.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -36,6 +36,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 專屬頻道問答 | T001–T002, T004, T009–T010, T012 | 程式✅ / 測試⬜ |
-| US2 討論串記憶 | T003, T011 | 程式✅ / 測試⬜ |
-| US3 晨報推播 | T005–T006, T013 | 程式✅ / 測試⬜ |
+| US1 專屬頻道問答 | T001–T002, T004, T009–T010, T012 | 程式✅ / 測試✅ |
+| US2 討論串記憶 | T003, T011 | 程式✅ / 測試✅ |
+| US3 晨報推播 | T005–T006, T013 | 程式✅ / 測試✅ |
