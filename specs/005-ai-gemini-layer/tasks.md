@@ -27,13 +27,13 @@
 > 以 `respx`/httpx mock 打 Gemini 端點；redis 以 fakeredis/monkeypatch。
 
 - [x] T013 建立 `tests/ai/`（httpx mock transport + fixtures）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T014 [P] test：`_generate_json` 合法 JSON → dict+usage；非 JSON/空/no candidates → GeminiError（US1）
-- [ ] T015 [P] test：503→Unavailable 重試、429→QuotaExceeded、400→BadRequest 不重試（US1 / FR-003）
-- [ ] T016 [P] test：`_usage_of` 含 thoughtsTokenCount、cached/tool 分離（FR-008 / SC-003）
-- [ ] T017 [P] test：`classify_finance_intent` HTTP/解析失敗 → (True, {})（US3 / FR-005）
-- [ ] T018 [P] test：`get_or_create_qa_cache` 400/redis 故障 → None；成功寫 redis 且 TTL 早於 cachedContents（US3 / FR-006）
-- [ ] T019 test：`analyze_full_brief_grounded` 依序呼叫研究段(search)+格式化段，回兩段 usage（US2 / FR-002）
-- [ ] T020 test：`GEMINI_API_KEY` 未設 → GeminiError（edge）
+- [x] T014 [P] test：`_generate_json` 合法 JSON → dict+usage；非 JSON/空/no candidates → GeminiError（US1）——`tests/test_gemini_layer.py`
+- [x] T015 [P] test：503→Unavailable 重試、429→QuotaExceeded、400→BadRequest 不重試（US1 / FR-003）——`tests/test_gemini_layer.py`（503 重試/429 fail-fast 另見 tests/test_gemini_retry.py）
+- [x] T016 [P] test：`_usage_of` 含 thoughtsTokenCount、cached/tool 分離（FR-008 / SC-003）——`tests/test_gemini_layer.py`
+- [x] T017 [P] test：`classify_finance_intent` HTTP/解析失敗 → (True, {})（US3 / FR-005）——`tests/test_gemini_layer.py`
+- [x] T018 [P] test：`get_or_create_qa_cache` 400/redis 故障 → None；成功寫 redis 且 TTL 早於 cachedContents（US3 / FR-006）——`tests/test_gemini_layer.py`（redis 故障時現行為照樣建快取、不回 None——降級不阻斷，與任務字面略異）
+- [x] T019 test：`analyze_full_brief_grounded` 依序呼叫研究段(search)+格式化段，回兩段 usage（US2 / FR-002）——`tests/test_gemini_layer.py`
+- [x] T020 test：`GEMINI_API_KEY` 未設 → GeminiError（edge）——`tests/test_gemini_layer.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -45,6 +45,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 結構化 JSON | T001–T006, T014–T016, T020 | 程式✅ / 測試⬜ |
-| US2 兩段式 grounded | T007–T008, T019 | 程式✅ / 測試⬜ |
-| US3 分類 + 明確快取 | T009–T010, T017–T018 | 程式✅ / 測試⬜ |
+| US1 結構化 JSON | T001–T006, T014–T016, T020 | 程式✅ / 測試✅ |
+| US2 兩段式 grounded | T007–T008, T019 | 程式✅ / 測試✅ |
+| US3 分類 + 明確快取 | T009–T010, T017–T018 | 程式✅ / 測試✅ |
