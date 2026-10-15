@@ -261,6 +261,32 @@ def _symbol_long(sym: str, hs: list[int], max_date: pd.Timestamp | None = None) 
     return f
 
 
+# 與 tw_features._movers 同名同規則（名單鍵與線上 features.tw.movers 一致）
+_MOVER_RULES: dict[str, tuple[str, bool]] = {
+    "top_gainers_5d": ("return_5d_pct", True),
+    "top_foreign_buy_5d": ("foreign_net_buy_5d_lots", True),
+    "top_losers_5d": ("return_5d_pct", False),
+    "top_foreign_sell_5d": ("foreign_net_buy_5d_lots", False),
+    "top_short_margin_ratio": ("short_margin_ratio_pct", True),
+    "top_below_index_20d": ("vs_index_20d_pct", False),
+}
+BULL_LISTS = ("top_gainers_5d", "top_foreign_buy_5d")
+BEAR_LISTS = ("top_losers_5d", "top_foreign_sell_5d", "top_short_margin_ratio", "top_below_index_20d")
+
+
+def _mover_lists(liquid: pd.DataFrame) -> dict[str, set[str]]:
+    """單日流動性股池 → 各排行榜的 top N 代號集合（回放與候選池回測共用，確保同一套規則）。"""
+    out: dict[str, set[str]] = {}
+    for name, (col, largest) in _MOVER_RULES.items():
+        s = liquid[liquid[col].notna()]
+        if s.empty:
+            out[name] = set()
+            continue
+        s = s.nlargest(_TOP, col) if largest else s.nsmallest(_TOP, col)
+        out[name] = set(s["symbol"])
+    return out
+
+
 def _emit_samples(day_df: pd.DataFrame, hs: list[int], *,
                   min_amount: float = MIN_AMOUNT_TWD, max_amount: float | None = None) -> list[dict[str, Any]]:
     """單一交易日的橫斷面 → 回放選股規則 → 模擬選股樣本（含 5/20 日**橫斷面超額**標籤）。
@@ -296,17 +322,10 @@ def _emit_samples(day_df: pd.DataFrame, hs: list[int], *,
         return {s: float(med[s]) for s in med.index if cnt[s] >= 3}
     sec_med = {h: _sector_med(h) for h in hs}
 
-    def _top(col: str, largest: bool) -> set[str]:
-        s = liquid[liquid[col].notna()]
-        if s.empty:
-            return set()
-        s = s.nlargest(_TOP, col) if largest else s.nsmallest(_TOP, col)
-        return set(s["symbol"])
-
     # 對齊線上：偏多＝漲幅榜∪外資買超榜；偏空＝跌幅榜∪外資賣超榜∪資券比榜∪弱於大盤榜
-    bull_lists = [_top("return_5d_pct", True), _top("foreign_net_buy_5d_lots", True)]
-    bear_lists = [_top("return_5d_pct", False), _top("foreign_net_buy_5d_lots", False),
-                  _top("short_margin_ratio_pct", True), _top("vs_index_20d_pct", False)]
+    lists = _mover_lists(liquid)
+    bull_lists = [lists[k] for k in BULL_LISTS]
+    bear_lists = [lists[k] for k in BEAR_LISTS]
     bull = set().union(*bull_lists)
     bear = set().union(*bear_lists)
     # conviction[5]：該檔同時命中幾個 component 選股清單（漲幅榜∩外資買超榜＝高把握）。

@@ -1401,6 +1401,148 @@ def backtest_sizing(*, horizon: int | None = None,
     return out
 
 
+CANDIDATE_POOLS_PATH = STRATEGY_DIR / "candidate_pools_backtest.json"
+
+
+def _daily_stats(vals: list[float]) -> tuple[float | None, float | None, int]:
+    """逐日值 → (跨日平均, t 值, 天數)。t 只看跨日離散度；h 日窗重疊時偏高，僅供相對比較。"""
+    import numpy as np  # noqa: PLC0415
+
+    n = len(vals)
+    if n == 0:
+        return None, None, 0
+    arr = np.asarray(vals, dtype=float)
+    mean = float(arr.mean())
+    sd = float(arr.std(ddof=1)) if n > 1 else 0.0
+    t = mean / (sd / np.sqrt(n)) if sd > 0 else None
+    return round(mean, 3), (round(float(t), 2) if t is not None else None), n
+
+
+def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[str, Any]:
+    """候選池回測（spec 025 Step 0；純離線、不存模型、不動晨報）。
+
+    在歷史回放上，以**與線上同一套選股規則**（training_set._mover_lists）逐日重建各排行榜，
+    量每個榜與幾種候選池變體的 h 日**橫斷面超額**（相對當日流動性股池中位數，與訓練標籤同基準）：
+      - bull_current＝漲幅榜∪外資買超榜（現行偏多池）、bull_no_gainers＝只留外資買超榜
+      - bear_current＝現行四個偏空榜、bear_plus_gainers＝把漲幅榜移進偏空池
+      - risk_filter＝現行偏多池中，OOS risk 機率 ≤ 當日中位數者（purged walk-forward，同 backtest_sizing）
+    回答「改候選池定義，偏多/偏空池的超額會怎麼變」。
+    """
+    import numpy as np  # noqa: PLC0415
+
+    from reports import training_set as T  # noqa: PLC0415
+
+    hs = list(horizons or backtest.horizons())
+    big = T._build_big(hs)
+    if big is None or big.empty:
+        return {"ran": False, "reason": "no usable symbols"}
+
+    pool_defs = {
+        "bull_current": T.BULL_LISTS,
+        "bull_no_gainers": ("top_foreign_buy_5d",),
+        "bear_current": T.BEAR_LISTS,
+        "bear_plus_gainers": (*T.BEAR_LISTS, "top_gainers_5d"),
+    }
+    per_list: dict[str, dict[int, list[float]]] = {k: {h: [] for h in hs} for k in T._MOVER_RULES}
+    per_pool: dict[str, dict[int, list[float]]] = {k: {h: [] for h in hs} for k in pool_defs}
+    members: dict[str, list[int]] = {k: [] for k in T._MOVER_RULES}
+    n_days = 0
+    for _d, day in big.groupby("trade_date"):
+        amt = day["amount"].fillna(0)
+        liquid = day[(amt >= T.MIN_AMOUNT_TWD) & ~day["sector"].isin(T._ETF_SECTORS)]
+        if liquid.empty:
+            continue
+        n_days += 1
+        lists = T._mover_lists(liquid)
+        for name, syms in lists.items():
+            members[name].append(len(syms))
+        for h in hs:
+            col = f"fwd_return_{h}"
+            fwd = liquid.set_index("symbol")[col].dropna()
+            if fwd.empty:
+                continue
+            excess = fwd - float(fwd.median())
+            for name, syms in lists.items():
+                vals = excess.reindex(list(syms)).dropna()
+                if len(vals):
+                    per_list[name][h].append(float(vals.mean()))
+            for pname, keys in pool_defs.items():
+                syms = set().union(*(lists[k] for k in keys))
+                vals = excess.reindex(list(syms)).dropna()
+                if len(vals):
+                    per_pool[pname][h].append(float(vals.mean()))
+
+    def _pack(series: dict[int, list[float]]) -> dict[str, dict[str, Any]]:
+        out = {}
+        for h, vals in series.items():
+            m, t, n = _daily_stats(vals)
+            out[str(h)] = {"mean_excess_pct": m, "t_stat": t, "n_days": n}
+        return out
+
+    lists_out = {k: {**_pack(v), "avg_members": round(float(np.mean(members[k])), 1) if members[k] else 0}
+                 for k, v in per_list.items()}
+    pools_out = {k: _pack(v) for k, v in per_pool.items()}
+
+    # risk 過濾：在 emit 出的偏多樣本上做 OOS walk-forward（與 backtest_sizing 同切分與 embargo）
+    risk_out: dict[str, Any] = {}
+    sc_all = T._emit_all(big, hs, min_amount=T.MIN_AMOUNT_TWD, max_amount=None)
+    for h in hs:
+        if sc_all is None or sc_all.empty:
+            break
+        df = sc_all[(sc_all["horizon"] == h) & (sc_all["side"] == "watchlist")
+                    & sc_all["risk_label"].notna() & sc_all["excess_vs_market_pct"].notna()]
+        df = df.sort_values("as_of").reset_index(drop=True)
+        dates = sorted(df["as_of"].unique().tolist())
+        nd = len(dates)
+        if nd < 10:
+            risk_out[str(h)] = {"oos_days": 0, "reason": f"too few dates {nd}"}
+            continue
+        pos = {d: i for i, d in enumerate(dates)}
+        dpos = df["as_of"].map(pos).to_numpy()
+        X = df[FEATURE_COLUMNS].astype(float)
+        y = df["risk_label"].astype(int).to_numpy()
+        risk_p = np.full(len(df), np.nan)
+        edges = [round(nd * k / 5) for k in range(6)]
+        for k in range(1, 5):
+            ts, te = edges[k], edges[k + 1]
+            tr = dpos < (ts - h)
+            tem = (dpos >= ts) & (dpos < te)
+            if te <= ts or tr.sum() < 50 or tem.sum() < 5 or len(set(y[tr])) < 2:
+                continue
+            cols = [c for c in FEATURE_COLUMNS if X[c][tr].nunique(dropna=True) >= 2]
+            if not cols:
+                continue
+            m = _new_model()
+            m.fit(X[cols][tr], y[tr])
+            risk_p[np.where(tem)[0]] = m.predict_proba(X[cols][tem])[:, 1]
+        df = df.assign(risk_p=risk_p)
+        oos = df[df["risk_p"].notna()]
+        filt, unfilt = [], []
+        for _d, g in oos.groupby("as_of"):
+            if len(g) < 2:
+                continue
+            unfilt.append(float(g["excess_vs_market_pct"].mean()))
+            keep = g[g["risk_p"] <= g["risk_p"].median()]
+            filt.append(float(keep["excess_vs_market_pct"].mean()))
+        fm, ft, fn = _daily_stats(filt)
+        um, _ut, _un = _daily_stats(unfilt)
+        risk_out[str(h)] = {"oos_days": fn, "filtered_mean_excess_pct": fm, "filtered_t_stat": ft,
+                            "unfiltered_mean_excess_pct": um,
+                            "filter_gain_pct": round(fm - um, 3) if fm is not None and um is not None else None}
+
+    out = {
+        "ran": True, "horizons": hs, "n_days": n_days, "top_n": T._TOP,
+        "min_amount_twd": T.MIN_AMOUNT_TWD,
+        "lists": lists_out, "pools": pools_out, "risk_filter": risk_out,
+        "note": ("超額＝h 日報酬減『當日流動性股池中位數』（與訓練標籤同基準；線上歸因用大盤指數，兩者口徑不同）。"
+                 "逐日平均再跨日平均；h 日窗重疊使 t 值偏高，僅供變體間相對比較。未扣交易成本。"),
+        "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
+    }
+    STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+    CANDIDATE_POOLS_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
 def sizing_plan() -> str | None:
     """serving 讀 gate：回最佳 sizing 方案名（回測證明淨贏等權才回），否則 None＝退回等權。"""
     if not settings.enable_sizing:
