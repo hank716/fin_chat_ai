@@ -122,3 +122,9 @@ def test_daily_stats_mean_and_t():
     m, t, n = sc._daily_stats([1.0, 2.0, 3.0])
     assert (m, n) == (2.0, 3) and t == pytest.approx(2.0 / (1.0 / np.sqrt(3)), abs=0.01)
     assert sc._daily_stats([]) == (None, None, 0)
+
+
+def test_date_window_limits_days(run, tmp_path, monkeypatch):
+    days = pd.bdate_range("2024-01-01", periods=N_DAYS)
+    out = sc.backtest_candidate_pools(horizons=(5,), start=str(days[10].date()), end=str(days[39].date()))
+    assert out["n_days"] == 30 and out["window"] == [str(days[10].date()), str(days[39].date())]

@@ -1418,7 +1418,8 @@ def _daily_stats(vals: list[float]) -> tuple[float | None, float | None, int]:
     return round(mean, 3), (round(float(t), 2) if t is not None else None), n
 
 
-def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[str, Any]:
+def backtest_candidate_pools(horizons: tuple[int, ...] | None = None, *,
+                             start: str | None = None, end: str | None = None) -> dict[str, Any]:
     """候選池回測（spec 025 Step 0；純離線、不存模型、不動晨報）。
 
     在歷史回放上，以**與線上同一套選股規則**（training_set._mover_lists）逐日重建各排行榜，
@@ -1428,6 +1429,7 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
       - bear_current＝現行四個偏空榜、bear_plus_gainers＝把漲幅榜移進偏空池
       - risk_filter＝現行偏多池中，OOS risk 機率 ≤ 當日中位數者（purged walk-forward，同 backtest_sizing）
     回答「改候選池定義，偏多/偏空池的超額會怎麼變」。
+    start/end（YYYY-MM-DD）＝只看該區間的交易日（與線上歸因同期對照用）；有區間時另存檔、不覆寫全期結果。
     """
     import numpy as np  # noqa: PLC0415
     import pandas as pd  # noqa: PLC0415
@@ -1438,6 +1440,14 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
     big = T._build_big(hs)
     if big is None or big.empty:
         return {"ran": False, "reason": "no usable symbols"}
+    td = pd.to_datetime(big["trade_date"])
+    if start:
+        big = big[td >= pd.Timestamp(start)]
+        td = pd.to_datetime(big["trade_date"])
+    if end:
+        big = big[td <= pd.Timestamp(end)]
+    if big.empty:
+        return {"ran": False, "reason": f"no days in window {start}~{end}"}
 
     pool_defs = {
         "bull_current": T.BULL_LISTS,
@@ -1539,6 +1549,7 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
 
     out = {
         "ran": True, "horizons": hs, "n_days": n_days, "top_n": T._TOP,
+        "window": [start, end] if (start or end) else None,
         "min_amount_twd": T.MIN_AMOUNT_TWD,
         "lists": lists_out, "pools": pools_out, "risk_filter": risk_out,
         "note": ("超額＝h 日報酬減『當日流動性股池等權平均』（不用中位數：右偏下會系統性高估；線上歸因用大盤指數，口徑不同）。"
@@ -1546,7 +1557,9 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None) -> dict[st
         "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
     }
     STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
-    CANDIDATE_POOLS_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    path = (CANDIDATE_POOLS_PATH if not (start or end) else
+            CANDIDATE_POOLS_PATH.with_name(f"candidate_pools_backtest_{start or 'begin'}_{end or 'end'}.json"))
+    path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     return out
 
 
