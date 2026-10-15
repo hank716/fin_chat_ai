@@ -67,3 +67,38 @@ def test_reports_non_overlapping_sample():
     out = sc.regime_switch_study(daily=_daily(), h=H, lookback=60)
     tr = out["signals"]["trailing_gainers"]
     assert tr["n_nonoverlap"] == pytest.approx(tr["n_days"] / H, abs=2)
+
+
+# ── 多切分點滾動驗證（擴張視窗、embargo h）──
+
+def test_rolling_folds_train_only_on_settled_past():
+    out = sc.regime_switch_rolling(daily=_daily(), h=H, lookback=60, n_blocks=6)
+    assert out["n_folds"] == 6
+    for f in out["folds"]:
+        assert f["train_last_idx"] < f["test_first_idx"] - H + 1      # 訓練最後一筆 ≤ 測試起點 − h
+        assert f["direction"] in (1, -1)
+
+
+def test_rolling_detects_persistent_relation():
+    out = sc.regime_switch_rolling(daily=_daily(), h=H, lookback=60, n_blocks=6)
+    s = out["summary"]
+    # 整段全放/全不放時與靜態策略打平，所以看整體逐日差值而非各段勝場
+    assert s["switch_minus_always_pct"] > 0 and s["switch_minus_always_t"] > 2
+    assert s["switch_minus_never_pct"] > 0 and s["switch_minus_never_t"] > 2
+
+
+def test_rolling_noise_target_shows_no_consistent_gain():
+    rng = np.random.default_rng(9)
+    d = _daily()
+    d[f"top_gainers_5d_{H}"] = rng.normal(0, 1, len(d))              # 與任何訊號無關
+    d[f"bull_no_gainers_{H}"] = rng.normal(0, 1, len(d))             # 虛無假設：兩種池子平均相同
+    d[f"bull_current_{H}"] = (d[f"top_gainers_5d_{H}"] + d[f"bull_no_gainers_{H}"]) / 2
+    out = sc.regime_switch_rolling(daily=d, h=H, lookback=60, n_blocks=6)
+    assert abs(out["summary"]["switch_minus_always_t"] or 0) < 2.5
+
+
+def test_rolling_reports_direction_stability():
+    out = sc.regime_switch_rolling(daily=_daily(), h=H, lookback=60, n_blocks=6)
+    s = out["summary"]
+    assert s["direction_flips"] == sum(1 for a, b in zip(out["folds"], out["folds"][1:])
+                                       if a["direction"] != b["direction"])

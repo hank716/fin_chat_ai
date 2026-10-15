@@ -1666,6 +1666,91 @@ def regime_switch_study(*, daily=None, h: int = 20, lookback: int = 60) -> dict[
     return out
 
 
+def regime_switch_rolling(*, daily=None, h: int = 5, lookback: int = 60, n_blocks: int = 8,
+                          min_train: int = 120) -> dict[str, Any]:
+    """trailing_gainers 切換規則的**多切分點滾動驗證**（擴張視窗）。
+
+    把有訊號的期間（先留 min_train 天當最初訓練）切成 n_blocks 段，逐段當測試：方向與門檻只用
+    「測試起點 − h」之前已結算的日子決定（第 j 天的 h 日結果到 j+h 才知道），測試段評估
+    切換 vs 永遠放 vs 永遠不放。彙總：逐日差值的平均與 t、各段勝負、方向翻轉次數、不重疊樣本。
+    """
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+    from scipy.stats import spearmanr  # noqa: PLC0415
+
+    from reports import training_set as T  # noqa: PLC0415
+
+    persist = daily is None
+    if daily is None:
+        big = T._build_big([h])
+        if big is None or big.empty:
+            return {"ran": False, "reason": "no usable symbols"}
+        daily = _daily_pool_frame(big, [h])
+    d = daily.sort_values("date").reset_index(drop=True)
+    y = d[f"top_gainers_5d_{h}"].astype(float)
+    sig = _trailing_signal(y, h=h, lookback=lookback)
+    always = d[f"bull_current_{h}"].astype(float)
+    never = d[f"bull_no_gainers_{h}"].astype(float)
+    valid = np.where((sig.notna() & always.notna() & never.notna()).to_numpy())[0]
+    if len(valid) < min_train + n_blocks * 10:
+        return {"ran": False, "reason": f"too few days {len(valid)}"}
+    start = valid[min_train]
+    edges = [start + round((len(d) - start) * k / n_blocks) for k in range(n_blocks + 1)]
+
+    folds: list[dict[str, Any]] = []
+    diff_sw_al: list[float] = []
+    diff_sw_nv: list[float] = []
+    diff_days: list[int] = []
+    for k in range(n_blocks):
+        ts, te = edges[k], edges[k + 1]
+        train = np.array([i for i in valid if i <= ts - h and pd.notna(y.iloc[i])])
+        test = np.array([i for i in valid if ts <= i < te])
+        if len(train) < 30 or len(test) < 5:
+            continue
+        thr = float(sig.iloc[train].median())
+        ic = spearmanr(sig.iloc[train], y.iloc[train])[0]
+        direction = -1 if (ic == ic and ic < 0) else 1
+        include = (direction * (sig.iloc[test] - thr) > 0).to_numpy()
+        sw = np.where(include, always.iloc[test], never.iloc[test])
+        al, nv = always.iloc[test].to_numpy(), never.iloc[test].to_numpy()
+        diff_sw_al.extend((sw - al).tolist())
+        diff_sw_nv.extend((sw - nv).tolist())
+        diff_days.extend(test.tolist())
+        folds.append({
+            "fold": k + 1, "test_range": [d["date"].iloc[test[0]], d["date"].iloc[test[-1]]],
+            "test_first_idx": int(test[0]), "train_last_idx": int(train[-1]), "train_days": int(len(train)),
+            "direction": direction, "ic_train": round(float(ic), 3) if ic == ic else None,
+            "threshold": round(thr, 3), "include_rate": round(float(include.mean()), 3),
+            "switch_mean_pct": round(float(sw.mean()), 3), "always_mean_pct": round(float(al.mean()), 3),
+            "never_mean_pct": round(float(nv.mean()), 3),
+        })
+    if not folds:
+        return {"ran": False, "reason": "no usable folds"}
+
+    m_al, t_al, n = _daily_stats(diff_sw_al)
+    m_nv, t_nv, _ = _daily_stats(diff_sw_nv)
+    non = np.arange(0, len(diff_sw_al), h)                      # 每 h 日取一筆＝不重疊
+    m_al_non, t_al_non, n_non = _daily_stats([diff_sw_al[i] for i in non])
+    summary = {
+        "n_test_days": n, "switch_minus_always_pct": m_al, "switch_minus_always_t": t_al,
+        "switch_minus_never_pct": m_nv, "switch_minus_never_t": t_nv,
+        "nonoverlap_n": n_non, "nonoverlap_switch_minus_always_pct": m_al_non,
+        "nonoverlap_switch_minus_always_t": t_al_non,
+        "folds_switch_beats_always": sum(f["switch_mean_pct"] > f["always_mean_pct"] for f in folds),
+        "folds_switch_beats_never": sum(f["switch_mean_pct"] > f["never_mean_pct"] for f in folds),
+        "direction_flips": sum(1 for a, b in zip(folds, folds[1:]) if a["direction"] != b["direction"]),
+    }
+    out = {"ran": True, "horizon": h, "lookback": lookback, "n_blocks": n_blocks, "min_train": min_train,
+           "n_folds": len(folds), "folds": folds, "summary": summary,
+           "note": "擴張視窗；訓練只用測試起點 −h 之前已結算的日子。t 值以逐日差值算（h 日窗重疊會偏高），請同看 nonoverlap。",
+           "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds")}
+    if persist:
+        STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+        (STRATEGY_DIR / f"regime_switch_rolling_h{h}.json").write_text(
+            json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
 def sizing_plan() -> str | None:
     """serving 讀 gate：回最佳 sizing 方案名（回測證明淨贏等權才回），否則 None＝退回等權。"""
     if not settings.enable_sizing:
