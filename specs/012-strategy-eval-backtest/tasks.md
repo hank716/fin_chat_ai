@@ -22,10 +22,10 @@
 
 - [x] T009 建立 scorecard/parquet fixtures（已到期/未到期窗）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [x] T010 [P] test：未來窗嚴格 > as_of，過去資料不洩漏（US1 / FR-001 / SC-001）——`tests/test_backtest_leakage.py::test_forward_window_strictly_after_as_of`
-- [ ] T011 [P] test：觸目標/止損/方向/MFE/MAE/超額計算正確（US1 / FR-002）
-- [ ] T012 [P] test：`run_due_evaluations` 冪等、只評到期、重跑不重複（US1 / FR-003 / SC-004）
-- [ ] T013 [P] test：`build_calibration_block` 足夠→有文字、不足→空字串（US2 / FR-005）
-- [ ] T014 test：`evaluate_effectiveness` verdict 隨樣本量/跨度變化（US3 / FR-006）
+- [x] T011 [P] test：觸目標/止損/方向/MFE/MAE/超額計算正確（US1 / FR-002）——`tests/test_backtest_eval.py`
+- [x] T012 [P] test：`run_due_evaluations` 冪等、只評到期、重跑不重複（US1 / FR-003 / SC-004）——`tests/test_backtest_eval.py`
+- [x] T013 [P] test：`build_calibration_block` 足夠→有文字、不足→空字串（US2 / FR-005）——`tests/test_backtest_eval.py`
+- [x] T014 test：`evaluate_effectiveness` verdict 隨樣本量/跨度變化（US3 / FR-006）——`tests/test_backtest_eval.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -36,6 +36,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 回測評分 | T001–T005, T010–T012 | 程式✅ / 測試⬜ |
-| US2 校準回灌 | T006, T008, T013 | 程式✅ / 測試⬜ |
-| US3 成效評估 | T007, T014 | 程式✅ / 測試⬜ |
+| US1 回測評分 | T001–T005, T010–T012 | 程式✅ / 測試✅ |
+| US2 校準回灌 | T006, T008, T013 | 程式✅ / 測試✅ |
+| US3 成效評估 | T007, T014 | 程式✅ / 測試✅ |
