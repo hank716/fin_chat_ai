@@ -221,20 +221,24 @@ def build_tw_features(window: int = 20) -> dict[str, Any]:
     from data_sources.finmind_loader import FinMindBackoff
     from processor.fundamentals import build_fundamentals
     stocks = {}
+    fundamentals_ok = True
     for s in focus:
         if s not in all_stocks:
             continue
         entry = {k: v for k, v in all_stocks[s].items() if not k.startswith("_")}
+        stocks[s] = entry
+        if not fundamentals_ok:
+            continue
         try:
             fu = build_fundamentals(s)
         except FinMindBackoff as exc:
-            # FinMind 額度耗盡/封鎖：晨報照出，只是這批 focus 缺基本面，不為此中斷整份報告。
-            logger.warning("基本面抓取因 FinMind 退避中止，本批 focus 略過基本面: %s", exc)
-            stocks[s] = entry
-            break
+            # FinMind 額度耗盡/封鎖：其餘 focus 只略過基本面、明細照列——整筆消失的標的會被
+            # guardrail 當成資料範圍外而從候選移除（FR-006：只略過該區塊）。
+            logger.warning("基本面抓取因 FinMind 退避中止，其餘 focus 略過基本面: %s", exc)
+            fundamentals_ok = False
+            continue
         if fu:
             entry["fundamentals"] = fu
-        stocks[s] = entry
 
     as_of = max(as_of_dates) if as_of_dates else (index_block or {}).get("as_of")
     return {

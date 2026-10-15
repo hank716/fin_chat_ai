@@ -90,12 +90,15 @@ def build_intermarket_features(window: int = 20) -> dict[str, Any]:
             "above_ma20": bool(last["close"] > ma20) if not pd.isna(ma20) else None,
         }
 
-    # 跨市場相關性：對齊各資產日報酬（dropna = 共同交易日），取最近 window 天
+    # 跨市場相關性：先把收盤價對齊到共同交易日（dropna），**再**算日報酬，取最近 window 天。
+    # 順序不可反過來：BTC 週末也有價，先各自算報酬再對齊，週一那筆會是 BTC「週日→週一」
+    # 對美股「週五→週一」，兩邊的報酬期間根本不同（FR-007）。
     correlations: dict[str, Any] = {}
     if len(series) >= 2:
-        ret_frame = pd.DataFrame(
-            {sym: df.set_index("trade_date")["ret"] for sym, df in series.items()}
+        close_frame = pd.DataFrame(
+            {sym: df.set_index("trade_date")["close"] for sym, df in series.items()}
         ).dropna()
+        ret_frame = close_frame.pct_change().dropna()
         ret_window = ret_frame.tail(window)
         if len(ret_window) >= 3:
             corr = ret_window.corr()
