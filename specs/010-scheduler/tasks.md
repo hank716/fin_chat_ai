@@ -23,12 +23,12 @@
 ## Phase 3 — 測試基線（未竟，高優先）
 
 - [x] T011 建立 `tests/scheduler/`（httpx mock、freeze time、monkeypatch env）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T012 [P] test：`_parse_times` 多值/去重排序/非法忽略/全空預設（FR-010）
-- [ ] T013 [P] test：`generate_brief` 非交易日略過、交易日 POST（US1 / FR-003）
-- [ ] T014 [P] test：`catch_up` 三分支（補產 / 已有報告 / 未到排程 / 非交易日）（US2 / FR-004）
-- [ ] T015 [P] test：`crawl_catch_up`/`history_catch_up` 未設環境變數即 return；已過最早時間補觸發（US3 / FR-006–007）
-- [ ] T016 [P] test：`_is_trading_day`/`/brief/status` 查詢失敗保守視為交易日（edge / FR-003）
-- [ ] T017 test：觸發函式遇 httpx 例外只記 error、不拋（FR-008 / SC-002）
+- [x] T012 [P] test：`_parse_times` 多值/去重排序/非法忽略/全空預設（FR-010）——`tests/test_scheduler.py`
+- [x] T013 [P] test：`generate_brief` 非交易日略過、交易日 POST（US1 / FR-003）——`tests/test_scheduler.py`
+- [x] T014 [P] test：`catch_up` 三分支（補產 / 已有報告 / 未到排程 / 非交易日）（US2 / FR-004）——`tests/test_scheduler.py`
+- [x] T015 [P] test：`crawl_catch_up`/`history_catch_up` 未設環境變數即 return；已過最早時間補觸發（US3 / FR-006–007）——`tests/test_scheduler.py`
+- [x] T016 [P] test：`_is_trading_day`/`/brief/status` 查詢失敗保守視為交易日（edge / FR-003）——`tests/test_scheduler.py`
+- [x] T017 test：觸發函式遇 httpx 例外只記 error、不拋（FR-008 / SC-002）——`tests/test_scheduler.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -39,6 +39,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 每日定時晨報 | T001–T002, T006, T012–T013 | 程式✅ / 測試⬜ |
-| US2 catch-up 補產 | T004–T005, T014, T016 | 程式✅ / 測試⬜ |
-| US3 選用多軌慢爬 | T007–T010, T015 | 程式✅ / 測試⬜ |
+| US1 每日定時晨報 | T001–T002, T006, T012–T013 | 程式✅ / 測試✅ |
+| US2 catch-up 補產 | T004–T005, T014, T016 | 程式✅ / 測試✅ |
+| US3 選用多軌慢爬 | T007–T010, T015 | 程式✅ / 測試✅ |
