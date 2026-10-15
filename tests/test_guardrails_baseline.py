@@ -78,5 +78,6 @@ def test_inputs_are_not_mutated():
 def test_same_input_gives_identical_report():
     a_clean, a_report = verify.run_guardrails(_brief(), _features())
     b_clean, b_report = verify.run_guardrails(_brief(), _features())
+    a_report.pop("checked_at"), b_report.pop("checked_at")       # 只有檢查時間戳本來就該不同
     assert a_report == b_report
     assert a_clean.model_dump(mode="json") == b_clean.model_dump(mode="json")
