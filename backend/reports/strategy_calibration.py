@@ -1402,6 +1402,49 @@ def backtest_sizing(*, horizon: int | None = None,
 
 
 CANDIDATE_POOLS_PATH = STRATEGY_DIR / "candidate_pools_backtest.json"
+REGIME_SWITCH_PATH = STRATEGY_DIR / "regime_switch_study.json"
+# 候選池變體：名稱 → 組成的排行榜（名單鍵同 training_set._MOVER_RULES）
+_POOL_DEFS: dict[str, tuple[str, ...]] = {
+    "bull_current": ("top_gainers_5d", "top_foreign_buy_5d"),
+    "bull_no_gainers": ("top_foreign_buy_5d",),
+    "bear_current": ("top_losers_5d", "top_foreign_sell_5d", "top_short_margin_ratio", "top_below_index_20d"),
+    "bear_plus_gainers": ("top_losers_5d", "top_foreign_sell_5d", "top_short_margin_ratio",
+                          "top_below_index_20d", "top_gainers_5d"),
+}
+_REGIME_COLS = ("mkt_trend_20d_pct", "mkt_vol_20d_pct", "pc_oi_z20")
+
+
+def _daily_pool_frame(big, hs: list[int]):
+    """回放 big → 逐日一列：各榜/各候選池的 h 日橫斷面超額（減當日流動性股池等權平均）、
+    各榜檔數、當日池平均、行情欄位。backtest_candidate_pools 與 regime_switch_study 共用。"""
+    import pandas as pd  # noqa: PLC0415
+
+    from reports import training_set as T  # noqa: PLC0415
+
+    rows: list[dict[str, Any]] = []
+    for d, day in big.groupby("trade_date"):
+        amt = day["amount"].fillna(0)
+        liquid = day[(amt >= T.MIN_AMOUNT_TWD) & ~day["sector"].isin(T._ETF_SECTORS)]
+        if liquid.empty:
+            continue
+        lists = T._mover_lists(liquid)
+        row: dict[str, Any] = {"date": pd.Timestamp(d).date().isoformat()}
+        for c in _REGIME_COLS:
+            row[c] = float(day[c].iloc[0]) if c in day.columns and pd.notna(day[c].iloc[0]) else None
+        for name, syms in lists.items():
+            row[f"n_{name}"] = len(syms)
+        for h in hs:
+            fwd = liquid.set_index("symbol")[f"fwd_return_{h}"].dropna()
+            row[f"pool_mean_{h}"] = float(fwd.mean()) if len(fwd) else None
+            excess = fwd - float(fwd.mean()) if len(fwd) else fwd
+            for name, syms in lists.items():
+                vals = excess.reindex(list(syms)).dropna()
+                row[f"{name}_{h}"] = float(vals.mean()) if len(vals) else None
+            for pname, keys in _POOL_DEFS.items():
+                vals = excess.reindex(list(set().union(*(lists[k] for k in keys)))).dropna()
+                row[f"{pname}_{h}"] = float(vals.mean()) if len(vals) else None
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _daily_stats(vals: list[float]) -> tuple[float | None, float | None, int]:
@@ -1449,43 +1492,13 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None, *,
     if big.empty:
         return {"ran": False, "reason": f"no days in window {start}~{end}"}
 
-    pool_defs = {
-        "bull_current": T.BULL_LISTS,
-        "bull_no_gainers": ("top_foreign_buy_5d",),
-        "bear_current": T.BEAR_LISTS,
-        "bear_plus_gainers": (*T.BEAR_LISTS, "top_gainers_5d"),
-    }
-    per_list: dict[str, dict[int, list[float]]] = {k: {h: [] for h in hs} for k in T._MOVER_RULES}
-    per_pool: dict[str, dict[int, list[float]]] = {k: {h: [] for h in hs} for k in pool_defs}
-    members: dict[str, list[int]] = {k: [] for k in T._MOVER_RULES}
-    pool_mean: dict[tuple[str, int], float] = {}
-    n_days = 0
-    for _d, day in big.groupby("trade_date"):
-        amt = day["amount"].fillna(0)
-        liquid = day[(amt >= T.MIN_AMOUNT_TWD) & ~day["sector"].isin(T._ETF_SECTORS)]
-        if liquid.empty:
-            continue
-        n_days += 1
-        lists = T._mover_lists(liquid)
-        for name, syms in lists.items():
-            members[name].append(len(syms))
-        for h in hs:
-            col = f"fwd_return_{h}"
-            fwd = liquid.set_index("symbol")[col].dropna()
-            if fwd.empty:
-                continue
-            mu = float(fwd.mean())
-            pool_mean[(pd.Timestamp(_d).date().isoformat(), h)] = mu
-            excess = fwd - mu
-            for name, syms in lists.items():
-                vals = excess.reindex(list(syms)).dropna()
-                if len(vals):
-                    per_list[name][h].append(float(vals.mean()))
-            for pname, keys in pool_defs.items():
-                syms = set().union(*(lists[k] for k in keys))
-                vals = excess.reindex(list(syms)).dropna()
-                if len(vals):
-                    per_pool[pname][h].append(float(vals.mean()))
+    daily = _daily_pool_frame(big, hs)
+    n_days = len(daily)
+    per_list = {k: {h: daily[f"{k}_{h}"].dropna().tolist() for h in hs} for k in T._MOVER_RULES}
+    per_pool = {k: {h: daily[f"{k}_{h}"].dropna().tolist() for h in hs} for k in _POOL_DEFS}
+    members = {k: daily[f"n_{k}"].tolist() for k in T._MOVER_RULES}
+    pool_mean = {(d, h): v for h in hs for d, v in zip(daily["date"], daily[f"pool_mean_{h}"])
+                 if pd.notna(v)}
 
     def _pack(series: dict[int, list[float]]) -> dict[str, dict[str, Any]]:
         out = {}
@@ -1560,6 +1573,96 @@ def backtest_candidate_pools(horizons: tuple[int, ...] | None = None, *,
     path = (CANDIDATE_POOLS_PATH if not (start or end) else
             CANDIDATE_POOLS_PATH.with_name(f"candidate_pools_backtest_{start or 'begin'}_{end or 'end'}.json"))
     path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def _trailing_signal(series, *, h: int, lookback: int):
+    """第 i 天可用的「近期已結算」均值：只用 j ≤ i−h 的值（第 j 天的 h 日結果要到 j+h 才知道）。"""
+    return series.shift(h).rolling(lookback, min_periods=lookback).mean()
+
+
+def regime_switch_study(*, daily=None, h: int = 20, lookback: int = 60) -> dict[str, Any]:
+    """spec 025 研究：能否用當下已知的資訊，事前判斷漲幅榜接下來是動能（贏）還是反轉（輸）。
+
+    目標 y＝第 D 天漲幅榜的 h 日橫斷面超額。三個候選訊號（D 當下皆已知）：
+      - trailing_gainers：漲幅榜近 lookback 日、已結算（落後 ≥h）的平均超額
+      - mkt_trend：大盤 20 日趨勢；pc_fear：選擇權 P/C-OI z-score
+    評估：(1) 訊號與 y 的日內 Spearman（全樣本與每 h 日取一次的不重疊樣本）；
+    (2) 切換策略——方向與門檻**只用前半段**決定，後半段才評估「訊號說動能就把漲幅榜放進偏多池、
+        否則拿掉」vs 永遠放 / 永遠不放。純離線、零 LLM。daily 可注入（測試用）；未注入時由回放建表並落地。
+    """
+    import numpy as np  # noqa: PLC0415
+    from scipy.stats import spearmanr  # noqa: PLC0415
+
+    from reports import training_set as T  # noqa: PLC0415
+
+    persist = daily is None
+    if daily is None:
+        big = T._build_big([h])
+        if big is None or big.empty:
+            return {"ran": False, "reason": "no usable symbols"}
+        daily = _daily_pool_frame(big, [h])
+    d = daily.sort_values("date").reset_index(drop=True)
+    y = d[f"top_gainers_5d_{h}"].astype(float)
+    signals = {
+        "trailing_gainers": _trailing_signal(y, h=h, lookback=lookback),
+        "mkt_trend": d["mkt_trend_20d_pct"].astype(float) if "mkt_trend_20d_pct" in d else None,
+        "pc_fear": d["pc_oi_z20"].astype(float) if "pc_oi_z20" in d else None,
+    }
+    half = len(d) // 2
+    always = d[f"bull_current_{h}"].astype(float)
+    never = d[f"bull_no_gainers_{h}"].astype(float)
+
+    def _ic(x, t) -> float | None:
+        if len(x) < 10 or x.nunique() < 2 or t.nunique() < 2:
+            return None
+        v = spearmanr(x, t)[0]
+        return round(float(v), 3) if v == v else None
+
+    out_sig: dict[str, Any] = {}
+    for name, s in signals.items():
+        if s is None or s.notna().sum() < 20:
+            out_sig[name] = {"ran": False, "reason": "signal unavailable"}
+            continue
+        ok = s.notna() & y.notna()
+        idx = np.where(ok.to_numpy())[0]
+        non = idx[::h]
+        train = ok & (d.index < half)
+        if train.sum() < 10:
+            out_sig[name] = {"ran": False, "reason": "too few training days"}
+            continue
+        thr = float(s[train].median())
+        ic_tr = _ic(s[train], y[train])
+        direction = 1 if (ic_tr is None or ic_tr >= 0) else -1
+        test = (d.index >= half) & s.notna() & always.notna() & never.notna()
+        include = direction * (s - thr) > 0
+        switched = always.where(include, never)
+        sw_m, sw_t, sw_n = _daily_stats(switched[test].tolist())
+        al_m, _, _ = _daily_stats(always[test].tolist())
+        nv_m, _, _ = _daily_stats(never[test].tolist())
+        out_sig[name] = {
+            "n_days": int(ok.sum()), "ic_all": _ic(s[ok], y[ok]),
+            "n_nonoverlap": int(len(non)), "ic_nonoverlap": _ic(s.iloc[non], y.iloc[non]),
+            "rule": {"fitted_on": [d["date"].iloc[0], d["date"].iloc[half - 1]],
+                     "direction": direction, "threshold": round(thr, 3), "ic_train": ic_tr},
+            "switch_test_half": {
+                "test_days": sw_n, "include_rate": round(float(include[test].mean()), 3) if sw_n else None,
+                "switch_mean_pct": sw_m, "switch_t_stat": sw_t,
+                "always_include_mean_pct": al_m, "never_include_mean_pct": nv_m,
+            },
+        }
+    out = {
+        "ran": True, "horizon": h, "lookback": lookback, "n_days": len(d),
+        "date_range": [d["date"].iloc[0], d["date"].iloc[-1]] if len(d) else [],
+        "gainers_excess_all_days": _daily_stats(y.dropna().tolist())[0],
+        "signals": out_sig,
+        "note": ("y＝漲幅榜 h 日超額（減當日流動性股池等權平均）。trailing 訊號落後 ≥h 天、無前視。"
+                 "h 日窗重疊使 ic_all 的有效樣本遠少於 n_days，請以 ic_nonoverlap 與後半段切換結果為準。"),
+        "generated_at": datetime.now(ZoneInfo(settings.tz)).isoformat(timespec="seconds"),
+    }
+    if persist:
+        STRATEGY_DIR.mkdir(parents=True, exist_ok=True)
+        REGIME_SWITCH_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     return out
 
 
