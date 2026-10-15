@@ -79,7 +79,10 @@ map-by-date；`latest_pc_features()` 產最新一日供 serving 注入（定義�
 - **FR-002**: 對外請求 MUST 過 `taifex` rate_limiter bucket（[001]）。
 - **FR-003**: `pc_feature_frame` 與 `latest_pc_features` MUST 用一致定義（`PC_FEATURES`），供訓練 map-by-date 與 serving 注入。
 - **FR-004**: `market_fear_score` MUST 為 P/C-OI z-score 的全史百分位（透明、無擬合、可重現）。
-- **FR-005**: 市場級序列 MUST NOT 當作橫斷面個股特徵（只供 regime / 曝險）。
+- **FR-005**: ~~市場級序列 MUST NOT 當作橫斷面個股特徵（只供 regime / 曝險）。~~
+  **（修訂，2026-10-15，使用者裁決）** 市場級序列（`PC_FEATURES`、`mkt_trend/vol`）MAY 作為**行情特徵**進入
+  `FEATURE_COLUMNS`：同日對所有股同值，對橫斷面排序的直接貢獻預期 ~0（已實測），但樹模型可用於
+  regime 依賴的交互作用。MUST NOT 被當成個股訊號解讀或呈現；曝險覆蓋仍以 `market_fear_score` gate 為準。
 - **FR-006**: 落地 MUST point-in-time（trade_date 對齊）；全流程 MUST 零 LLM。
 
 ### Key Entities

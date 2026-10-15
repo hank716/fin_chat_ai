@@ -42,4 +42,4 @@
 
 ## Phase 5: Convergence
 
-- [ ] T017 Resolve FR-005 contradiction: `backend/reports/backtest.py` FEATURE_COLUMNS includes market-level `pc_oi_ratio`/`pc_oi_z20`/`pc_vol_ratio`/`pc_oi_chg5` as cross-sectional stock features — either remove them from FEATURE_COLUMNS (retrain) or amend FR-005 with the measured rationale (needs owner decision) per FR-005 (contradicts)
+- [x] T017 Resolve FR-005 contradiction: `backend/reports/backtest.py` FEATURE_COLUMNS includes market-level `pc_oi_ratio`/`pc_oi_z20`/`pc_vol_ratio`/`pc_oi_chg5` as cross-sectional stock features — either remove them from FEATURE_COLUMNS (retrain) or amend FR-005 with the measured rationale (needs owner decision) per FR-005 (contradicts)——使用者裁決保留特徵、修訂 FR-005（2026-10-15）
