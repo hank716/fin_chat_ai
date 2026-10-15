@@ -20,11 +20,11 @@
 
 ## Phase 3 — 測試基線（未竟，中優先）
 
-- [ ] T009 [P] test（serving）：`_apply_qlib_scores` 無檔 → no-op（US2 / FR-004 / SC-002）
-- [ ] T010 [P] test（serving）：`qlib_meta` 未過 rank-IC gate → 不重排（US2 / FR-004）
-- [ ] T011 [P] test（serving）：過 gate → 依分數重排偏多（US2）
-- [ ] T012 [P] 靜態檢查：backend 匯入圖無 qlib（US3 / FR-005 / SC-003）
-- [ ] T013 test（離線）：`_walk_forward` 無未來洩漏；rank 指標定義對齊 [013]（US1 / FR-002 / SC-001）
+- [x] T009 [P] test（serving）：`_apply_qlib_scores` 無檔 → no-op（US2 / FR-004 / SC-002）——`tests/test_qlib_isolation.py`（spec 019 後 `_apply_qlib_scores` 併入 `fuse_scores`，改測 `score_qlib`→`fuse_scores`）
+- [x] T010 [P] test（serving）：`qlib_meta` 未過 rank-IC gate → 不重排（US2 / FR-004）——`tests/test_qlib_isolation.py`（spec 019 後 `_apply_qlib_scores` 併入 `fuse_scores`，改測 `score_qlib`→`fuse_scores`）
+- [x] T011 [P] test（serving）：過 gate → 依分數重排偏多（US2）——`tests/test_qlib_isolation.py`（spec 019 後 `_apply_qlib_scores` 併入 `fuse_scores`，改測 `score_qlib`→`fuse_scores`）
+- [x] T012 [P] 靜態檢查：backend 匯入圖無 qlib（US3 / FR-005 / SC-003）——`tests/test_qlib_isolation.py`
+- [x] T013 test（離線）：`_walk_forward` 無未來洩漏；rank 指標定義對齊 [013]（US1 / FR-002 / SC-001）——`tests/test_qlib_isolation.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -35,6 +35,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 離線評估 | T001–T004, T013 | 程式✅ / 測試⬜ |
-| US2 訓練/打分/gate | T005, T007, T009–T011 | 程式✅ / 測試⬜ |
-| US3 隔離 + 自帶排程 | T006, T008, T012 | 程式✅ / 測試⬜ |
+| US1 離線評估 | T001–T004, T013 | 程式✅ / 測試✅ |
+| US2 訓練/打分/gate | T005, T007, T009–T011 | 程式✅ / 測試✅ |
+| US3 隔離 + 自帶排程 | T006, T008, T012 | 程式✅ / 測試✅ |
