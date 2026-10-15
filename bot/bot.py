@@ -37,6 +37,20 @@ for ch_env, user_env in (
         ALLOWED[ch] = user
 
 ASK_TIMEOUT = float(os.environ.get("ASK_TIMEOUT", "120"))
+# Discord 單則上限 2000 字，留一點餘裕
+DISCORD_LIMIT = 1990
+# backend /ask 在答案結尾附的風險免責句以此開頭；截斷時必須連同它一起保留
+_DISCLAIMER_MARK = "\n\n⚠️ "
+
+
+def _fit(answer: str, suffix: str = "") -> str:
+    """把回覆塞進 Discord 長度限制：只砍正文，結尾的免責句與 suffix（成本行）一定保留。"""
+    if len(answer) + len(suffix) <= DISCORD_LIMIT:
+        return answer + suffix
+    cut = answer.rfind(_DISCLAIMER_MARK)
+    body, tail = (answer[:cut], answer[cut:]) if cut > 0 else (answer, "")
+    room = max(DISCORD_LIMIT - len(tail) - len(suffix) - 1, 0)
+    return body[:room] + "…" + tail + suffix
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -58,12 +72,12 @@ async def _ask_backend(
         d = resp.json()
         answer = d.get("answer", "（無回應）")
         if d.get("budget_exceeded"):
-            return answer
+            return _fit(answer)
         cost_line = (
             f"\n\n💰 本次估算：NT${d.get('cost_twd', 0):.2f}"
             f"　📊 今日累計：NT${d.get('today_spent', 0):.1f} / NT${d.get('daily_limit', 0):.0f}"
         )
-        return (answer + cost_line)[:1990]
+        return _fit(answer, cost_line)
     except Exception as exc:  # noqa: BLE001
         logger.error("/ask 例外: %s", exc)
         return "⚠️ 查詢發生錯誤，請稍後再試。"

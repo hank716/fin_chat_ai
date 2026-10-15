@@ -194,8 +194,32 @@ def test_general_channel_does_not_send_conversation_id(bot, monkeypatch):
 
 # ── T014 回覆截斷到 Discord 長度限制內 ──
 
+DISCLAIMER = "\n\n⚠️ 以上方向/目標價/止損為技術面輔助參考，非保證、請自行判斷風險。"
+
+
 def test_long_reply_is_truncated_under_discord_limit(bot, monkeypatch):
     out = _ask(bot, monkeypatch, _Http(_resp(body={"answer": "長" * 5000, "cost_twd": 1})))
+    assert len(out) <= 2000
+
+
+def test_truncation_keeps_disclaimer_and_cost_line(bot, monkeypatch):
+    """截斷只能砍正文：結尾的風險免責句（後端附加）與成本行必須留著。"""
+    body = {"answer": "長" * 5000 + DISCLAIMER, "cost_twd": 1.5, "today_spent": 10.0, "daily_limit": 45}
+    out = _ask(bot, monkeypatch, _Http(_resp(body=body)))
+    assert len(out) <= 2000
+    assert DISCLAIMER.strip() in out
+    assert out.rstrip().endswith("NT$45")                       # 成本行在最後
+    assert "…" in out                                           # 正文有被截、且看得出來
+
+
+def test_short_reply_is_unchanged(bot, monkeypatch):
+    body = {"answer": "短答" + DISCLAIMER, "cost_twd": 1, "today_spent": 1, "daily_limit": 45}
+    out = _ask(bot, monkeypatch, _Http(_resp(body=body)))
+    assert out.startswith("短答" + DISCLAIMER) and "…" not in out
+
+
+def test_long_budget_exceeded_reply_is_also_capped(bot, monkeypatch):
+    out = _ask(bot, monkeypatch, _Http(_resp(body={"answer": "長" * 5000, "budget_exceeded": True})))
     assert len(out) <= 2000
 
 
