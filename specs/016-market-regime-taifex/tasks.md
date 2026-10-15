@@ -20,11 +20,11 @@
 ## Phase 3 — 測試基線（未竟，中優先）
 
 - [x] T008 建立 pcr fixtures（多日序列）+ httpx mock（OpenAPI/CSV）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
-- [ ] T009 [P] test：`refresh_recent` upsert 無重複列（US1 / FR-001）
-- [ ] T010 [P] test：`backfill` CSV 成功；CSV 失敗退回 OpenAPI seed（US1 / FR-001）
-- [ ] T011 [P] test：抓取過 rate_limiter（taifex bucket）（US1 / FR-002）
-- [ ] T012 [P] test：`pc_feature_frame` 與 `latest_pc_features` 欄位/定義一致（US2 / FR-003 / SC-002）
-- [ ] T013 [P] test：`market_fear_score` 百分位計算正確、可重現（US3 / FR-004 / SC-003）
+- [x] T009 [P] test：`refresh_recent` upsert 無重複列（US1 / FR-001）——`tests/test_taifex_regime.py`
+- [x] T010 [P] test：`backfill` CSV 成功；CSV 失敗退回 OpenAPI seed（US1 / FR-001）——`tests/test_taifex_regime.py`
+- [x] T011 [P] test：抓取過 rate_limiter（taifex bucket）（US1 / FR-002）——`tests/test_taifex_regime.py`
+- [x] T012 [P] test：`pc_feature_frame` 與 `latest_pc_features` 欄位/定義一致（US2 / FR-003 / SC-002）——`tests/test_taifex_regime.py`
+- [x] T013 [P] test：`market_fear_score` 百分位計算正確、可重現（US3 / FR-004 / SC-003）——`tests/test_taifex_regime.py`
 - [x] T014 test：point-in-time——asof 之後資料不影響當日 gauge（FR-006）——`tests/test_pc_alignment.py`（訓練用前一交易日、serving 排除當日）
 
 ## Phase 4 — 後續強化（backlog，選用）
@@ -36,6 +36,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 P/C 資料管線 | T001–T004, T009–T011 | 程式✅ / 測試⬜ |
-| US2 市場特徵一致 | T005, T012 | 程式✅ / 測試⬜ |
-| US3 恐慌 gauge | T006–T007, T013–T014 | 程式✅ / 測試⬜ |
+| US1 P/C 資料管線 | T001–T004, T009–T011 | 程式✅ / 測試✅ |
+| US2 市場特徵一致 | T005, T012 | 程式✅ / 測試✅ |
+| US3 恐慌 gauge | T006–T007, T013–T014 | 程式✅ / 測試✅ |
