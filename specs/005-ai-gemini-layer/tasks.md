@@ -26,7 +26,7 @@
 
 > 以 `respx`/httpx mock 打 Gemini 端點；redis 以 fakeredis/monkeypatch。
 
-- [ ] T013 建立 `tests/ai/`（httpx mock transport + fixtures）
+- [x] T013 建立 `tests/ai/`（httpx mock transport + fixtures）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T014 [P] test：`_generate_json` 合法 JSON → dict+usage；非 JSON/空/no candidates → GeminiError（US1）
 - [ ] T015 [P] test：503→Unavailable 重試、429→QuotaExceeded、400→BadRequest 不重試（US1 / FR-003）
 - [ ] T016 [P] test：`_usage_of` 含 thoughtsTokenCount、cached/tool 分離（FR-008 / SC-003）

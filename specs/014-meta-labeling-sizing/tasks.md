@@ -19,8 +19,8 @@
 
 ## Phase 3 — 測試基線（未竟，高優先）
 
-- [ ] T008 建立 OHLC/樣本 fixtures + monkeypatch 模型路徑
-- [ ] T009 [P] test：`_triple_barrier` 先觸上/下/時間障礙的標籤正確（US1 / FR-001）
+- [x] T008 建立 OHLC/樣本 fixtures + monkeypatch 模型路徑——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
+- [x] T009 [P] test：`_triple_barrier` 先觸上/下/時間障礙的標籤正確（US1 / FR-001）——`tests/test_training_set_leakage.py::test_triple_barrier_window_is_strictly_forward_and_bounded`、`test_triple_barrier_same_day_double_touch_takes_lower_bound`
 - [ ] T010 [P] test：meta 標把握度但方向不變（US1 / FR-002 / SC-001）
 - [ ] T011 [P] test：`_apply_risk_scores` 對偏多標高風險、強化避雷（US2 / FR-003）
 - [ ] T012 [P] test：`_apply_sizing` 兩道 gate 未過 → no-op；過 gate → 權重×曝險（US3 / FR-004, FR-006）

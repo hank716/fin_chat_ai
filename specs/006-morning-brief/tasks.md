@@ -24,7 +24,7 @@
 
 ## Phase 3 — 測試基線（未竟，高優先）
 
-- [ ] T013 建立 `tests/reports/`（features/BriefResult/tracker/guardrail 以 fixtures/monkeypatch）
+- [x] T013 建立 `tests/reports/`（features/BriefResult/tracker/guardrail 以 fixtures/monkeypatch）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T014 [P] test：`generate_morning_brief` 依序 LLM→guardrail→落地，report 含必要欄位（US1 / FR-004）
 - [ ] T015 [P] test：`load_report` 非法 report_id → None（US1 / FR-007 / 路徑穿越）
 - [ ] T016 [P] test：打分函式拋例外 → 晨報仍完成、缺該 `*_scores`（US3 / FR-005 / SC-002）

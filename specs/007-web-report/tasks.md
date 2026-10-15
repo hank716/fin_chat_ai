@@ -15,7 +15,7 @@
 
 ## Phase 2 — 測試基線（未竟，中優先）
 
-- [ ] T007 建立 `tests/web/`（FastAPI TestClient + 樣本 report dict）
+- [x] T007 建立 `tests/web/`（FastAPI TestClient + 樣本 report dict）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T008 [P] test：`GET /report/{id}` 回 200 HTML、含候選/evidence（US1 / FR-001）
 - [ ] T009 [P] test：`.json`/`.md` 後綴回對應格式（US1 / FR-002）
 - [ ] T010 [P] test：不存在 report_id → 404（US1 / FR-005）

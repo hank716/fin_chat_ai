@@ -24,7 +24,7 @@
 
 ## Phase 3 — 測試基線（未竟，高優先）
 
-- [ ] T013 建立 `tests/api/`（FastAPI TestClient + monkeypatch tracker/gemini/redis）
+- [x] T013 建立 `tests/api/`（FastAPI TestClient + monkeypatch tracker/gemini/redis）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T014 [P] test：逾限無權杖 → 婉拒 `budget_exceeded`；有權杖 → 放行且計費（US1 / FR-001–002）
 - [ ] T015 [P] test：非財務題早退僅計分類成本；分類器失敗 fail-open（US2 / FR-003）
 - [ ] T016 [P] test：無晨報 → 404（US3 / FR-004）

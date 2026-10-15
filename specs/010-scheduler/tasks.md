@@ -22,7 +22,7 @@
 
 ## Phase 3 — 測試基線（未竟，高優先）
 
-- [ ] T011 建立 `tests/scheduler/`（httpx mock、freeze time、monkeypatch env）
+- [x] T011 建立 `tests/scheduler/`（httpx mock、freeze time、monkeypatch env）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T012 [P] test：`_parse_times` 多值/去重排序/非法忽略/全空預設（FR-010）
 - [ ] T013 [P] test：`generate_brief` 非交易日略過、交易日 POST（US1 / FR-003）
 - [ ] T014 [P] test：`catch_up` 三分支（補產 / 已有報告 / 未到排程 / 非交易日）（US2 / FR-004）

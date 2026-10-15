@@ -26,14 +26,14 @@
 
 > 憲章 II 要求成本模組可驗收；目前無 `tests/`。
 
-- [ ] T013 建立 `tests/cost/`（redis 以 fakeredis 或 monkeypatch `redis_client`）
-- [ ] T014 [P] test：`estimate_cost_twd` cache 折扣（input−cached 才計 input 價）（US2）
-- [ ] T015 [P] test：pro >200k 套 large 級距、flash 不分級距（US2 / FR-001）
-- [ ] T016 [P] test：grounding 第 5,001 次起才計 $14/1k×匯率（US2 / FR-006）
-- [ ] T017 [P] test：`check_budget` 月滿/日滿/皆未滿三分支（US1 / SC-004）
-- [ ] T018 [P] test：`set_month_total` 覆寫 + TTL 保留；`_get` redis 失敗回 0.0（US3 / edge）
-- [ ] T019 test：校準端點未設 ADMIN_TOKEN → 503、錯 token → 401（US3 / FR-008 / SC-003）
-- [ ] T020 test：`/ask` 逾限早退不發 grounded 呼叫（SC-004）
+- [x] T013 建立 `tests/cost/`（redis 以 fakeredis 或 monkeypatch `redis_client`）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
+- [x] T014 [P] test：`estimate_cost_twd` cache 折扣（input−cached 才計 input 價）（US2）——`tests/test_cost_tracker.py::test_cache_discount_applied`
+- [x] T015 [P] test：pro >200k 套 large 級距、flash 不分級距（US2 / FR-001）——`tests/test_cost_tracker.py::test_large_tier_over_200k`、`test_rates_model_routing_and_tier_boundary`
+- [x] T016 [P] test：grounding 第 5,001 次起才計 $14/1k×匯率（US2 / FR-006）——`tests/test_cost_budget_gate.py`
+- [x] T017 [P] test：`check_budget` 月滿/日滿/皆未滿三分支（US1 / SC-004）——`tests/test_cost_budget_gate.py`
+- [x] T018 [P] test：`set_month_total` 覆寫 + TTL 保留；`_get` redis 失敗回 0.0（US3 / edge）——`tests/test_cost_budget_gate.py`
+- [x] T019 test：校準端點未設 ADMIN_TOKEN → 503、錯 token → 401（US3 / FR-008 / SC-003）——`tests/test_cost_budget_gate.py`
+- [x] T020 test：`/ask` 逾限早退不發 grounded 呼叫（SC-004）——`tests/test_cost_budget_gate.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -45,6 +45,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 每日/每月上限 | T005–T006, T009, T017, T020 | 程式✅ / 測試⬜ |
-| US2 精確費用換算 | T001–T004, T014–T016 | 程式✅ / 測試⬜ |
-| US3 月度校準 | T007, T010, T018–T019 | 程式✅ / 測試⬜ |
+| US1 每日/每月上限 | T005–T006, T009, T017, T020 | 程式✅ / 測試✅ |
+| US2 精確費用換算 | T001–T004, T014–T016 | 程式✅ / 測試✅ |
+| US3 月度校準 | T007, T010, T018–T019 | 程式✅ / 測試✅ |

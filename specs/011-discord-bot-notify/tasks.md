@@ -19,7 +19,7 @@
 
 ## Phase 3 — 測試基線（未竟，中優先）
 
-- [ ] T008 建立 `tests/bot/`、`tests/notify/`（mock discord.Message + httpx mock）
+- [x] T008 建立 `tests/bot/`、`tests/notify/`（mock discord.Message + httpx mock）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T009 [P] test：對應 user 在專屬頻道 → 轉 /ask；越權/他人 → 忽略（US1 / FR-002）
 - [ ] T010 [P] test：daily-report 頻道（含 thread）不互動（US1 / FR-003）
 - [ ] T011 [P] test：thread 帶 conversation_id；一般頻道不帶（US2 / FR-004）

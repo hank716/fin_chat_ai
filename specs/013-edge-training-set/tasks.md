@@ -21,10 +21,10 @@
 
 ## Phase 3 — 測試基線（未竟，高優先）
 
-- [ ] T010 建立行情 parquet fixtures（多日多股）
-- [ ] T011 [P] test：訓練集特徵 `≤ D`、標籤 `> D`（無洩漏）（US1 / FR-002 / SC-001）
+- [x] T010 建立行情 parquet fixtures（多日多股）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
+- [x] T011 [P] test：訓練集特徵 `≤ D`、標籤 `> D`（無洩漏）（US1 / FR-002 / SC-001）——`tests/test_training_set_leakage.py::test_forward_labels_use_future_features_use_past`
 - [ ] T012 [P] test：回放選股與線上 movers 同規則（門檻/排除 ETF/top）（US1 / FR-001）
-- [ ] T013 [P] test：`_overlap_weights` 對重疊窗降權（FR-006）
+- [x] T013 [P] test：`_overlap_weights` 對重疊窗降權（FR-006）——`tests/test_training_set_leakage.py::test_overlap_weights_dilute_within_group`、`test_overlap_weights_do_not_cross_symbol`
 - [ ] T014 [P] test：樣本不足 → `train_edge_model` 跳過（US2 / FR-003 / SC-002）
 - [ ] T015 [P] test：`_apply_edge_scores` 無模型 → no-op；例外 → warning 續行（US3 / FR-005 / SC-003）
 - [ ] T016 test：walk-forward 切分無時間洩漏；precision@k 計算正確（US2 / FR-004）

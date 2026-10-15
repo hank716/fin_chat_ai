@@ -27,7 +27,7 @@
 
 ## Phase 4 — 測試基線（未竟，高優先）
 
-- [ ] T013 建立 `tests/data_sources/`（fakeredis + httpx mock + freeze time）
+- [x] T013 建立 `tests/data_sources/`（fakeredis + httpx mock + freeze time）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T014 [P] test：`acquire` token 足夠即回、不足阻塞、逾時 `RateLimitTimeout`（US1 / FR-002–003）
 - [ ] T015 [P] test：整點配額用罄 `RateLimitExhausted`；退回增量不永久灌大計數（US1 / FR-003）
 - [ ] T016 [P] test：wall-clock 補 token；時鐘回退不扣 token（FR-001, FR-004）

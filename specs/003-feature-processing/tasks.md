@@ -22,7 +22,7 @@
 
 ## Phase 3 — 測試基線（未竟，高優先）
 
-- [ ] T011 建立 `tests/processor/`（parquet fixtures + FinMind mock）
+- [x] T011 建立 `tests/processor/`（parquet fixtures + FinMind mock）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [ ] T012 [P] test：`build_tw_features` 型別 JSON-safe、NaN→None、籌碼單位「張」（US1 / FR-001）
 - [ ] T013 [P] test：相對強弱/連買天數計算正確（US1 / FR-002）
 - [ ] T014 [P] test：混入未來日列 → 特徵/as_of 不受影響（US2 / FR-003 / SC-001）
