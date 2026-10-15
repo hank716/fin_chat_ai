@@ -21,12 +21,12 @@
 
 - [x] T008 建立 `tests/storage/`（tmp_path parquet + monkeypatch settings + httpx mock）——改採平放 `tests/test_*.py` + 共用 `tests/conftest.py`，各檔自帶 fixtures，不另建子目錄
 - [x] T009 [P] test：`write_prices` 落 per-symbol；同日重寫 keep-last 無重複列（US1 / FR-001）——`tests/test_local_store.py::test_upsert_dedup_keeps_last_and_sorts`、`test_write_by_symbol_survives_one_corrupt_symbol`
-- [ ] T010 [P] test：trade_date > today+2 天 → 不落地（US2 / FR-002 / SC-001）
+- [x] T010 [P] test：trade_date > today+2 天 → 不落地（US2 / FR-002 / SC-001）——`tests/test_storage_retention.py`
 - [x] T011 [P] test：UTC 早 1 天的當日合法列因寬限不被誤殺（US2 / edge）——`tests/test_local_store.py::test_purge_keeps_within_grace`
-- [ ] T012 [P] test：`local_storage_report` footprint≥budget→critical、host free<15GB→critical、整體取最嚴重（US3 / FR-003）
-- [ ] T013 [P] test：`enforce_retention` evict 最舊報告（json+md）、保留 watchlist adhoc（US3 / FR-004）
-- [ ] T014 [P] test：`restore_report` 從 pCloud 下載回本機（US3 / FR-005 / SC-003）
-- [ ] T015 test：retention/pCloud 失敗不拋、不阻斷（FR-006 / SC-004）
+- [x] T012 [P] test：`local_storage_report` footprint≥budget→critical、host free<15GB→critical、整體取最嚴重（US3 / FR-003）——`tests/test_storage_retention.py`
+- [x] T013 [P] test：`enforce_retention` evict 最舊報告（json+md）、保留 watchlist adhoc（US3 / FR-004）——`tests/test_storage_retention.py`
+- [x] T014 [P] test：`restore_report` 從 pCloud 下載回本機（US3 / FR-005 / SC-003）——`tests/test_storage_retention.py`
+- [x] T015 test：retention/pCloud 失敗不拋、不阻斷（FR-006 / SC-004）——`tests/test_storage_retention.py`
 
 ## Phase 4 — 後續強化（backlog，選用）
 
@@ -37,6 +37,6 @@
 
 | Story | Tasks | 狀態 |
 |-------|-------|:----:|
-| US1 parquet SSOT upsert | T001, T003, T009 | 程式✅ / 測試⬜ |
-| US2 未來日寫入閘 | T002, T010–T011 | 程式✅ / 測試⬜ |
-| US3 預算/retention/pCloud | T004–T007, T012–T015 | 程式✅ / 測試⬜ |
+| US1 parquet SSOT upsert | T001, T003, T009 | 程式✅ / 測試✅ |
+| US2 未來日寫入閘 | T002, T010–T011 | 程式✅ / 測試✅ |
+| US3 預算/retention/pCloud | T004–T007, T012–T015 | 程式✅ / 測試✅ |
