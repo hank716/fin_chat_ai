@@ -37,7 +37,7 @@
 | 015 | qlib-offline | `271bf6f` | `qlib_offline/` | ✅ |
 | 016 | market-regime-taifex | `8772d76` | `backend/data_sources/taifex_loader.py`,`processor/market_regime.py` | ✅ |
 | 017 | adjusted-prices | `OPTIMIZATION_PLAN` WP1.1+1.2 | `backend/processor/adj_factors.py`,`storage/local_store.py` | ✅ US1+US2 |
-| 018 | corporate-actions | 2026-10-13 盤點 | `backend/processor/adj_factors.py`,`data_sources/price_integrity.py` | ✅ 已部署；🟡 Phase 4（TWII 週日幽靈列） |
+| 018 | corporate-actions | 2026-10-13 盤點 | `backend/processor/adj_factors.py`,`data_sources/price_integrity.py` | ✅ 已部署（含 Phase 4 TWII 週日幽靈列，10/16 驗收） |
 | 019 | score-fusion | `OPTIMIZATION_PLAN` WP2.2+2.3 | `backend/reports/strategy_calibration.py`,`morning_brief.py` | ✅（小型股帶未進候選池，見 tasks T015） |
 | 020 | feature-batch | `OPTIMIZATION_PLAN` WP2.4 子項 1 | （已回退，無程式） | ✅ 已量測、回退 |
 | 021 | narrative-number-guard | `OPTIMIZATION_PLAN` WP3.3 | `backend/guardrails/narrative_numbers.py`,`verify.py` | ✅ 已上線驗證 |

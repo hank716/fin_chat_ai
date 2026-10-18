@@ -40,4 +40,4 @@
 - [x] T017 `backend/data_sources/yfinance_loader.py`：market 為 `tw` 的標的丟掉週末日期（美股、加密不動） per FR-011 (partial)
 - [x] T018 [P] `tests/test_price_integrity.py`：只有 yfinance 列的日期不算交易日、不算缺日、判為幽靈日並被 purge；指數列不影響上櫃日曆 per FR-012 (missing)
 - [x] T019 [P] `tests/test_yfinance_loader.py`：mock `yf.Ticker().history` 含週日列 → TWII 丟掉、BTC 保留 per FR-011 (missing)
-- [ ] T020 rebuild backend 部署；次一排程晨報確認 `_price_integrity.json` 的 `purged.rows_removed>=1`、`still_missing==[]`，`TWII.parquet` 無 2026-09-20 per SC-006 (missing)
+- [x] T020 rebuild backend 部署；次一排程晨報確認 `_price_integrity.json` 的 `purged.rows_removed>=1`、`still_missing==[]`，`TWII.parquet` 無 2026-09-20 per SC-006——10/16 晨報：`rows_removed=1`（ghost 2026-09-20）、`still_missing=[]`、`still_ghost=[]`；TWII.parquet 566 列無週末列。附註：10/16 08:32 抓取時 Yahoo 尚未發布 10/15 ^TWII 列（現已補上），下次 3mo 視窗自動補齊，非本 spec 回歸
