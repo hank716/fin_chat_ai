@@ -343,7 +343,8 @@ def default_reports_dir() -> Path:
         return Path("storage/reports")
 
 
-def aggregate(reports_dir: str | Path | None = None) -> dict[str, Any]:
+def aggregate(reports_dir: str | Path | None = None, *,
+              since: str | None = None, until: str | None = None) -> dict[str, Any]:
     """掃過所有報告 JSON，回可直接回答 SC-002 的彙總。
 
     舊報告（沒有 `clues` 欄位）**不混進分母**——那會讓「未查證」看起來憑空變少。
@@ -360,8 +361,16 @@ def aggregate(reports_dir: str | Path | None = None) -> dict[str, Any]:
     skipped: Counter[str] = Counter()
 
     root = Path(reports_dir) if reports_dir is not None else default_reports_dir()
+    if not root.is_dir():
+        # 路徑打錯（或把 --help 之類的旗標當成路徑）時 glob 會靜默回空，印出一張「0 篇」的表，
+        # 看起來像沒有資料而不是指錯地方——直接報錯。
+        raise FileNotFoundError(f"報告目錄不存在：{root}")
     for path in sorted(root.glob("morning_*.json")):
         date = _report_date(path)
+        # 觀察窗篩選（YYYYMMDD，含端點）：例如只看某次修正上線之後的報告，避免舊資料稀釋
+        if (since and date and date < since) or (until and date and date > until):
+            skipped["out_of_window"] += 1
+            continue
         if date and date <= REDIRECT_BUG_CUTOFF:
             skipped["redirect_bug"] += 1
             continue
@@ -422,6 +431,8 @@ def aggregate(reports_dir: str | Path | None = None) -> dict[str, Any]:
         "checked_n": checked_n,
         "adjudicated_n": adjudicated_n,
         "adjudication_rate": _ratio(adjudicated_n, total),
+        # 已開到原文的線索中有多少換到裁決——023 US3 重啟條件看的就是這個轉換率
+        "conversion_rate": _ratio(adjudicated_n, checked_n),
         "failures_n": failures,
         "budget_share": _ratio(outcome_counts[UNCHECKED_BUDGET], failures),
         "unreachable_share": _ratio(outcome_counts[UNCHECKED_UNREACHABLE], failures),
@@ -453,6 +464,9 @@ def render(summary: dict[str, Any]) -> str:
             lines.append("  {} {:<22} {:>4}  {}".format(mark, outcome, count, share))
         lines.append("  裁決成功率（confirmed+contradicted）：{}".format(
             _pct(summary["adjudication_rate"])))
+        lines.append("  已開啟→裁決轉換率：{}（{} / {}）".format(
+            _pct(summary.get("conversion_rate")), summary["adjudicated_n"],
+            summary["checked_n"]))
         lines.append(
             "  失敗歸因：額度不足 {} / 來源打不開 {} → SC-002 涵蓋率 {}（門檻 95%）".format(
                 _pct(summary["budget_share"]), _pct(summary["unreachable_share"]),
@@ -497,17 +511,33 @@ def render(summary: dict[str, Any]) -> str:
             _pct(legacy["adjudication_rate"]), legacy["verdicts"]))
     if summary["skipped"]:
         lines.append(
-            "排除：{}（redirect_bug=轉址 bug 期、fallback=降級供應商、frugal=節儉模式）"
+            "排除：{}（redirect_bug=轉址 bug 期、fallback=降級供應商、frugal=節儉模式、"
+            "out_of_window=不在 --since/--until 範圍）"
             .format(summary["skipped"])
         )
     return "\n".join(lines)
 
 
-def main() -> None:
-    import sys
+def main(argv: list[str] | None = None) -> None:
+    import argparse
 
-    root = sys.argv[1] if len(sys.argv) > 1 else None
-    print(render(aggregate(root)))
+    parser = argparse.ArgumentParser(
+        prog="python -m reports.verification_stats",
+        description="跨晨報彙總查證結局（spec 023 US1）")
+    parser.add_argument("reports_dir", nargs="?", default=None,
+                        help="報告目錄（預設為 LOCAL_STORAGE_PATH/reports）")
+    parser.add_argument("--since", help="只計入此日（含）之後的報告，格式 YYYYMMDD")
+    parser.add_argument("--until", help="只計入此日（含）之前的報告，格式 YYYYMMDD")
+    args = parser.parse_args(argv)
+    for flag in ("since", "until"):
+        value = getattr(args, flag)
+        if value and not (len(value) == 8 and value.isdigit()):
+            parser.error(f"--{flag} 需為 YYYYMMDD，收到 {value!r}")
+    try:
+        summary = aggregate(args.reports_dir, since=args.since, until=args.until)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    print(render(summary))
 
 
 if __name__ == "__main__":

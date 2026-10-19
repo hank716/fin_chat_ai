@@ -308,3 +308,45 @@ def test_missing_content_length_keeps_old_behaviour():
     out = _one(["https://a.example/1"], [_check("https://a.example/1", "unverifiable")],
                [_attempt("https://a.example/1")])
     assert out.outcome == vs.CHECKED_INSUFFICIENT
+
+
+# ── 觀察窗篩選與路徑防呆 ────────────────────────────────────────────────
+
+def test_aggregate_window_filters_by_report_date(tmp_path):
+    """--since/--until 讓修正前後可以分開看（023 US3 重啟條件要求只看 direct 上線後）。"""
+    good = {"decision_provider": "anthropic", "frugal_mode": False,
+            "verification": {"clues": [_clue(vs.CONFIRMED)]}}
+    for day in ("20261012", "20261013", "20261014", "20261019"):
+        _write_report(tmp_path, f"morning_{day}_082000.json", good)
+    summary = vs.aggregate(tmp_path, since="20261014")
+    assert summary["days"] == 2
+    assert summary["skipped"] == {"out_of_window": 2}
+    assert vs.aggregate(tmp_path, until="20261013")["days"] == 2
+    assert vs.aggregate(tmp_path, since="20261013", until="20261014")["days"] == 2
+
+
+def test_conversion_rate_is_verdicts_over_opened(tmp_path):
+    _write_report(tmp_path, "morning_20261014_082000.json", {
+        "decision_provider": "anthropic", "frugal_mode": False,
+        "verification": {"clues": [
+            _clue(vs.CONFIRMED), _clue(vs.CHECKED_INSUFFICIENT),
+            _clue(vs.UNCHECKED_BUDGET),
+        ]},
+    })
+    summary = vs.aggregate(tmp_path)
+    assert summary["conversion_rate"] == 0.5          # 1 裁決 / 2 開到原文（budget 不算）
+    assert "轉換率" in vs.render(summary)
+
+
+def test_missing_reports_dir_raises_instead_of_empty_table(tmp_path):
+    """路徑錯誤不得印出「0 篇」的空表——那看起來像沒資料，而不是指錯地方。"""
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        vs.aggregate(tmp_path / "nope")
+    with pytest.raises(SystemExit):
+        vs.main(["--help-typo-as-path"])                # 未知旗標由 argparse 擋下
+    with pytest.raises(SystemExit):
+        vs.main([str(tmp_path / "nope")])
+    with pytest.raises(SystemExit):
+        vs.main([str(tmp_path), "--since", "2026-10-14"])
