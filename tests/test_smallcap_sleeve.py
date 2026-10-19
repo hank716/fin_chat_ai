@@ -179,3 +179,25 @@ def test_restriction_list_fails_closed(monkeypatch):
 
     monkeypatch.setattr(trading_restrictions.httpx, "Client", _Client)
     assert trading_restrictions.restricted_symbols() is None
+
+
+def test_tpex_altered_trading_rows_are_filtered_by_flags(monkeypatch):
+    """上櫃 tpex_cmode：任一限制旗標（全形Ｙ）才算受限；只有財報公告註記的不算（T015）。"""
+    cmode = [
+        {"SecuritiesCompanyCode": "3064", "AlteredTrading": "Ｙ", " FinancialAnnouncements": "Ｙ"},
+        {"SecuritiesCompanyCode": "2067", "AlteredTrading": "", "SuspensionOfTrading": "Ｙ"},
+        {"SecuritiesCompanyCode": "3629", "PeriodicTrading": "Ｙ", "MatchingFrequency": "030"},
+        {"SecuritiesCompanyCode": "5555", "AlteredTrading": "", " FinancialAnnouncements": "Ｙ"},
+    ]
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url):
+            rows = cmode if url.endswith("tpex_cmode") else []
+            return type("R", (), {"raise_for_status": lambda s: None,
+                                  "json": lambda s: rows})()
+
+    monkeypatch.setattr(trading_restrictions.httpx, "Client", _Client)
+    assert trading_restrictions.restricted_symbols() == {"3064", "2067", "3629"}

@@ -42,8 +42,8 @@
 | 020 | feature-batch | `OPTIMIZATION_PLAN` WP2.4 子項 1 | （已回退，無程式） | ✅ 已量測、回退 |
 | 021 | narrative-number-guard | `OPTIMIZATION_PLAN` WP3.3 | `backend/guardrails/narrative_numbers.py`,`verify.py` | ✅ 已上線驗證 |
 | 022 | llm-tiering | `f56f2f0` | `backend/ai/claude_client.py`,`retrieval.py`,`llm_client.py` | ✅ |
-| 024 | smallcap-candidates | 2026-10-13 選股歸因 | `backend/processor/tw_features.py`,`reports/morning_brief.py` | 🟡 第一階段（模型名單）✅ 已上線，T013 觀察中（約 11 月中滿 20 個到期日）；第二階段（決策層說明）未開始 |
-| 023 | verification-efficacy | `d3d64fe` | `backend/reports/verification_stats.py`,`guardrails/verify.py` | ✅ US1+US2；US3/US4 暫緩（待 direct 呼叫後的觀察窗） |
+| 024 | smallcap-candidates | 2026-10-13 選股歸因 | `backend/processor/tw_features.py`,`reports/morning_brief.py` | 🟡 第一階段（模型名單）✅ 已上線，T013 觀察中（約 11 月中滿 20 個到期日）；第二階段 T014（決策層說明）未開始；T015 上櫃變更交易來源 ✅ |
+| 023 | verification-efficacy | `d3d64fe` | `backend/reports/verification_stats.py`,`guardrails/verify.py` | ✅ US1+US2；US3/US4 暫緩（待 direct 呼叫後的觀察窗，約 10/27 滿 10 個交易日；`--since 20261014` 看修正後） |
 
 **回溯歷程（風險優先）**：第一批 004/009/005 → 第二批 006/008/010 → 第三批 001/003/002 →
 最終批 007/011/012/013/014/015/016。全部完成。後續重點轉向落實各 tasks 的「測試基線」Phase。
