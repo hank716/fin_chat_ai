@@ -303,6 +303,15 @@ def _fetch_facts(
     return retrieval.fetch_facts(as_of)
 
 
+def decision_model_of(provider: str) -> str:
+    """決策供應商 → 計價用的 model 名稱。降級路徑（gemini / gemini-fallback）一律用 Gemini 晨報模型。"""
+    if provider == "anthropic":
+        return settings.claude_model_decision
+    if provider == "openai":
+        return settings.openai_model_decision
+    return settings.gemini_model_brief
+
+
 class Decision(NamedTuple):
     """`_decide_brief` 的回傳。
 
@@ -315,6 +324,11 @@ class Decision(NamedTuple):
     provider: str
     fact_checks: list[dict[str, Any]]
     fetch_attempts: list[Any]
+    # spec 026：回應中的實際模型版本（OpenAI 才有；別名換代時與價目表對不上要看得到）
+    model_version: str | None = None
+    # spec 026：主路徑為何倒下（降級時才有）。例如「OPENAI_API_KEY 未設定」——不寫進報告的話，
+    # 讀的人只看得到「降級了」，不知道是設定問題還是供應商故障。
+    fallback_reason: str | None = None
 
 
 def _decide_brief(
@@ -341,6 +355,7 @@ def _decide_brief(
             primary.name,
             [fc.model_dump() for fc in draft.fact_checks],
             attempts,
+            model_version=getattr(primary, "last_model_version", None),
         )
     except LLMError as exc:
         if primary.name == "gemini":
@@ -350,6 +365,7 @@ def _decide_brief(
         # `claude_client._with_attempts` 把它掛在例外上，就是為了在這裡接住——
         # 不接的話，那幾次查證行為連同 usage 一起從遙測裡消失，而它們是真的發生過。
         pre_failure_attempts = list(getattr(exc, "fetch_attempts", None) or [])
+        fallback_reason = f"{primary.name}: {exc}"
 
     fallback = get_decision_llm("gemini")
     draft, usage, _attempts = fallback.draft_brief(
@@ -358,6 +374,7 @@ def _decide_brief(
     # 降級路徑本身恆回空 attempts；帶出去的是主路徑倒下前留下的那些。
     return Decision(
         _draft_to_result(draft), usage, "gemini-fallback", [], pre_failure_attempts,
+        fallback_reason=fallback_reason[:300],
     )
 
 
@@ -372,9 +389,32 @@ def _draft_to_result(draft: Any) -> BriefResult:
     return BriefResult.model_validate(payload)
 
 
+def _attempt_dict(a: Any) -> dict[str, Any]:
+    out = {"url": getattr(a, "url", ""),
+           "domain": verification_stats.domain_of(getattr(a, "url", "")),
+           "ok": bool(getattr(a, "ok", False)),
+           "error_code": getattr(a, "error_code", None),
+           "content_chars": getattr(a, "content_chars", None),
+           "via_code": bool(getattr(a, "via_code", False))}
+    # spec 026 本地 web_fetch 才有的除錯欄位；有值才寫，Claude 路徑的報告格式不變
+    for key in ("reject_reason", "final_url"):
+        value = getattr(a, key, None)
+        if value:
+            out[key] = value
+    return out
+
+
+def _fetch_limit_of(provider: str) -> int:
+    """各決策供應商每篇的查證額度。寫死讀 Claude 的設定會讓 openai 報告的「是否撞到上限」算錯。"""
+    if provider == "openai":
+        return int(settings.openai_brief_fetch_uses)
+    return int(settings.claude_brief_fetch_uses)
+
+
 def _verification_stats(
     facts: retrieval.FactsPack, fact_checks: list[dict[str, Any]],
     decision_usage: dict[str, int], fetch_attempts: list[Any], *, active: bool,
+    provider: str = "anthropic",
 ) -> tuple[dict[str, Any], list[ClueOutcome]]:
     """查證層遙測：回 (落地用的 dict, 每則線索的結局)。
 
@@ -407,7 +447,7 @@ def _verification_stats(
     search_requests = int(decision_usage.get("web_search_requests", 0))
     # 本篇的額度上限（FR-004）：有了它，「是否撞到上限」才是資料判定而非自然語言推測。
     # 沒有查證層時上限就是 0——那是「沒有查證這回事」，不是「額度為 0 的失敗」。
-    fetch_limit = int(settings.claude_brief_fetch_uses) if active else 0
+    fetch_limit = _fetch_limit_of(provider) if active else 0
 
     outcomes = classify_outcomes(
         facts.events,
@@ -466,15 +506,7 @@ def _verification_stats(
                          if k in verification_stats.CHECKED),
         "claimed_unbacked_n": len(claimed_unbacked),
         "clues": [o.as_dict() for o in outcomes],
-        "attempts": [
-            {"url": getattr(a, "url", ""), "domain": verification_stats.domain_of(
-                getattr(a, "url", "")),
-             "ok": bool(getattr(a, "ok", False)),
-             "error_code": getattr(a, "error_code", None),
-             "content_chars": getattr(a, "content_chars", None),
-             "via_code": bool(getattr(a, "via_code", False))}
-            for a in fetch_attempts
-        ],
+        "attempts": [_attempt_dict(a) for a in fetch_attempts],
     }
     return stats, outcomes
 
@@ -520,9 +552,7 @@ def generate_morning_brief(
         tracker.cost_of_usage(facts_usage, facts_model, grounded=True)
         if facts_usage else 0.0
     )
-    decision_model = (
-        settings.claude_model_decision if provider == "anthropic" else settings.gemini_model_brief
-    )
+    decision_model = decision_model_of(provider)
     decision_cost = tracker.cost_of_usage(decision_usage, decision_model)
     brief_cost = round(facts_cost + decision_cost, 4)
     # ⚠️ 只抄 input/output 兩欄會產生誤導性數字：Anthropic 的 `input_tokens` **不含** cache，
@@ -534,6 +564,8 @@ def generate_morning_brief(
         for key in ("input_tokens", "output_tokens", "cached_tokens", "cache_write_tokens",
                     "tool_tokens", "web_search_requests", "web_fetch_requests")
     }
+    # spec 026：OpenAI 回報的推理 token（已含在 output_tokens、不另計價）。Claude 路徑為 0。
+    usage["reasoning_tokens"] = int(decision_usage.get("reasoning_tokens", 0))
     usage["rounds"] = int(decision_usage.get("rounds", 0))   # 只有決策層會 pause_turn 續跑
     # 分兩筆記帳（spec 022）：彙總桶不變，但另外累進 per-provider 月桶——
     # 合計金額看不出召回與決策各佔多少，而那正是換供應商後最需要盯的數字。
@@ -545,13 +577,13 @@ def generate_morning_brief(
     _backfill_caution(result, feats)
 
     # 查證結局分類（spec 023）：verification 落地到報告、clue_outcomes 餵給 guardrail。
-    # 只有 Claude 主路徑（非節儉模式）才有查證層可言：節儉模式沒掛工具，Gemini 降級路徑
+    # 只有 Claude / OpenAI 主路徑（非節儉模式）才有查證層可言：節儉模式沒掛工具，Gemini 降級路徑
     # 沒有 web_fetch。這兩條路徑的「0 次查證」是預期行為而非失敗，不能當成未查證線索
     # 餵給 guardrail——那會刪掉一份與查證無關的報告的內容。
-    verification_active = not frugal and provider == "anthropic"
+    verification_active = not frugal and provider in verification_stats.VERIFYING_PROVIDERS
     verification, clue_outcomes = _verification_stats(
         facts, fact_checks, decision_usage, decision.fetch_attempts,
-        active=verification_active,
+        active=verification_active, provider=provider,
     )
 
     month_total = tracker.month_total()
@@ -568,6 +600,11 @@ def generate_morning_brief(
         # 把剩餘額度攤在報告上，超支前就看得見。
         "month_remaining_twd": tracker.month_remaining(),
         "decision_provider": provider,
+        # spec 026：實際用來計價的 model，與回應中的實際版本（只有 OpenAI 會回）
+        "decision_model": decision_model,
+        "decision_model_version": decision.model_version,
+        # 決策層自己的輸出量（tokens 是召回＋決策合計）：provider_compare 比輸出量時要用這個
+        "decision_output_tokens": int(decision_usage.get("output_tokens", 0)),
         "frugal_mode": frugal,           # True＝額度不足而降級（無外部事件、無查證、effort=low）
         # 本篇的召回/決策拆分 + 本月各供應商累計（spec 022 的成本可歸因性）
         "retrieval_twd": round(facts_cost, 4),
@@ -580,6 +617,8 @@ def generate_morning_brief(
         # 這幾個數字在成本上留不下痕跡（web_fetch 不按次計費），不落地就永遠無從查核。
         "verification": verification,
     }
+    if decision.fallback_reason:
+        cost_info["decision_fallback_reason"] = decision.fallback_reason
     logger.info("晨報 LLM 花費 NT$%.4f（provider=%s 本月累計 NT$%.2f / 上限 NT$%.0f）",
                 brief_cost, provider, month_total, monthly_limit)
     if cost_info["month_remaining_twd"] <= 0:
@@ -712,6 +751,24 @@ def generate_morning_brief(
             enforce_retention()
         except Exception as exc:  # noqa: BLE001
             logger.warning("retention 失敗: %s", exc)
+
+    # 9) 同日影子對照（spec 026 US4）：主晨報**已存檔並發布之後**才跑，影子要多跑數分鐘，
+    #    不能讓晨報延遲，也確保影子失敗不可能影響主報告。只存到 shadow/、不發布。
+    #    關閉時（預設）不加欄位也不重寫檔案——預設設定下報告與導入前逐位元組相同。
+    try:
+        from reports import shadow_brief
+        shadow = shadow_brief.maybe_run_shadow(
+            feats, facts, calibration_text,
+            report_id=report_id, report_date=report["report_date"],
+            main_retrieval_twd=float(cost_info.get("retrieval_twd") or 0.0),
+            frugal=frugal, primary_provider=provider,
+        )
+        if shadow.get("reason") != "disabled":
+            report["shadow"] = shadow
+            json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("影子對照失敗（不影響晨報）: %s", exc)
 
     return report
 

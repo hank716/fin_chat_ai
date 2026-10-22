@@ -350,3 +350,65 @@ def test_missing_reports_dir_raises_instead_of_empty_table(tmp_path):
         vs.main([str(tmp_path / "nope")])
     with pytest.raises(SystemExit):
         vs.main([str(tmp_path), "--since", "2026-10-14"])
+
+
+# ── spec 026：OpenAI 本地 web_fetch 的錯誤碼與報告 ─────────────────────────
+
+def test_local_fetch_tool_error_codes_fall_into_existing_buckets():
+    """本地 FetchSession 會產生的每一個 error_code 都必須落在既有分類，分類邏輯不需改。"""
+    expected = {
+        "max_uses_exceeded": vs.UNCHECKED_BUDGET,
+        "url_not_allowed": vs.UNCHECKED_UNREACHABLE,        # 白名單外 / 私有位址
+        "url_not_accessible": vs.UNCHECKED_UNREACHABLE,
+        "unsupported_content_type": vs.UNCHECKED_UNREACHABLE,
+        "unavailable": vs.UNCHECKED_TRANSIENT,              # 逾時
+        "too_many_requests": vs.UNCHECKED_TRANSIENT,        # HTTP 429
+    }
+    for code, outcome in expected.items():
+        url = f"https://a.example/{code}"
+        got = _one([url], [], [_attempt(url, ok=False, error_code=code)])
+        assert got.outcome == outcome, code
+
+
+def test_fetch_session_attempts_classify_end_to_end(monkeypatch):
+    """FetchSession 產出的 FetchAttempt 物件直接餵 classify_outcomes（不經 dict 轉換）。"""
+    import socket
+
+    import httpx
+
+    from ai import fetch_tool
+
+    monkeypatch.setattr(fetch_tool.socket, "getaddrinfo",
+                        lambda host, port, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                                                      ("93.184.216.34", port))])
+    ok_url, gone_url = "https://a.example/ok", "https://a.example/gone"
+    body = "<html><body><p>" + "內文" * 200 + "</p></body></html>"
+
+    def handler(request):
+        if str(request.url) == ok_url:
+            return httpx.Response(200, headers={"content-type": "text/html"},
+                                  content=body.encode())
+        return httpx.Response(404)
+
+    sess = fetch_tool.FetchSession([ok_url, gone_url], max_uses=3, max_chars=12_000,
+                                   transport=httpx.MockTransport(handler))
+    sess.fetch(ok_url)
+    sess.fetch(gone_url)
+    sess.fetch("https://evil.example/x")
+    outcomes = vs.classify_outcomes(
+        [ok_url, gone_url], [_check(ok_url, "confirmed")], sess.attempts,
+        fetch_limit=3, fetch_requests=sess.used,
+    )
+    by_url = {o.url: o.outcome for o in outcomes}
+    assert by_url[ok_url] == vs.CONFIRMED
+    assert by_url[gone_url] == vs.UNCHECKED_UNREACHABLE
+
+
+def test_aggregate_includes_openai_reports(tmp_path):
+    """openai 主路徑（或影子目錄）有查證層，必須計入；只排除降級與節儉。"""
+    _write_report(tmp_path, "morning_20261022_082000_openai.json", {
+        "decision_provider": "openai", "frugal_mode": False,
+        "verification": {"clues": [_clue(vs.CONFIRMED)]},
+    })
+    summary = vs.aggregate(tmp_path)
+    assert summary["days"] == 1 and summary["clues"] == 1

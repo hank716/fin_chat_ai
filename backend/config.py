@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+from datetime import date
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,7 +52,7 @@ class Settings(BaseSettings):
     # ── LLM 決策 + 查證層（spec 022-llm-tiering）──
     # 吃 features + facts pack + 校準做推理選股，並用 web_fetch 逐條查證召回層引用的 URL。
     anthropic_api_key: str = ""
-    llm_decision_provider: str = "anthropic"          # anthropic | gemini（gemini＝降級/A-B 對照）
+    llm_decision_provider: str = "anthropic"          # anthropic | openai | gemini（gemini＝降級/A-B 對照）
     claude_model_decision: str = "claude-opus-5"      # 晨報決策（品質優先，晨報是產品本體）
     claude_model_chat: str = "claude-opus-5"          # 問答；用量稀疏，需省時可降 claude-sonnet-5
     # 問答 thinking 深度 low|medium|high|xhigh|max。2026-08-12 從 high 降到 medium：
@@ -96,6 +99,32 @@ class Settings(BaseSettings):
     enable_claude_brief_prompt_cache: bool = True
     claude_cache_ttl: str = "5m"                      # 5m | 1h
     enable_facts_pack: bool = True                    # 關閉＝退回純 Gemini 舊路徑
+
+    # ── 決策層 OpenAI 選項（spec 026，方案 B）──
+    # 召回層仍是 Gemini；這裡只換「決策 + 查證」那一層。未設 key 也能啟動：選了 openai 卻沒 key
+    # 時晨報直接走 Gemini 降級並在報告標明原因（不靜默）。
+    openai_api_key: str = ""
+    openai_model_decision: str = "gpt-6.1-sol"
+    openai_model_chat: str = "gpt-6.1-sol"
+    # reasoning token 以 output 費率計價＝輸出端成本主閥（同 Claude 的 effort 教訓）。
+    # 與 Claude 現行檔位對齊，A/B 才可比。節儉模式強制 low。
+    openai_brief_effort: str = "medium"
+    openai_effort: str = "medium"
+    openai_max_output_tokens: int = 32000             # reasoning + 回答合計；撞到上限＝失敗不發布
+    # OpenAI 沒有「只能開對話中出現過的 URL」的抓頁工具，所以 web_fetch 在本地執行
+    # （ai/fetch_tool.py），白名單＝當篇 facts pack 的 URL。上限對齊 claude_brief_fetch_uses。
+    openai_brief_fetch_uses: int = 3
+    openai_brief_search_uses: int = 2
+    openai_chat_search_uses: int = 2
+    openai_fetch_max_chars: int = 12000               # 單頁回給模型的純文字上限（≈3k token）
+    # 工具迴圈在我們手上（不像 Anthropic 跑在 API 內部），必須自己設總輪數上限防失控。
+    openai_max_tool_rounds: int = 8
+    # 同日影子對照（US4）：主晨報照常發布後，用同一份 features + facts 再跑一次 OpenAI，
+    # 只存檔到 reports/shadow/、不發布。到期日（含當日）過後自動停；空＝關閉。
+    openai_shadow_until: date | None = None
+    # 跑影子前預留的額度：月餘額扣掉這筆仍須 ≥ brief_degrade_reserve_twd，
+    # 確保影子永遠不會把之後的主晨報推進節儉模式（spec FR-017a）。
+    openai_shadow_cost_estimate_twd: float = 15.0
 
     # ── Gemini 明確快取（cachedContents API；同日問答重用當日靜態 context 省 input token）──
     enable_gemini_explicit_cache: bool = True
@@ -216,6 +245,14 @@ class Settings(BaseSettings):
     # 與 scheduler 同源讀 env（逗號分隔 HH:MM）：供 backend 推算慢爬靜默窗，避免兩處時間失聯。
     prefetch_times: str = ""   # PREFETCH_TIMES
     report_times: str = ""     # REPORT_TIMES
+
+    @field_validator("openai_shadow_until", mode="before")
+    @classmethod
+    def _empty_date_is_none(cls, value: object) -> object:
+        # `.env` 寫 `OPENAI_SHADOW_UNTIL=`（留空＝關閉）時拿到的是空字串，date 解析會炸掉整個啟動
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 settings = Settings()

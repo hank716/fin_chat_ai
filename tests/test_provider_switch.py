@@ -167,3 +167,88 @@ def test_fallback_report_has_no_verification_layer(monkeypatch):
     assert stats["fetch_limit"] == 0           # 上限 0＝沒掛工具，不是「額度為 0 的失敗」
     assert stats["facts_n"] == 1               # 召回層的既有遙測照常保留
 
+
+
+# ── spec 026：openai 供應商 ────────────────────────────────────────────────
+
+def test_dispatch_openai_when_configured(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "llm_decision_provider", "openai")
+    llm = llm_client.get_decision_llm()
+    assert llm.name == "openai"
+    assert isinstance(llm, llm_client.OpenAIDecisionLLM)
+
+
+def test_unknown_provider_message_lists_all_options(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "llm_decision_provider", "mistral")
+    with pytest.raises(ValueError, match="anthropic / openai / gemini"):
+        llm_client.get_decision_llm()
+
+
+def _capture(monkeypatch, target, name, ret):
+    seen = {}
+
+    def fake(*a, **k):
+        seen.update(k)
+        return ret
+
+    monkeypatch.setattr(target, name, fake)
+    return seen
+
+
+_FACTS = '[{"claim": "c", "date": "2026-10-21", "source": "s", "url": "https://a.example/x"}]'
+
+
+def test_openai_and_anthropic_get_identical_prompts(monkeypatch):
+    """A/B 公平性：兩邊吃逐字相同的 system / user prompt，差別只剩模型。"""
+    from ai import claude_client, openai_client
+
+    oa = _capture(monkeypatch, openai_client, "generate_structured", (_draft(), {}, [], "v"))
+    cl = _capture(monkeypatch, claude_client, "generate_structured", (_draft(), {}, []))
+    feats = {"as_of": "2026-10-22"}
+    llm_client.OpenAIDecisionLLM().draft_brief(feats, _FACTS, "校準")
+    llm_client.AnthropicDecisionLLM().draft_brief(feats, _FACTS, "校準")
+    assert oa["system"] == cl["system"]
+    assert oa["user_prompt"] == cl["user_prompt"]
+
+
+def test_openai_whitelist_is_facts_pack_urls(monkeypatch):
+    from ai import openai_client
+
+    seen = _capture(monkeypatch, openai_client, "generate_structured", (_draft(), {}, [], None))
+    llm_client.OpenAIDecisionLLM().draft_brief({}, _FACTS, None)
+    session = seen["fetch_session"]
+    assert session is not None
+    _out, attempt = session.fetch("https://evil.example/y")
+    assert attempt.reject_reason == "not_in_facts_pack"
+    assert session._allowed == {"https://a.example/x"}
+    assert [t.get("name") or t["type"] for t in seen["tools"]] == ["web_fetch", "web_search"]
+    assert seen["effort"] == llm_client.settings.openai_brief_effort
+    assert seen["search_limit"] == llm_client.settings.openai_brief_search_uses
+
+
+def test_openai_frugal_mode_matches_anthropic_semantics(monkeypatch):
+    from ai import openai_client
+
+    seen = _capture(monkeypatch, openai_client, "generate_structured", (_draft(), {}, [], None))
+    llm_client.OpenAIDecisionLLM().draft_brief({}, _FACTS, None, frugal=True)
+    assert seen["tools"] == []
+    assert seen["fetch_session"] is None
+    assert seen["effort"] == "low"
+    assert seen["search_limit"] == 0
+    assert "本次無外部線索" in seen["user_prompt"]          # facts 傳的是 "[]"
+
+
+def test_openai_records_model_version(monkeypatch):
+    from ai import openai_client
+
+    _capture(monkeypatch, openai_client, "generate_structured",
+             (_draft(), {}, [], "gpt-6.1-sol-2026-10-01"))
+    llm = llm_client.OpenAIDecisionLLM()
+    llm.draft_brief({}, "[]", None)
+    assert llm.last_model_version == "gpt-6.1-sol-2026-10-01"
+
+
+def test_facts_urls_tolerates_garbage():
+    assert llm_client._facts_urls("not json") == []
+    assert llm_client._facts_urls('{"a": 1}') == []
+    assert llm_client._facts_urls('[{"url": "u1"}, {"nourl": 1}, "x"]') == ["u1"]

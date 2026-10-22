@@ -166,7 +166,7 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
     )
     llm = get_decision_llm()
     try:
-        if llm.name == "anthropic":
+        if llm.name in ("anthropic", "openai"):
             # 決策層路徑（spec 022）：穩定前綴放 system（可選 cache_control），變動尾段放 user。
             # 即時事實由 Claude 自己的 web_search/web_fetch 補——**刻意不**先跑一次 Gemini 召回：
             # 召回層是「今日市場事件」導向（晨報的需求），對「2330 現在能不能買」這種即時
@@ -174,8 +174,12 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
             answer, usage = llm.answer_question(
                 build_chat_system(report), variable_block, cacheable=True,
             )
-            model_used = settings.claude_model_chat
-            grounded = False   # Anthropic 的搜尋計費走 usage.web_search_requests，非 Google grounding
+            # spec 026：OpenAI 同一條路徑（意圖分類仍走 Gemini）。OpenAI 問答只有 web_search——
+            # 沒有 facts pack 就沒有查證白名單，給 web_fetch 只會全部被拒。
+            model_used = (
+                settings.openai_model_chat if llm.name == "openai" else settings.claude_model_chat
+            )
+            grounded = False   # 決策層的搜尋計費走 usage.web_search_requests，非 Google grounding
         else:
             answer, usage = _ask_gemini(rid, report, variable_block)
             model_used = settings.gemini_model_qa

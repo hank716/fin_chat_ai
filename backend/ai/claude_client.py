@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 import anthropic
@@ -41,6 +40,7 @@ from pydantic import BaseModel, ValidationError
 from activity import monitor
 from config import settings
 
+from .fetch_tool import FetchAttempt  # noqa: F401 — re-export
 from .errors import (
     LLMBadRequest,
     LLMError,
@@ -201,25 +201,7 @@ def _count_server_tools(content: Any) -> dict[str, int]:
     return counts
 
 
-@dataclass(frozen=True)
-class FetchAttempt:
-    """一次 `web_fetch` 的實際結果（spec 023 FR-006）。
-
-    `fact_checks[].verdict` 是**模型自述**，無法稽核；這個結構是**工具行為**，可以。
-    2026-08-20 那篇實測：4 則 `confirmed` 分屬 4 個不同 URL，但當天只開了 3 次原文——
-    至少一則「已查證」沒有任何工具行為支撐。只讀 verdict 永遠看不出這件事。
-    """
-
-    url: str
-    ok: bool
-    error_code: str | None
-    retrieved_at: str | None
-    # 回到手上的原文長度（字元）。None＝失敗或非純文字（如 PDF）。「成功但幾乎沒內容」
-    # 與「成功且讀得到內文」在工具端都是 ok=True，不記長度就分不出來。
-    content_chars: int | None = None
-    # True＝這次 fetch 是從 code execution 裡發出的（原文不直接進模型視野）。
-    # `build_tools` 已釘 direct，這個欄位正常應恆為 False——出現 True 代表那個設定失效了。
-    via_code: bool = False
+# FetchAttempt 已搬到中立模組 ai.fetch_tool（spec 026）；這裡保留同名供既有 import 使用。
 
 
 def _fetch_url_of(block: Any) -> str:

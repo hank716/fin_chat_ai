@@ -27,6 +27,7 @@
   <div class="cb-sub cb-split">
     <span>🔍 Gemini 廣度召回 NT${{ '%.2f'|format(cost.by_provider.gemini or 0) }}</span>
     <span>🧠 Claude 決策查證 NT${{ '%.2f'|format(cost.by_provider.anthropic or 0) }}</span>
+    {% if cost.by_provider.openai %}<span>🧪 OpenAI 決策查證 NT${{ '%.2f'|format(cost.by_provider.openai) }}</span>{% endif %}
   </div>
   {% endif %}
 </div>

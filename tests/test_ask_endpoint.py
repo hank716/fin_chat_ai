@@ -216,3 +216,52 @@ def test_memory_stores_clean_answer_reply_has_disclaimer(env):
 def test_general_channel_writes_no_memory(env):
     _ask()
     assert not any(str(k).startswith("chat:hist:") for k in env["redis"].store)
+
+
+# ── spec 026：/ask 走 OpenAI ───────────────────────────────────────────────
+
+class _FakeOpenAILLM(_FakeLLM):
+    name = "openai"
+
+
+def test_openai_provider_answers_and_bills_openai(env, monkeypatch):
+    llm = _FakeOpenAILLM("OpenAI 回答")
+    monkeypatch.setattr(ask_api, "get_decision_llm", lambda: llm)
+    priced = []
+
+    def spy(usage, model, grounded=False):
+        priced.append((model, grounded))
+        return 0.01 if model == ct.settings.gemini_model_classifier else 1.0
+
+    monkeypatch.setattr(ct, "cost_of_usage", spy)
+    resp = _ask()
+    assert llm.calls == 1
+    assert resp.answer.startswith("OpenAI 回答")
+    assert priced[-1] == (ct.settings.openai_model_chat, False)
+    assert ct.month_by_provider()["openai"] == pytest.approx(1.0)
+    assert ct.month_by_provider()["gemini"] == pytest.approx(0.01)   # 意圖分類仍是 Gemini
+
+
+def test_openai_provider_respects_daily_limit(env, monkeypatch):
+    llm = _FakeOpenAILLM()
+    monkeypatch.setattr(ask_api, "get_decision_llm", lambda: llm)
+    env["redis"].store[ct._day_key()] = 45.0
+    resp = _ask()
+    assert resp.budget_exceeded and llm.calls == 0
+
+
+def test_openai_answer_question_only_offers_web_search(monkeypatch):
+    from ai import llm_client, openai_client
+
+    seen = {}
+
+    def fake_generate_text(**kw):
+        seen.update(kw)
+        return "答", {}
+
+    monkeypatch.setattr(openai_client, "generate_text", fake_generate_text)
+    llm_client.OpenAIDecisionLLM().answer_question("sys", "user", cacheable=True)
+    assert seen["model"] == llm_client.settings.openai_model_chat
+    assert seen["effort"] == llm_client.settings.openai_effort
+    assert seen["search_limit"] == llm_client.settings.openai_chat_search_uses
+    assert "fetch_session" not in seen

@@ -304,6 +304,9 @@ def count_of(outcomes: Iterable[ClueOutcome], outcome: str) -> int:
 REDIRECT_BUG_CUTOFF = "20260807"
 
 
+VERIFYING_PROVIDERS = frozenset({"anthropic", "openai"})
+
+
 def _report_date(path: Path) -> str:
     """morning_YYYYMMDD_HHMMSS.json → YYYYMMDD。取不到就回空字串（不猜）。"""
     parts = path.stem.split("_")
@@ -319,7 +322,8 @@ def _eligible(report: dict[str, Any]) -> tuple[bool, str]:
     cost = report.get("cost") or {}
     if cost.get("frugal_mode"):
         return False, "frugal"
-    if str(cost.get("decision_provider") or "") != "anthropic":
+    # 有查證層的決策供應商（spec 026 加 openai：本地 web_fetch 白名單，錯誤碼同值域）
+    if str(cost.get("decision_provider") or "") not in VERIFYING_PROVIDERS:
         return False, "fallback"
     return True, ""
 

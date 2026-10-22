@@ -33,7 +33,8 @@ def degradation_notes(cost: dict[str, Any] | None) -> list[str]:
     if frugal:
         notes.append("本篇為預算節儉模式：無外部事件、無連網查證，僅依本地量化資料產出")
     if provider.endswith("fallback"):
-        notes.append(f"決策層降級為 {provider}：本篇外部事件未經查證")
+        reason = _fallback_reason_hint(cost.get("decision_fallback_reason"))
+        notes.append(f"決策層降級為 {provider}{reason}：本篇外部事件未經查證")
 
     # 查證層只在「有掛 web_fetch 的主路徑」存在。節儉模式與降級供應商都**沒有查證這回事**，
     # 它們的降級已經各自有一句話講清楚了；再跑一次查證失敗分流只會疊出三、四句互相重複
@@ -47,6 +48,15 @@ def degradation_notes(cost: dict[str, Any] | None) -> list[str]:
                 f"僅查證 {verification.get('fact_checks_n')} 則）"
             )
     return notes
+
+
+def _fallback_reason_hint(reason: Any) -> str:
+    """降級原因的使用者可讀版（spec 026）。只挑「設定問題」明講——那是使用者自己能修的；
+    其餘供應商錯誤訊息很長且技術性，留在報告 JSON 的 cost.decision_fallback_reason。"""
+    text = str(reason or "")
+    if "API_KEY 未設定" in text:
+        return f"（原因：{text.split(':', 1)[-1].strip()}）"
+    return ""
 
 
 def _verification_ran(cost: dict[str, Any]) -> bool:

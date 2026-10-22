@@ -1,4 +1,24 @@
 <!--
+Sync Impact Report (2.2.0, 2026-10-22)
+- Version change: 2.1.0 → 2.2.0 (MINOR：Principle I、II 實質擴充；spec 026-openai-decision-layer)
+- Rationale: 決策層單篇約 NT$26、月投影 600–650，貼近上限 800。新增 OpenAI 決策實作做同日對照，
+  以實測（非牌價推算）決定是否切換預設。召回層、降級路徑、預設供應商皆不變。
+- Principle I changed:
+  · 決策層可選供應商明列 Anthropic Claude（預設）/ OpenAI
+  · 新增：決策層若無「只能開對話中已出現 URL」的伺服器端抓頁工具，MUST 在系統端以白名單
+    （當篇 facts pack 引用的 URL）+ 私有位址阻擋重建同等或更嚴的查證閉環，且每次開啟 MUST 由系統記錄
+  · 新增：允許「不發布的同日影子對照」——同一份輸入由第二個決策供應商再跑一次，只存檔、
+    MUST NOT 出現在任何使用者可見的發布管道
+- Principle II changed:
+  · 新增試驗期條款：影子對照期間月上限 MAY 暫調至 NT$1,000，MUST 有明確結束日
+    （`OPENAI_SHADOW_UNTIL`），到期 MUST 恢復 NT$800；影子花費計入總額，且 MUST NOT 使主晨報
+    進入節儉模式（跑影子前預留額度）
+  III–VII 未變
+- 依賴同步：.env.example / backend/config.py / README.md / ARCHITECTURE.md 已加入 OpenAI 選項；
+  月上限仍為 800（試驗尚未開始：取得 OpenAI key 後依 specs/026 quickstart §B 同步調整四處）
+-->
+
+<!--
 Sync Impact Report (2.1.0, 2026-08-12)
 - Version change: 2.0.0 → 2.1.0 (MINOR：Principle II 實質擴充)
 - Rationale: 成本盤點發現維持月上限 600 的代價不是省錢、而是每月最後約 4 篇晨報固定降級
@@ -55,14 +75,24 @@ LLM 分為兩層，職責 MUST 分離（spec 022-llm-tiering）：
 
 - **廣度召回層** MUST 唯一為 Google Gemini + `google_search` grounding。此層 MUST NOT 做分析、
   方向判斷或選股，只輸出**帶 source URL 的事實線索**；無來源的線索 MUST 丟棄。
-- **決策層** MUST 為單一可設定供應商（現為 Anthropic Claude），負責推理、選股與報告生成。
+- **決策層** MUST 為單一可設定供應商（可選 Anthropic Claude〔預設〕或 OpenAI，spec 026），
+  負責推理、選股與報告生成。
   此層 MUST 具備獨立查證能力，且 MUST NOT 無條件採信召回層輸出——寫入報告的外部事件
   MUST 先開啟其來源 URL 核對，查證結果 MUST 落地成可稽核欄位（`fact_checks`）。
   未通過查證的事件 MUST NOT 進入敘事或新聞摘要。
+  若供應商沒有「只能開啟對話中已出現 URL」的伺服器端抓頁工具，查證 MUST 改在系統端執行，
+  白名單 MUST 為當篇 facts pack 引用的 URL，並 MUST 拒絕私有／本機／保留位址；每一次開啟請求
+  （成功、失敗、被拒、額度用盡）MUST 由系統記錄成工具行為，不得採信模型自述。查證閉環
+  MUST NOT 因換供應商而退化成「模型自由上網」。
 
 資料計算、feature 運算 MUST NOT 呼叫任何 LLM——先產生 structured JSON，僅「摘要、分析、報告
 生成」才交給 LLM（design_docs §25.1）。決策層 MUST 保留退回召回層供應商的降級路徑，
 使無人值守的每日晨報不因單一供應商故障而整份失敗。
+
+**同日影子對照**（spec 026）：為評估是否更換決策供應商，MAY 以同一份 features 與 facts pack
+由第二個決策供應商在主晨報發布後再跑一次。影子結果 MUST 只存檔（`reports/shadow/`），
+MUST NOT 出現在網頁、Discord、Supabase 等任何使用者可見的發布管道；影子失敗 MUST NOT 影響
+主晨報。每日發布的晨報仍只有一份、只出自一個決策供應商。
 
 理由：召回與決策由同一模型擔任時無法自我稽核，會把幻覺洗成「有來源」的假事實；分層後
 兩者互為對照，且查證通過率成為可量測指標。成本仍受 Principle II 約束。
@@ -91,6 +121,16 @@ LLM 呼叫，plan 階段 MUST 估算成本增量並說明如何回收（快取/�
 連網查證工具（web_fetch / web_search）MUST 設 `max_uses` 上限，不得把單次呼叫的成本上界交由
 模型自行決定。`max_uses` 的調整 MUST 有遙測依據：`web_fetch` 不按次計費、不留成本痕跡，
 沒有實際使用次數的紀錄就調整上限等於憑印象改成本與品質的取捨點。
+
+**對照試驗期上限**（2.2.0，spec 026）：同日影子對照期間，月上限 MAY 暫調至 **NT$1,000**
+（影子每篇約 NT$12–15，試驗期月總額約 NT$820）。此放寬 MUST 有明確結束日（`OPENAI_SHADOW_UNTIL`，
+最長 10 個交易日），到期影子自動停止、月上限 MUST 改回 NT$800 並同步四處（本條文、`.env`、
+`.env.example`、README）。影子花費 MUST 計入日／月總額（預算閘門看得到），且跑影子前 MUST
+預留額度——月餘額扣掉影子預估花費仍須 ≥ `BRIEF_DEGRADE_RESERVE_TWD`，否則跳過影子；
+影子 MUST NOT 使之後的主晨報進入節儉模式。日上限維持 45：試驗期 `/ask` 當日可用額度
+因此縮小（約剩 NT$7），屬預期行為。
+理由與回收：若切換成立，每篇約省 NT$14、月約 NT$290，約一個月回本；不成立則損失上限約
+NT$150（10 天影子）。
 
 降級 MUST 對使用者可見：晨報若以節儉模式或降級供應商產出，該事實 MUST 出現在使用者實際閱讀
 的輸出面（markdown / Discord / 網頁），不得只落在報告 JSON 或 log。看不見的品質降級比降級本身更糟。
@@ -144,4 +184,4 @@ MUST 放 pCloud，採 on-demand restore、避免大量下載（§11）。理由�
   PATCH＝措辭/釐清。修訂 MUST 更新下方日期並在檔首 Sync Impact Report 記錄。
 - 所有 plan/PR 審查 MUST 驗證憲章遵循；放寬 Principle III（fail-closed）或 II（成本）之變更需明確理由與審查。
 
-**Version**: 2.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-08-12
+**Version**: 2.2.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-10-22

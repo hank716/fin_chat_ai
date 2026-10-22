@@ -18,6 +18,11 @@ yfinance>=0.2.50,<0.3
 # 內建重試/streaming/structured outputs，不自己刻）
 anthropic>=0.120,<0.121
 
+# spec 026：決策層 OpenAI 選項（Responses API）。查證抓頁在本地做，HTML 轉純文字用 bs4
+# （容器原本就有，這裡補明確 pin，免得哪天上游依賴拿掉它就靜默壞掉）
+openai>=3.35,<3.36
+beautifulsoup4>=4.12,<5
+
 # M1 step 5：Web Report SSR
 jinja2>=3.1,<4.0
 

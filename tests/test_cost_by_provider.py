@@ -57,13 +57,13 @@ def test_aggregate_still_written_without_provider(fake_redis):
     """漏帶 provider 時彙總桶**仍要寫**——否則預算閘門會少計而失守。"""
     ct.record_cost(7.0)
     assert ct.month_total() == pytest.approx(7.0)
-    assert ct.month_by_provider() == {"gemini": 0.0, "anthropic": 0.0}
+    assert ct.month_by_provider() == {"gemini": 0.0, "anthropic": 0.0, "openai": 0.0}
 
 
 def test_unknown_provider_does_not_create_bucket(fake_redis):
-    ct.record_cost(3.0, provider="openai")
+    ct.record_cost(3.0, provider="mistral")
     assert ct.month_total() == pytest.approx(3.0)
-    assert ct.month_by_provider() == {"gemini": 0.0, "anthropic": 0.0}
+    assert ct.month_by_provider() == {"gemini": 0.0, "anthropic": 0.0, "openai": 0.0}
 
 
 def test_provider_sum_matches_aggregate_when_all_tagged(fake_redis):
@@ -76,4 +76,4 @@ def test_provider_sum_matches_aggregate_when_all_tagged(fake_redis):
 
 def test_month_by_provider_empty_buckets_are_zero(fake_redis):
     """桶不存在時回 0，首頁渲染不能因此炸掉。"""
-    assert ct.month_by_provider() == {"gemini": 0.0, "anthropic": 0.0}
+    assert ct.month_by_provider() == {"gemini": 0.0, "anthropic": 0.0, "openai": 0.0}

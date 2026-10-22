@@ -125,12 +125,24 @@ LLM 分兩層，職責分離。**召回層負責「找得到」，決策層負�
 | 層 | 供應商 | 職責 | 明確禁止 |
 |---|---|---|---|
 | 廣度召回 | Gemini + `google_search` | 產出帶 source URL 的事實線索 | 不做分析、方向判斷、選股 |
-| 決策 + 查證 | Claude（可設定，預設 `claude-opus-5`） | 推理、選股、報告生成、逐條查證 | 不無條件採信召回層 |
+| 決策 + 查證 | Claude（可設定，預設 `claude-opus-5`）或 OpenAI（`gpt-6.1-sol`，spec 026） | 推理、選股、報告生成、逐條查證 | 不無條件採信召回層 |
 
 **為什麼要查證**：Gemini 的 grounding 會產生幻覺——錯置日期、把分析評論當成新聞、引用內容農場。
 決策層若無條件採信，等於把幻覺洗成「有來源」的假事實。`web_fetch` 只能抓取**已出現在對話裡的
 URL**，因此決策層只能去開召回層真的引用過的連結，無法自己生一個 URL，天然形成稽核閉環。
 查證結果落地成 `fact_checks`，讓「召回層有沒有在胡說」成為每日可量測的數字。
+
+**OpenAI 決策層（spec 026）**：OpenAI 沒有上述那種「只能開對話中已出現 URL」的伺服器端抓頁工具，
+所以 `web_fetch` 宣告成 function tool、在 backend 本地執行（`ai/fetch_tool.FetchSession`）：
+白名單＝當篇 facts pack 的 URL（比 Anthropic 更嚴——連 web_search 結果的網址都開不了）、
+解析後 IP 屬私有／本機／保留位址一律拒絕（每一跳轉址都重檢）、每篇次數上限、同一網址重開走快取。
+錯誤碼沿用 spec 023 值域，`verification_stats` 不必分辨供應商。工具名與 prompt 與 Claude 逐字相同，
+A/B 只差模型本身。工具迴圈在 client 端（Responses API，`store=False`，reasoning items 接回 input）。
+
+**同日影子對照**：`OPENAI_SHADOW_UNTIL` 有值時，主晨報發布後以同一份 features + facts 再跑一次
+OpenAI，結果寫 `reports/shadow/<report_id>_openai.json`。所有讀報告的地方都只 glob 頂層
+`morning_*.json`，影子天然不會被網頁、Discord、Supabase、retention、backtest 撿到。
+`python -m reports.provider_compare` 做配對比較。
 
 ```python
 # backend/ai/llm_client.py
@@ -148,6 +160,7 @@ def get_decision_llm() -> DecisionLLM:   # 依 settings.llm_decision_provider �
 Web 報告底部，供使用者手動複製貼到任何 AI 做深度分析。那是離線流程，與 serving 無關。
 
 `.env`：`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`、`LLM_DECISION_PROVIDER`、`CLAUDE_MODEL_DECISION`、
+`OPENAI_API_KEY` / `OPENAI_MODEL_DECISION` / `OPENAI_SHADOW_UNTIL`（spec 026）、
 `DAILY_COST_LIMIT_TWD` / `MONTHLY_COST_LIMIT_TWD`（全站 LLM 成本上限，晨報優先於問答）。
 
 ### 4.2 資料層：移植 finflow_ai 的抓取層，落地用 parquet（核心策略）

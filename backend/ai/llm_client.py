@@ -6,20 +6,22 @@
 這一層原本是 32 行的空殼 Protocol，且 `morning_brief.py` 匯入 `get_llm_client` 卻從未呼叫
 （死匯入）。spec 022 把它做成真的分派點：
 
-    get_decision_llm() → AnthropicDecisionLLM（預設）| GeminiDecisionLLM（降級 / A-B 對照）
+    get_decision_llm() → AnthropicDecisionLLM（預設）| OpenAIDecisionLLM（spec 026）
+                         | GeminiDecisionLLM（降級 / A-B 對照）
 
 保留 Gemini 實作有兩個用途：(a) 決策層故障時的降級路徑——晨報是無人值守的每日排程，
 不得因換供應商而變成可能整份失敗；(b) 同一份 features + facts 跑兩邊做品質對照。
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Protocol
 
 from config import settings
 
-from . import claude_client, gemini_client, prompts
-from .claude_client import FetchAttempt
+from . import claude_client, gemini_client, openai_client, prompts
+from .fetch_tool import FetchAttempt, FetchSession
 from .schemas import BriefDraft, BriefResult
 
 logger = logging.getLogger("ai-market-backend.llm")
@@ -110,6 +112,70 @@ class AnthropicDecisionLLM:
         )
 
 
+def _facts_urls(facts_json: str) -> list[str]:
+    """facts pack 裡所有 event 的 url＝本篇查證白名單。解析不了就回空（＝什麼都不能開）。"""
+    try:
+        events = json.loads(facts_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(events, list):
+        return []
+    return [str(e["url"]) for e in events if isinstance(e, dict) and e.get("url")]
+
+
+class OpenAIDecisionLLM:
+    """OpenAI 決策層（spec 026，方案 B）：與 Claude 吃**完全相同**的 prompt，差別只在模型。
+
+    查證用本地 `web_fetch`（白名單＝當篇 facts pack 的 URL），補漏用 hosted `web_search`。
+    """
+
+    name = "openai"
+
+    def __init__(self) -> None:
+        # 回應中的實際模型版本（別名換代偵測、報告落地用）。放在實例上而非 usage：
+        # usage 是 dict[str, int]，會在 morning_brief 被逐鍵相加。
+        self.last_model_version: str | None = None
+
+    def draft_brief(
+        self, features: dict[str, Any], facts_json: str, calibration: str | None,
+        *, frugal: bool = False,
+    ) -> tuple[BriefDraft, Usage, list[FetchAttempt]]:
+        # 節儉模式語意與 Anthropic 實作一致：不給工具、不帶 facts、effort 降到最低
+        if frugal:
+            logger.warning("晨報進入預算節儉模式（openai）：關閉連網查證、effort=low")
+        session = None if frugal else FetchSession(
+            _facts_urls(facts_json),
+            max_uses=settings.openai_brief_fetch_uses,
+            max_chars=settings.openai_fetch_max_chars,
+        )
+        draft, usage, attempts, version = openai_client.generate_structured(
+            BriefDraft,
+            system=prompts.build_decision_system(verify=not frugal),
+            user_prompt=prompts.build_decision_prompt(
+                features, "[]" if frugal else facts_json, calibration,
+            ),
+            model=settings.openai_model_decision,
+            tools=[] if frugal else openai_client.build_tools(fetch=True, search=True),
+            effort="low" if frugal else settings.openai_brief_effort,
+            fetch_session=session,
+            search_limit=0 if frugal else settings.openai_brief_search_uses,
+        )
+        self.last_model_version = version
+        return draft, usage, attempts  # type: ignore[return-value]
+
+    def answer_question(
+        self, system_prompt: str, user_prompt: str, *, cacheable: bool,
+    ) -> tuple[str, Usage]:
+        # `cacheable` 無作用：OpenAI 前綴快取是自動的，沒有 cache_control 可掛
+        return openai_client.generate_text(
+            system=system_prompt,
+            user_prompt=user_prompt,
+            model=settings.openai_model_chat,
+            effort=settings.openai_effort,
+            search_limit=settings.openai_chat_search_uses,
+        )
+
+
 class GeminiDecisionLLM:
     """Gemini 決策層——**降級路徑**，非預設。
 
@@ -170,8 +236,10 @@ def get_decision_llm(provider: str | None = None) -> DecisionLLM:
     name = (provider or settings.llm_decision_provider or "anthropic").strip().lower()
     if name == "anthropic":
         return AnthropicDecisionLLM()
+    if name == "openai":
+        return OpenAIDecisionLLM()
     if name == "gemini":
         return GeminiDecisionLLM()
     raise ValueError(
-        f"未知的 LLM_DECISION_PROVIDER={name!r}（可用：anthropic / gemini）"
+        f"未知的 LLM_DECISION_PROVIDER={name!r}（可用：anthropic / openai / gemini）"
     )

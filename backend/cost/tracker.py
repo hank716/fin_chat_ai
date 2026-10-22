@@ -88,9 +88,68 @@ _CACHE_WRITE_MULTIPLIER = {"5m": 1.25, "1h": 2.0}
 # `web_fetch_requests`），不能反推自帳單。
 _WEB_SEARCH_USD_PER_REQUEST = 10.0 / 1000
 
+# ─────────────────────────────────────────────────────────────────────────
+# 決策層（OpenAI）費率（spec 026）。USD / 百萬 token，欄位＝(input, cached_read, cache_write, output)。
+# 2026-10-19 對照 OpenAI 官方定價頁核對。gpt-5.6-sol 為優惠價（至 2026-11-21），到期需回頭更新。
+# ⚠️ 語意與另外兩家都不同：`input_tokens` 是**總數**，cached read 與 cache write（30m）
+# 各按自己的費率、三者互斥 → 未命中 = input − cached − write。cache write 有自己的牌價，
+# 不套 Anthropic 的 1.25×/2× 倍率。reasoning token 已含在 output_tokens，不另計。
+# ─────────────────────────────────────────────────────────────────────────
+_PRICING_OPENAI = {
+    "gpt-6.1-sol": (2.00, 0.10, 2.50, 10.00),
+    "gpt-6-sol": (2.00, 0.20, 2.50, 10.00),
+    "gpt-6-astra": (10.00, 1.00, 12.50, 50.00),
+    "gpt-5.6-sol": (4.00, 0.40, 5.00, 20.00),
+    "gpt-5.6-terra": (2.00, 0.20, 2.50, 12.00),
+    "gpt-6-luna": (0.10, 0.01, 0.125, 0.50),
+}
+_OPENAI_DEFAULT = _PRICING_OPENAI["gpt-6-astra"]   # 未知 gpt-* 一律以最貴檔估（寧可高估）
+# >272k input 的長文級距。晨報 ~60k 不會觸發，但 features 變大時不能靜默低估。
+# 倍率沿用 OpenAI 長文定價的慣例（input 類 2×、output 1.5×）；真的觸發時以帳單核對。
+_TIER_THRESHOLD_OPENAI = 272_000
+_OPENAI_LONG_INPUT_MULT = 2.0
+_OPENAI_LONG_OUTPUT_MULT = 1.5
+# OpenAI hosted web_search：$10 / 1,000 次；搜尋帶回的內容 token 已含在 usage.input 內。
+_OPENAI_WEB_SEARCH_USD = 10.0 / 1000
+
 
 def _is_anthropic(model: str) -> bool:
     return model.lower().startswith("claude-")
+
+
+def _is_openai(model: str) -> bool:
+    """gpt-* 與 o 系列推理模型（o3、o4-mini…）。`provider_of` 與計價分支共用這個判準。"""
+    m = model.lower()
+    return m.startswith("gpt-") or (len(m) > 1 and m[0] == "o" and m[1].isdigit())
+
+
+def _rates_openai(model: str, input_tokens: int) -> tuple[float, float, float, float]:
+    m = model.lower()
+    rates = _PRICING_OPENAI.get(m)
+    if rates is None:
+        logger.warning("未列在價目表的 OpenAI 模型 %s，以 gpt-6-astra（最貴檔）估價", model)
+        rates = _OPENAI_DEFAULT
+    if input_tokens > _TIER_THRESHOLD_OPENAI:
+        rin, rcached, rwrite, rout = rates
+        k = _OPENAI_LONG_INPUT_MULT
+        return rin * k, rcached * k, rwrite * k, rout * _OPENAI_LONG_OUTPUT_MULT
+    return rates
+
+
+def _estimate_openai_usd(
+    input_tokens: int, output_tokens: int, model: str,
+    *, cached_tokens: int, cache_write_tokens: int,
+) -> float:
+    rin, rcached, rwrite, rout = _rates_openai(model, input_tokens)
+    cached = max(cached_tokens, 0)
+    write = max(cache_write_tokens, 0)
+    uncached = max(input_tokens - cached - write, 0)
+    return (
+        uncached / 1e6 * rin
+        + cached / 1e6 * rcached
+        + write / 1e6 * rwrite
+        + max(output_tokens, 0) / 1e6 * rout
+    )
 
 
 def _rates(model: str, prompt_tokens: int) -> tuple[float, float, float]:
@@ -135,7 +194,15 @@ def estimate_cost_twd(
 
     cache_write_tokens（Anthropic `cache_creation_input_tokens`）以 input 價 × premium 計：
     5m 為 1.25×、1h 為 2×。Gemini 的明確快取是按存放時間計費的另一套模型，不走這裡。
+
+    第三家 OpenAI（spec 026）：`input_tokens` 是總數、cached / write 互斥，見 `_estimate_openai_usd`。
     """
+    if _is_openai(model):
+        usd = _estimate_openai_usd(
+            input_tokens, output_tokens, model,
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens,
+        )
+        return round(usd * _USD_TWD, 6)
     rate_in, rate_out, rate_cached = _rates(model, input_tokens)
     if _is_anthropic(model):
         billable_input = max(input_tokens, 0) + max(tool_tokens, 0)
@@ -173,7 +240,8 @@ def cost_of_usage(usage: dict, model: str, *, grounded: bool = False) -> float:
         cost += record_grounding_request()
     searches = int(usage.get("web_search_requests", 0))
     if searches > 0:
-        cost += round(searches * _WEB_SEARCH_USD_PER_REQUEST * _USD_TWD, 6)
+        per = _OPENAI_WEB_SEARCH_USD if _is_openai(model) else _WEB_SEARCH_USD_PER_REQUEST
+        cost += round(searches * per * _USD_TWD, 6)
     return round(cost, 6)
 
 
@@ -195,12 +263,17 @@ def _grounding_key() -> str:
 
 # spec 022：分層後合計金額看不出 Gemini（廣度召回）與 Anthropic（決策查證）各佔多少，
 # 而那正是換供應商後最需要盯的數字。彙總桶維持不變（預算閘門仍看它），另開 per-provider 桶。
-PROVIDERS = ("gemini", "anthropic")
+# spec 026 加 openai。預算閘門（日／月上限、節儉模式）看的是彙總桶，openai 花費自動含在內。
+PROVIDERS = ("gemini", "anthropic", "openai")
 
 
 def provider_of(model: str) -> str:
-    """由 model 名稱判供應商。與 `_rates()` 用同一個 `claude-` 前綴判準，兩者不可分歧。"""
-    return "anthropic" if _is_anthropic(model) else "gemini"
+    """由 model 名稱判供應商。與計價分支用同一組判準（`_is_anthropic` / `_is_openai`），不可分歧。"""
+    if _is_anthropic(model):
+        return "anthropic"
+    if _is_openai(model):
+        return "openai"
+    return "gemini"
 
 
 def _provider_month_key(provider: str) -> str:
@@ -274,7 +347,7 @@ def record_grounding_request() -> float:
 def record_cost(cost_twd: float, provider: str | None = None) -> None:
     """把一筆花費累加到當日與當月全站桶（日桶 48h、月桶 70d TTL）。
 
-    `provider`（"gemini" / "anthropic"）另外累進 per-provider 月桶，供首頁拆分顯示。
+    `provider`（"gemini" / "anthropic" / "openai"）另外累進 per-provider 月桶，供首頁拆分顯示。
     **彙總桶一定會寫**——預算閘門看的是它，不能因為漏帶 provider 就少計。
     """
     try:

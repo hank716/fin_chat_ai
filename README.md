@@ -22,7 +22,9 @@ commit 遵循 Conventional Commits，並引用對應 `specs/NNN`。
 ## 技術重點
 
 - **儲存**：local parquet = SSOT（無 Postgres）/ Supabase 暖層 index / pCloud 冷備份
-- **LLM**：系統內只用 Gemini；Claude 走 Web 報告底部「可複製深度分析 prompt」由使用者手動觸發
+- **LLM**：分層供應商（憲章 I）——Gemini + Google 搜尋做廣度召回；決策 + 查證層可切
+  Claude（預設）/ OpenAI（spec 026）；決策層故障時退回 Gemini 出報。Web 報告底部另有
+  「可複製深度分析 prompt」供使用者手動貼給任何 AI
 - **資料層**：移植姊妹專案 finflow_ai 的抓取/正規化/rate-limit 層（複製改寫，非 import）
 
 ## 建構進度（垂直切片，見 ARCHITECTURE.md §5）
@@ -86,6 +88,23 @@ on-demand 抓取並算衍生指標，餵進 grounded 研究稿，仍受 guardrai
 > **2026-10-13 更新**：9 月實支 NT$566、10 月單篇均值 NT$25.4。Gemini 的 `*-latest` 別名已換代
 > （flash→3.8 Flash、flash-lite→3.5 Flash-Lite），牌價表已校正，往後換代會在 log 留下 warning、
 > 並把實際版本寫進 `cost.retrieval_model_version`。
+
+### OpenAI 決策層對照（spec 026）
+
+`LLM_DECISION_PROVIDER=openai` 可把決策層換成 OpenAI（預設 `gpt-6.1-sol`，召回層不變）。
+OpenAI 沒有「只能開對話中已出現 URL」的抓頁工具，所以查證在 backend 本地抓頁
+（`backend/ai/fetch_tool.py`）：只能開當篇 facts pack 引用的網址、擋內網與本機位址，每次開啟都記錄。
+
+要比較兩家時用**同日影子模式**：設 `OPENAI_SHADOW_UNTIL=YYYY-MM-DD`，主晨報照常由 Claude 產出並發布，
+發布後再用同一份輸入跑一次 OpenAI，結果只存 `storage/reports/shadow/`、不上網頁也不推 Discord。
+試驗期月上限依憲章 II 暫調 1,000，結束改回 800。比較：
+
+```bash
+docker compose exec -T backend python -m reports.provider_compare --since 20261022
+```
+
+成本 ≤ Claude 60%、裁決率 ≥ Claude 80%、guardrail 違規不多於 Claude，三項都成立才建議切換。
+完整步驟見 `specs/026-openai-decision-layer/quickstart.md`。
 
 ### 查證成功率怎麼看
 
