@@ -75,7 +75,7 @@ services:
     restart: unless-stopped
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.5  # 釘版本，升級流程見 DEPLOY.md §7.1 / specs/027
     container_name: ai-market-cloudflared
     command: tunnel --no-autoupdate run
     environment:

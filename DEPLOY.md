@@ -173,6 +173,27 @@ docker compose up -d --build      # 只會重建有變動的 image
 > 注意：**backend / bot / scheduler 的程式碼是「build 進 image」的**（不是掛載），
 > 改完一定要 `--build` 重建才會生效。`configs/` 與 `storage/` 是掛載，改了即時生效。
 
+### 7.1 升級 cloudflared（Cloudflare 安全通知時）
+
+`cloudflared` 在 `docker-compose.yml` **釘明確版本**（不用 `:latest`；`:latest` 不會自動重抓，
+曾因此卡在 2026.5.2 五個月，見 specs/027）。收到 Cloudflare 安全通知或定期檢查時：
+
+```bash
+# 1) 查官方修補內容與最新版本
+#    https://github.com/cloudflare/cloudflared/releases
+#    https://raw.githubusercontent.com/cloudflare/cloudflared/master/RELEASE_NOTES
+docker exec ai-market-cloudflared cloudflared --version   # 目前版本
+# 2) 改 docker-compose.yml 的 image tag（例 cloudflare/cloudflared:2026.10.5）
+# 3) 只重建 cloudflared（避開 08:30 晨報；外網報告頁會斷幾秒）
+docker compose pull cloudflared
+docker compose up -d cloudflared
+# 4) 驗證
+docker exec ai-market-cloudflared cloudflared --version
+docker logs ai-market-cloudflared 2>&1 | grep -i registered   # 應有 4 條連線
+```
+
+最後用瀏覽器開 https://www.hank-finflow.com/ 確認 Access 登入後能看歷史列表。
+
 ---
 
 ## 8. 改 `.env` 設定（Docker 運作中要改動時）

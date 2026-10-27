@@ -11,6 +11,8 @@
 新功能：`/speckit-specify` →（`/speckit-clarify`）→ `/speckit-plan` → `/speckit-tasks` →
 （`/speckit-analyze`）→ `/speckit-implement`。既有功能採「回溯補規格」建立基線。
 
+> 🔴 **目前最高優先：[027 cloudflared 安全性更新](027-cloudflared-security-update/spec.md)**——優先於 024 T013 觀察、026 影子對照等其他待辦。
+
 ## 遷移對照與狀態
 
 由 `design_docs.md` §0–§33 + README M0–M9 拆解而來。狀態：⬜ 待補 · 🟡 進行中 · ✅ 已補基線。
@@ -44,6 +46,7 @@
 | 022 | llm-tiering | `f56f2f0` | `backend/ai/claude_client.py`,`retrieval.py`,`llm_client.py` | ✅ |
 | 024 | smallcap-candidates | 2026-10-13 選股歸因 | `backend/processor/tw_features.py`,`reports/morning_brief.py` | 🟡 第一階段（模型名單）✅ 已上線，T013 觀察中（約 11 月中滿 20 個到期日）；第二階段 T014（決策層說明）未開始；T015 上櫃變更交易來源 ✅ |
 | 023 | verification-efficacy | `d3d64fe` | `backend/reports/verification_stats.py`,`guardrails/verify.py` | ✅ US1+US2；US3/US4 暫緩（待 direct 呼叫後的觀察窗，約 10/27 滿 10 個交易日；`--since 20261014` 看修正後） |
+| 027 | cloudflared-security-update | 2026-10-27 Cloudflare 安全通知 | `docker-compose.yml`,`DEPLOY.md` | 🔴 **P0 最高優先**：2026.5.2→2026.10.5 釘版本 |
 
 **回溯歷程（風險優先）**：第一批 004/009/005 → 第二批 006/008/010 → 第三批 001/003/002 →
 最終批 007/011/012/013/014/015/016。全部完成。後續重點轉向落實各 tasks 的「測試基線」Phase。

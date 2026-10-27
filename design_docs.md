@@ -1921,7 +1921,7 @@ services:
       - redis_data:/data
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.5
     container_name: ai-market-cloudflared
     command: tunnel --no-autoupdate run
     env_file:
