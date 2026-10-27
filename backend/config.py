@@ -75,9 +75,13 @@ class Settings(BaseSettings):
     # ⚠️ 當時接著寫的「真正該修的是召回層的 URL 品質」**未經驗證且結論錯誤**。spec 023 的
     # 30 篇實測（8/31–10/13，192 則線索）：額度不足 55%、來源打不開 8%，而成功開啟的 63 次
     # 只換到 12 則裁決——根因是 web_fetch 經 code execution 間接呼叫、原文沒進模型視野
-    # （見 claude_client.build_tools），既不是 URL 品質也不是額度。額度維持 3，待 direct
-    # 呼叫上線後的新資料再議（specs/023 tasks.md「觀察結果」）。
-    claude_brief_fetch_uses: int = 3                  # 晨報：查證用 web_fetch 次數上限
+    # （見 claude_client.build_tools），既不是 URL 品質也不是額度。
+    # 2026-10-27 依 spec 023 US3 調 3→5。direct 呼叫上線後 10 篇（10/14–10/27，73 則線索）：
+    # 已開啟→裁決轉換率 19%→91%、裁決成功率 6%→29%，失敗仍 86% 歸因額度不足（10/10 天撞頂），
+    # 單篇均值 NT$27.2。10/14 那篇實際發出 6 次 fetch 只花 NT$31.8 → 每多一次約 NT$2–3，
+    # 5 次預估單篇 NT$31–33、月 ~NT$650–700 < 800−45。回退條件：單篇均值 > NT$35 或成功率
+    # 沒升 → 退回 3/4（specs/023 tasks.md T026–T027）。
+    claude_brief_fetch_uses: int = 5                  # 晨報：查證用 web_fetch 次數上限
     claude_brief_search_uses: int = 2                 # 晨報：補漏用 web_search 次數上限
     claude_chat_fetch_uses: int = 4                   # 問答：互動情境對延遲敏感，壓低
     claude_chat_search_uses: int = 2
@@ -113,7 +117,7 @@ class Settings(BaseSettings):
     openai_max_output_tokens: int = 32000             # reasoning + 回答合計；撞到上限＝失敗不發布
     # OpenAI 沒有「只能開對話中出現過的 URL」的抓頁工具，所以 web_fetch 在本地執行
     # （ai/fetch_tool.py），白名單＝當篇 facts pack 的 URL。上限對齊 claude_brief_fetch_uses。
-    openai_brief_fetch_uses: int = 3
+    openai_brief_fetch_uses: int = 5
     openai_brief_search_uses: int = 2
     openai_chat_search_uses: int = 2
     openai_fetch_max_chars: int = 12000               # 單頁回給模型的純文字上限（≈3k token）
