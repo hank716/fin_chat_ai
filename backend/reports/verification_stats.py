@@ -39,11 +39,16 @@ CHECKED_INSUFFICIENT = "checked_insufficient"    # 開了原文，但原文不�
 UNCHECKED_BUDGET = "unchecked_budget"            # 額度用盡，根本沒開
 UNCHECKED_UNREACHABLE = "unchecked_unreachable"  # 開了但這個來源打不開
 UNCHECKED_TRANSIENT = "unchecked_transient"      # 上游暫時性失敗
-UNCHECKED_OTHER = "unchecked_other"              # 其餘（含模型自己放棄查證）
+UNCHECKED_OTHER = "unchecked_other"              # 其餘（開了但錯誤碼不認得、或沒掛工具）
+# 額度還有、模型卻沒去開。2026-11-06 調查：這些全是模型依查證契約「只查打算寫進晨報的事件」
+# 而略過的線索（總覽頁、與台股無關的外國央行、不在 features 內的個股），note 多寫「故不採用」。
+# 這是取捨不是失敗，混在 unchecked_other 會把成功率分母灌大（10/28–11/6 佔 31%）。
+SKIPPED_BY_MODEL = "skipped_by_model"
 
 OUTCOMES = (
     CONFIRMED, CONTRADICTED, CHECKED_INSUFFICIENT,
     UNCHECKED_BUDGET, UNCHECKED_UNREACHABLE, UNCHECKED_TRANSIENT, UNCHECKED_OTHER,
+    SKIPPED_BY_MODEL,
 )
 # 「已核對」＝實際開過原文，判定有依據。這三類才可以被當成查證結果閱讀。
 CHECKED = frozenset({CONFIRMED, CONTRADICTED, CHECKED_INSUFFICIENT})
@@ -182,7 +187,7 @@ def _pick_verdict(verdicts: list[str]) -> str | None:
 
 
 def _failure_outcome(
-    error_code: str | None, *, attempted: bool, budget_exhausted: bool,
+    error_code: str | None, *, attempted: bool, budget_exhausted: bool, has_tool: bool = True,
 ) -> str:
     if attempted:
         if error_code in _BUDGET_CODES:
@@ -192,9 +197,25 @@ def _failure_outcome(
         if error_code in _TRANSIENT_CODES:
             return UNCHECKED_TRANSIENT
         return UNCHECKED_OTHER
-    # 完全沒有 attempt 的兩種分流（FR-001）：額度已耗盡＝系統沒能力查；
-    # 額度還有＝模型**主動放棄**查證。混在一起會讓 US3 得出錯誤結論。
-    return UNCHECKED_BUDGET if budget_exhausted else UNCHECKED_OTHER
+    # 完全沒有 attempt 的三種分流（FR-001）：額度已耗盡＝系統沒能力查；
+    # 額度還有＝模型**主動略過**；根本沒掛工具（limit=0，節儉模式）＝沒有查證這回事。
+    if budget_exhausted:
+        return UNCHECKED_BUDGET
+    return SKIPPED_BY_MODEL if has_tool else UNCHECKED_OTHER
+
+
+def reclassify_legacy(clue: dict[str, Any], verification: dict[str, Any]) -> str:
+    """讀舊報告時補分類：2026-11-06 以前存的 `unchecked_other` 混了「模型略過」。
+
+    判斷只用當時就有落地的欄位（attempted / error_code / fetch_limit / fetch_requests），
+    與 `_failure_outcome` 的線上規則一致，所以新舊報告的口徑相同。
+    """
+    outcome = str(clue.get("outcome") or UNCHECKED_OTHER)
+    if outcome != UNCHECKED_OTHER or clue.get("attempted") or clue.get("error_code"):
+        return outcome
+    limit = int(verification.get("fetch_limit") or 0)
+    used = int(verification.get("fetch_requests") or 0)
+    return SKIPPED_BY_MODEL if limit > 0 and used < limit else outcome
 
 
 def _clue_fields(item: Any) -> tuple[str, str]:
@@ -270,6 +291,7 @@ def classify_outcomes(
         else:
             outcome = _failure_outcome(
                 error_code, attempted=attempted, budget_exhausted=budget_exhausted,
+                has_tool=fetch_limit > 0,
             )
 
         outcomes.append(ClueOutcome(
@@ -396,8 +418,11 @@ def aggregate(reports_dir: str | Path | None = None, *,
         if clues:
             modern_days += 1
             for clue in clues:
-                outcome = str(clue.get("outcome") or UNCHECKED_OTHER)
+                outcome = reclassify_legacy(clue, verification)
                 outcome_counts[outcome] += 1
+                if outcome == SKIPPED_BY_MODEL:
+                    # 沒開過的來源不能算這個網域「失敗」——它根本沒被測試
+                    continue
                 if clue.get("claimed_unbacked"):
                     claimed_unbacked += 1
                 code = clue.get("error_code")
@@ -424,9 +449,12 @@ def aggregate(reports_dir: str | Path | None = None, *,
                 legacy["adjudicated"] += int(count)
 
     total = sum(outcome_counts.values())
+    skipped_n = outcome_counts[SKIPPED_BY_MODEL]
+    intended = total - skipped_n
     checked_n = sum(v for k, v in outcome_counts.items() if k in CHECKED)
     adjudicated_n = sum(v for k, v in outcome_counts.items() if k in ADJUDICATED)
-    failures = total - checked_n
+    # 失敗＝想查卻沒查成；模型主動略過的不算（它沒有「想查」）
+    failures = intended - checked_n
     accounted = outcome_counts[UNCHECKED_BUDGET] + outcome_counts[UNCHECKED_UNREACHABLE]
     return {
         "days": modern_days,
@@ -434,7 +462,11 @@ def aggregate(reports_dir: str | Path | None = None, *,
         "outcomes": dict(outcome_counts),
         "checked_n": checked_n,
         "adjudicated_n": adjudicated_n,
+        "skipped_n": skipped_n,
+        # 舊口徑（分母＝全部線索），保留供跨期對照
         "adjudication_rate": _ratio(adjudicated_n, total),
+        # 新口徑：分母扣掉模型主動略過的線索＝「模型想查的裡面查成幾則」
+        "intended_adjudication_rate": _ratio(adjudicated_n, intended),
         # 已開到原文的線索中有多少換到裁決——023 US3 重啟條件看的就是這個轉換率
         "conversion_rate": _ratio(adjudicated_n, checked_n),
         "failures_n": failures,
@@ -463,11 +495,14 @@ def render(summary: dict[str, Any]) -> str:
     if summary["clues"]:
         for outcome in OUTCOMES:
             count = summary["outcomes"].get(outcome, 0)
-            mark = "[已核對]" if outcome in CHECKED else "[未查證]"
+            mark = ("[已核對]" if outcome in CHECKED
+                    else "[模型略過]" if outcome == SKIPPED_BY_MODEL else "[未查證]")
             share = _pct(_ratio(count, summary["clues"]))
             lines.append("  {} {:<22} {:>4}  {}".format(mark, outcome, count, share))
-        lines.append("  裁決成功率（confirmed+contradicted）：{}".format(
+        lines.append("  裁決成功率（confirmed+contradicted ÷ 全部線索）：{}".format(
             _pct(summary["adjudication_rate"])))
+        lines.append("  裁決成功率（扣除模型略過 {} 則）：{}".format(
+            summary.get("skipped_n", 0), _pct(summary.get("intended_adjudication_rate"))))
         lines.append("  已開啟→裁決轉換率：{}（{} / {}）".format(
             _pct(summary.get("conversion_rate")), summary["adjudicated_n"],
             summary["checked_n"]))

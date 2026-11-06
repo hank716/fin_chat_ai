@@ -93,7 +93,8 @@ def _verification_notes(verification: dict[str, Any]) -> list[str]:
     checked_n = int(verification.get("checked_n") or 0)
     budget_n = int(outcomes.get("unchecked_budget") or 0)
     unreachable_n = int(outcomes.get("unchecked_unreachable") or 0)
-    other_n = clues_n - checked_n - budget_n - unreachable_n
+    skipped_n = int(outcomes.get("skipped_by_model") or 0)
+    other_n = clues_n - checked_n - budget_n - unreachable_n - skipped_n
 
     # FR-008：全數未查證時，呈現效果要等同「本篇無經查證外部事件」，
     # 而不是「本篇有 N 則外部事件」——後者會讓讀者以為那 N 則有事實基礎。
@@ -108,6 +109,10 @@ def _verification_notes(verification: dict[str, Any]) -> list[str]:
         notes.append(f"{budget_n} 則外部線索因查證額度不足而未核對{suffix}")
     if unreachable_n:
         notes.append(f"{unreachable_n} 則外部線索的來源無法開啟，未取得原文佐證")
+    if skipped_n:
+        # 模型依查證契約只查打算寫進晨報的事件；略過的線索不會被引用（guardrail 也會擋）。
+        # 措辭刻意中性：這是取捨，不是降級。
+        notes.append(f"{skipped_n} 則外部線索未採用（判斷與本篇關聯低，未開啟原文、內文未引用）")
     if other_n > 0:
         # 不能因為「已經報了額度不足/打不開」就省略這句：那樣 8 則線索只會交代 6 則，
         # 剩下 2 則憑空消失——US2 要的是每一則都有去向，不是挑最大宗的講。

@@ -96,9 +96,10 @@ def test_no_attempt_with_budget_exhausted_is_budget():
 
 
 def test_no_attempt_with_budget_left_is_model_choice():
-    """額度還有卻沒去開＝模型**主動放棄**查證，與額度不足是完全不同的問題。"""
+    """額度還有卻沒去開＝模型**主動略過**，與額度不足是完全不同的問題。"""
     out = _one(["https://a.example/1"], [], [], limit=3, used=1)
-    assert out.outcome == vs.UNCHECKED_OTHER
+    assert out.outcome == vs.SKIPPED_BY_MODEL
+    assert out.outcome not in vs.CHECKED
 
 
 def test_frugal_mode_zero_limit_is_not_budget_failure():
@@ -284,6 +285,38 @@ def test_aggregate_tolerates_old_reports(tmp_path):
     assert summary["legacy"]["days"] == 1
     assert summary["legacy"]["facts"] == 8 and summary["legacy"]["fetches"] == 3
     assert vs.render(summary)                                              # 印得出來不炸
+
+
+def test_aggregate_reclassifies_legacy_other_as_skipped(tmp_path):
+    """11/6 以前存的 unchecked_other（沒 attempt、額度還有）＝模型略過，讀取時補分類。"""
+    _write_report(tmp_path, "morning_20261029_082000.json", {
+        "decision_provider": "anthropic", "frugal_mode": False,
+        "verification": {"fetch_limit": 5, "fetch_requests": 4, "clues": [
+            _clue(vs.CONFIRMED),
+            _clue(vs.UNCHECKED_OTHER, domain="skipped.example"),           # → skipped
+            _clue(vs.UNCHECKED_OTHER, domain="weird.example",
+                  error_code="brand_new_code"),                            # 開過＝維持 other
+            _clue(vs.UNCHECKED_BUDGET),
+        ]},
+    })
+    summary = vs.aggregate(tmp_path)
+    assert summary["outcomes"][vs.SKIPPED_BY_MODEL] == 1
+    assert summary["outcomes"][vs.UNCHECKED_OTHER] == 1
+    assert summary["skipped_n"] == 1
+    assert summary["failures_n"] == 2                       # 略過的不算失敗
+    assert summary["adjudication_rate"] == 0.25             # 舊口徑：1/4
+    assert summary["intended_adjudication_rate"] == round(1 / 3, 4)
+    assert "skipped.example" not in summary["domains"]      # 沒開過不算網域失敗
+    assert "模型略過" in vs.render(summary)
+
+
+def test_legacy_other_stays_other_when_budget_was_used_up(tmp_path):
+    _write_report(tmp_path, "morning_20261029_082000.json", {
+        "decision_provider": "anthropic", "frugal_mode": False,
+        "verification": {"fetch_limit": 5, "fetch_requests": 5,
+                         "clues": [_clue(vs.UNCHECKED_OTHER)]},
+    })
+    assert vs.aggregate(tmp_path)["outcomes"] == {vs.UNCHECKED_OTHER: 1}
 
 
 def test_aggregate_counts_claimed_unbacked(tmp_path):

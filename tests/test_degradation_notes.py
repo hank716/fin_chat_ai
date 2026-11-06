@@ -121,6 +121,12 @@ def test_claimed_but_unbacked_verdicts_are_surfaced():
     assert any("無實際開啟來源的紀錄" in n for n in notes)
 
 
+def test_model_skipped_clues_get_neutral_note_not_failure():
+    """模型略過＝取捨，不是查證失敗：要交代去向，但不能說成「未經查證」。"""
+    notes = degradation_notes(_cost({"confirmed": 3, "skipped_by_model": 2}))
+    assert notes == ["2 則外部線索未採用（判斷與本篇關聯低，未開啟原文、內文未引用）"]
+
+
 def test_frugal_mode_does_not_report_verification_failures():
     """節儉模式本來就不掛查證工具，再報一次「查證失敗」是雜訊。"""
     notes = degradation_notes({"frugal_mode": True,
