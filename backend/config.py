@@ -147,6 +147,9 @@ class Settings(BaseSettings):
     discord_daily_report_channel_id: str = ""   # 每日晨報廣播（兩人都看）
     discord_jay_chat_channel_id: str = ""        # Jay 專屬互動頻道
     discord_hank_chat_channel_id: str = ""       # Hank 專屬互動頻道
+    # 持股追蹤提醒（reports/holdings_alert.py）：晨報推送後，把 <LOCAL_STORAGE_PATH>/holdings.json
+    # 裡的持股狀況推到各自的私人頻道。零 LLM 成本；檔案不存在＝不送。
+    enable_holdings_alerts: bool = True
     discord_jay_user_id: str = ""
     discord_hank_user_id: str = ""
 

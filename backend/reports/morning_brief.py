@@ -737,6 +737,13 @@ def generate_morning_brief(
     if push_discord:
         from notify.discord import send_daily_summary
         pushed = send_daily_summary(report)
+        # 持股提醒：只送各 user 的私人頻道，內容**不寫進** report（報告網頁公開、daily 頻道共看）
+        if settings.enable_holdings_alerts:
+            try:
+                from reports.holdings_alert import send_holdings_alerts
+                send_holdings_alerts()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("持股提醒失敗（不影響晨報）: %s", exc)
 
     # 7) 發布：pCloud 冷備份 + Supabase report_index 暖索引
     if publish:

@@ -127,6 +127,29 @@ def _names(events):
     return [e if isinstance(e, str) else e[0] for e in events]
 
 
+def test_holdings_alert_sent_privately_and_kept_out_of_report(env, monkeypatch, tmp_path):
+    """持股提醒：晨報推送後送私人頻道；損平價不得出現在公開的報告 markdown／JSON／摘要。"""
+    from reports import holdings_alert as ha
+
+    (tmp_path / "holdings.json").write_text(json.dumps({"hank": [
+        {"symbol": "4958", "breakeven": 445.5, "alert_below": [368.25]}]}), encoding="utf-8")
+    monkeypatch.setattr(mb.settings, "local_storage_path", str(tmp_path))
+    monkeypatch.setattr(mb.settings, "enable_holdings_alerts", True)
+    monkeypatch.setattr(mb.settings, "openai_shadow_until", None)
+    monkeypatch.setattr(ha, "holding_status", lambda h: None)
+    sent: list = []
+    from notify import discord
+    monkeypatch.setattr(discord, "send_message", lambda ch, text: sent.append((ch, text)) or True)
+    monkeypatch.setattr(ha.settings, "discord_hank_chat_channel_id", "HANK_PRIVATE")
+
+    report = mb.generate_morning_brief(push_discord=True, publish=True)
+
+    assert [ch for ch, _ in sent] == ["HANK_PRIVATE"]
+    public = json.dumps(report, ensure_ascii=False) + "".join(
+        json.dumps(e[1], ensure_ascii=False) for e in env["events"] if not isinstance(e, str))
+    assert "445.5" not in public and "368.25" not in public
+
+
 def test_shadow_runs_after_publish_and_writes_subdir(env):
     report = mb.generate_morning_brief(push_discord=True, publish=True)
     names = _names(env["events"])

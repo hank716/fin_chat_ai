@@ -1,0 +1,6 @@
+{
+  "_說明": "複製到 ./storage/holdings.json（容器內 /data/holdings.json）再改。user key 對應 DISCORD_<USER>_CHAT_CHANNEL_ID；以底線開頭的 key 會被忽略。",
+  "hank": [
+    {"symbol": "2330", "breakeven": 1000, "alert_below": [900], "alert_above": [1100]}
+  ]
+}
