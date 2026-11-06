@@ -73,6 +73,73 @@ def _budget_features(features: dict[str, Any]) -> dict[str, Any]:
             tw["stocks"] = _cap_stocks(stocks, _movers_symbols(tw.get("movers")), MAX_BRIEF_STOCKS)
     return f
 
+# ── 問答用精簡 features ──
+# 問答的 system prompt 每題都要送，且 server-side 工具迴圈每多一輪就重讀一次。2026-11-06 實測整包
+# features 讓前綴達 68k tokens（Opus 5 每輪 ≈ NT$11），一題常見 NT$22–45。清單外/被點名的個股
+# 另由 api/ask.py 把**完整**區塊放進變動尾段，所以這裡每檔只留回答「篩選型問題」需要的欄位。
+CHAT_STOCK_FIELDS = (
+    "name", "sector", "close",
+    "return_1d_pct", "return_5d_pct", "return_20d_pct",
+    "vs_index_20d_pct", "dist_ma20_pct", "turnover_surge",
+    "foreign_net_buy_5d_lots", "foreign_net_streak", "trust_net_streak",
+    "short_margin_ratio_pct",
+)
+CHAT_SECTOR_FIELDS = ("n", "avg_return_5d_pct", "avg_return_20d_pct", "foreign_net_buy_5d_lots")
+
+
+def _table(items: dict[str, Any], key_name: str, fields: tuple[str, ...]) -> dict[str, Any]:
+    """{key: {欄位...}} → {"columns": [...], "rows": [[...], ...]}。
+
+    欄名只出現一次（原本每檔重複 13 個鍵名，佔掉約一半 token）。缺欄位填 null；
+    `*_score` 欄位（小型股模型分數）有出現就加成一欄。列依 key 排序以維持前綴位元組穩定。
+    """
+    rows_src = {k: v for k, v in items.items() if isinstance(v, dict)}
+    present = [f for f in fields if any(f in v for v in rows_src.values())]
+    scores = sorted({k for v in rows_src.values() for k in v if k.endswith("_score")})
+    cols = present + scores
+    return {
+        "columns": [key_name, *cols],
+        "rows": [[k, *(rows_src[k].get(c) for c in cols)] for k in sorted(rows_src)],
+    }
+
+
+def _sector_table(sectors: dict[str, Any]) -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for name, item in sectors.items():
+        if not isinstance(item, dict):
+            continue
+        row = {k: item[k] for k in CHAT_SECTOR_FIELDS if k in item}
+        leaders = item.get("leaders")
+        if isinstance(leaders, list):
+            row["leaders"] = " ".join(
+                f"{ld.get('symbol')}{ld.get('name') or ''}" for ld in leaders if isinstance(ld, dict)
+            )
+        flat[name] = row
+    return _table(flat, "sector", (*CHAT_SECTOR_FIELDS, "leaders"))
+
+
+def compact_features_for_chat(features: dict[str, Any]) -> dict[str, Any]:
+    """問答用的精簡 features（純函式，不改動傳入物件）。
+
+    tw.stocks / tw.smallcap.stocks 每檔只留 CHAT_STOCK_FIELDS（去掉 fundamentals、融資券明細、
+    自營商等）、tw.sectors 只留平均報酬、外資合計與領漲股，三者都轉成 columns/rows 表格。
+    其餘區塊本來就小，原樣保留。
+    """
+    f = copy.deepcopy(features or {})
+    tw = f.get("tw")
+    if isinstance(tw, dict):
+        stocks = tw.get("stocks")
+        if isinstance(stocks, dict):
+            tw["stocks"] = _table(stocks, "symbol", CHAT_STOCK_FIELDS)
+        sc = tw.get("smallcap")
+        if isinstance(sc, dict) and isinstance(sc.get("stocks"), dict):
+            sc["stocks"] = _table(sc["stocks"], "symbol", CHAT_STOCK_FIELDS)
+        sectors = tw.get("sectors")
+        if isinstance(sectors, dict):
+            tw["sectors"] = _sector_table(sectors)
+    return f
+
+
 SYSTEM_RULES = """你是一個多市場研究助理，協助家庭使用者理解美股與加密貨幣的盤勢與跨市場連動。
 
 嚴格規則（違反視為錯誤）：
@@ -127,11 +194,12 @@ QA_RULES = """你是家庭內部的多市場研究助理，使用者透過 Disco
 
 規則：
 1. 市場數據（價格/報酬/籌碼/資券比）以下方『features JSON + 即時查詢標的資料』為準；即時事實（今日新聞、突發事件、最新報價、總經數據）可用 **Google 搜尋查證**，引用時以可信來源為據、不得捏造。系統會自動附上搜尋來源連結。
-2. 若有提供「即時查詢標的資料」（清單外個別標的），優先用它回答該標的的近期走勢、相對大盤強弱、籌碼（三大法人/融資券/資券比）與風險特性；需要更新的即時消息再輔以搜尋。
+2. 若有提供「即時查詢標的資料」（問題點名的個別標的，含完整欄位），優先用它回答該標的的近期走勢、相對大盤強弱、籌碼（三大法人/融資券/資券比）與風險特性；需要更新的即時消息再輔以搜尋。
 3. 區分事實與推論；跨市場關係只能說「可能影響/傾向」，不可斷言因果。
 4. 這是輔助決策工具（非下單系統），**可以**回答方向看法、合理價/目標價與止損價（以技術面：支撐/壓力/均線/區間為依據，標明為技術參考非保證），由使用者自行判斷。同時要點出該標的的風險（例如槓桿/反向 ETF 每日複利耗損不適合長抱）。**不得**用誇大保證語（保證獲利/穩賺/無風險/一定會漲跌），不得捏造數據。
 5. 繁體中文，**精簡作答（盡量 6 句內，適合 Discord 閱讀）**。
-6. 結尾不需附免責聲明（系統會另外加）。"""
+6. 結尾不需附免責聲明（系統會另外加）。
+7. features JSON 的個股（tw.stocks、tw.smallcap.stocks）與族群（tw.sectors）是 columns/rows 表格，只列摘要欄位；問題點名的代號會另附完整資料（籌碼、融資券、基本面）。若需要某檔的細節但問題沒點名代號，請請使用者指定代號，不要猜。"""
 
 
 INTENT_RULES = """判斷下面這則使用者訊息是否與『金融市場、股票、ETF、加密貨幣、期貨/外匯、總體經濟、\
@@ -156,7 +224,9 @@ def build_qa_static_block(report: dict[str, Any]) -> str:
     也可整塊放進明確快取（cachedContents）；每題變動的內容一律放到 build_qa_variable_block。
     """
     markdown = report.get("markdown", "")
-    features_json = json.dumps(report.get("features", {}), ensure_ascii=False)
+    features_json = json.dumps(
+        compact_features_for_chat(report.get("features", {})), ensure_ascii=False, sort_keys=True,
+    )
     return (
         f"{QA_RULES}\n\n"
         f"今日晨報內容：\n```markdown\n{markdown}\n```\n\n"
@@ -178,7 +248,7 @@ def build_qa_variable_block(
     if on_demand:
         od_json = json.dumps(on_demand, ensure_ascii=False)
         od_block = (
-            f"即時查詢標的資料（清單外，現抓；籌碼單位張、資券比=融券/融資%）：\n"
+            f"即時查詢標的資料（問題點名標的的完整欄位；清單外者為現抓；籌碼單位張、資券比=融券/融資%）：\n"
             f"```json\n{od_json}\n```\n\n"
         )
     fu_block = ""
@@ -439,9 +509,12 @@ def build_chat_system(report: dict[str, Any]) -> str:
 
     對同一份報告逐字不變，故可整塊掛 cache_control（若啟用；預設關閉見 config 註解）。
     features 用 sort_keys 序列化，避免鍵序抖動打掉快取前綴。
+    features 走精簡版（見 compact_features_for_chat）；點名個股的完整資料在變動尾段。
     """
     markdown = report.get("markdown", "")
-    features_json = json.dumps(report.get("features", {}), ensure_ascii=False, sort_keys=True)
+    features_json = json.dumps(
+        compact_features_for_chat(report.get("features", {})), ensure_ascii=False, sort_keys=True,
+    )
     return (
         f"{QA_RULES}\n\n"
         f"{CHAT_VERIFICATION_RULES}\n\n"

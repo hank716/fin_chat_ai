@@ -25,11 +25,37 @@ from reports import morning_brief
 _TW_CODE = re.compile(r"(?<!\d)(\d{4,6}[A-Z]?)(?!\d)")
 
 
-def _ondemand_symbols(question: str, known: set[str], limit: int = 3) -> dict:
-    """抓問題中清單外的台股代號 → 即時查其資料（查無/失敗則略過）。"""
+def _report_stock_blocks(report: dict) -> dict:
+    """晨報裡各檔的**完整** features 區塊（主清單 + 小型股候選）。"""
+    tw = (report.get("features", {}) or {}).get("tw", {}) or {}
+    blocks: dict = {}
+    sc = tw.get("smallcap") or {}
+    if isinstance(sc, dict) and isinstance(sc.get("stocks"), dict):
+        blocks.update(sc["stocks"])
+    if isinstance(tw.get("stocks"), dict):
+        blocks.update(tw["stocks"])
+    return blocks
+
+
+def _ondemand_symbols(
+    question: str, known: set[str], limit: int = 3, report_blocks: dict | None = None,
+) -> dict:
+    """問題中點名的台股代號 → 完整資料。
+
+    晨報內已有的直接取完整區塊（system prompt 裡只有精簡摘要，見 prompts.compact_features_for_chat）；
+    清單外的即時查（查無/失敗則略過）。
+    """
     out: dict = {}
+    report_blocks = report_blocks or {}
     for sym in _TW_CODE.findall(question):
-        if sym in known or sym in out:
+        if sym in out:
+            continue
+        if sym in report_blocks:
+            out[sym] = report_blocks[sym]
+            if len(out) >= limit:
+                break
+            continue
+        if sym in known:
             continue
         try:
             blk = tw_features.build_adhoc_symbol(sym)
@@ -141,7 +167,7 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
         raise HTTPException(status_code=404, detail="尚無晨報可查詢，請先產生晨報")
 
     known = set((report.get("features", {}).get("tw", {}) or {}).get("stocks", {}).keys())
-    on_demand = _ondemand_symbols(req.question, known)
+    on_demand = _ondemand_symbols(req.question, known, report_blocks=_report_stock_blocks(report))
     # 基本面（月營收 YoY/MoM）：對問題中的台股代號 on-demand 抓
     from data_sources.finmind_loader import FinMindBackoff
     from processor.fundamentals import build_fundamentals
@@ -191,6 +217,7 @@ async def ask(req: AskRequest, x_admin_token: str | None = Header(default=None))
 
     cost = tracker.cost_of_usage(usage, model_used, grounded=grounded)
     tracker.record_cost(cost, provider=tracker.provider_of(model_used))
+    tracker.record_ask(cost + intent_cost, usage)
     day_total = tracker.today_total()
     logger.info("ask user=%s tokens=%s cost=NT$%.4f 今日全站=NT$%.2f",
                 req.user_id, usage, cost, day_total)

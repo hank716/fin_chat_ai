@@ -97,9 +97,8 @@ class AnthropicDecisionLLM:
         self, system_prompt: str, user_prompt: str, *, cacheable: bool,
     ) -> tuple[str, Usage]:
         block: dict[str, Any] = {"type": "text", "text": system_prompt}
-        # ⚠️ 預設**不**掛 cache_control。寫入付 1.25×(5m)/2×(1h)、讀取才 0.1×，
-        # 5m 需 2 次、1h 需 3 次以上讀取才回本；chat 用量稀疏時每題都是「寫入後未被讀取
-        # 就過期」＝純虧。詳見 config.enable_claude_prompt_cache 的註解。
+        # 預設掛 cache_control（2026-11-06 起）：單題內的工具迴圈每輪都重讀這個前綴，
+        # 用到一次工具就回本。詳見 config.enable_claude_prompt_cache 的註解。
         if cacheable and settings.enable_claude_prompt_cache:
             block["cache_control"] = {"type": "ephemeral", "ttl": settings.claude_cache_ttl}
         return claude_client.generate_answer(

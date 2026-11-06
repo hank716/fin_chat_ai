@@ -83,7 +83,9 @@ class Settings(BaseSettings):
     # 沒升 → 退回 3/4（specs/023 tasks.md T026–T027）。
     claude_brief_fetch_uses: int = 5                  # 晨報：查證用 web_fetch 次數上限
     claude_brief_search_uses: int = 2                 # 晨報：補漏用 web_search 次數上限
-    claude_chat_fetch_uses: int = 4                   # 問答：互動情境對延遲敏感，壓低
+    # 問答：互動情境對延遲敏感，壓低。2026-11-06 由 4 調 2：問答沒有 facts pack，fetch 只能開
+    # 搜尋結果裡的 URL；抓回的頁面落在快取斷點之後，後續每輪都以全價重送。
+    claude_chat_fetch_uses: int = 2
     claude_chat_search_uses: int = 2
     # 單頁擷取上限（防長文把 input 撐爆）。2026-10-13 由 3000 調到 8000，依據是實測各站在
     # 不同上限下拿到的中文內文字數：money.udn 358→1,927、ctee 573→2,224（3000 時幾乎只有
@@ -93,10 +95,12 @@ class Settings(BaseSettings):
     # 每多一輪就多一次完整輸出 + 一次前綴重讀。調低的風險是查證做到一半被切斷，
     # 靠報告 JSON 的 `cost.tokens.rounds` 監控：連續多篇頂到上限就代表被切，再調回。
     claude_max_continuations: int = 2
-    # ⚠️ 問答預設關閉是刻意的：Anthropic 快取寫入付 1.25×(5m)/2×(1h)、讀取才 0.1×，
-    # 5m 需 2 次、1h 需 3 次以上讀取才回本。chat 用量稀疏時每題都是「寫入後未被讀取就過期」
-    # ＝純虧。只有觀察到「同一份晨報 5 分鐘內被問 ≥2 題」才值得開。
-    enable_claude_prompt_cache: bool = False
+    # 問答 prompt cache：2026-11-06 由關改開。原本關的理由是「chat 稀疏、寫入後沒被讀就過期」，
+    # 但那只算了**跨題**重用，漏掉**單題內**的 server-side 工具迴圈——每次 web_search/web_fetch
+    # 都會把整個前綴重送一輪（晨報開快取的同一條理由）。實測前綴 68k tokens 未快取時每輪
+    # ≈ NT$11，一題 NT$22–45。取捨：沒用到工具的題目多付 0.25× 前綴寫入（精簡後約 NT$1）；
+    # 只要用到一次工具就回本。
+    enable_claude_prompt_cache: bool = True
     # 晨報則**相反、預設開**：server-side 工具迴圈在單一請求內把同一個 ~55k 前綴重讀十幾次，
     # 這正是 prompt caching 最划算的場景（寫一次 1.25×，之後每輪讀 0.1×）。
     # 同一個機制、相反的結論，差別只在「同一份前綴會被讀幾次」。

@@ -364,6 +364,56 @@ def record_cost(cost_twd: float, provider: str | None = None) -> None:
         logger.warning("記錄成本失敗: %s", exc)
 
 
+_ASK_USAGE_FIELDS = {
+    "input": "input_tokens",
+    "cached": "cached_tokens",
+    "cache_write": "cache_write_tokens",
+    "output": "output_tokens",
+    "searches": "web_search_requests",
+    "fetches": "web_fetch_requests",
+}
+
+
+def _ask_key() -> str:
+    return f"cost:ask:{_now():%Y%m}"
+
+
+def record_ask(cost_twd: float, usage: dict | None) -> None:
+    """問答逐題留痕：當月 hash 累加題數、金額與 token 拆解（70d TTL）。
+
+    只是統計，不參與預算判斷（那是 record_cost 的事）。存在的理由：問答花費原本只能從
+    每篇晨報存的 month_total 差額倒推，看不出「一題多少錢、錢花在哪一段」。
+    查：`redis-cli hgetall cost:ask:YYYYMM`。
+    """
+    try:
+        key = _ask_key()
+        redis_client.hincrby(key, "n", 1)
+        redis_client.hincrbyfloat(key, "twd", float(cost_twd))
+        for field, src in _ASK_USAGE_FIELDS.items():
+            value = int((usage or {}).get(src, 0) or 0)
+            if value:
+                redis_client.hincrby(key, field, value)
+        redis_client.expire(key, 70 * 24 * 3600)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("記錄問答統計失敗: %s", exc)
+
+
+def ask_stats(month: str | None = None) -> dict[str, float]:
+    """讀當月（或指定 YYYYMM）問答統計；含平均每題金額 avg_twd。"""
+    key = f"cost:ask:{month}" if month else _ask_key()
+    try:
+        raw = redis_client.hgetall(key) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {
+        (k.decode() if isinstance(k, bytes) else k): float(v)
+        for k, v in raw.items()
+    }
+    if out.get("n"):
+        out["avg_twd"] = round(out.get("twd", 0.0) / out["n"], 4)
+    return out
+
+
 def set_month_total(total_twd: float) -> float:
     """把『當月全站累計』校準成 Google 後台的實際金額（覆寫月桶，保留/補回 TTL）。
 

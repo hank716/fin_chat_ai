@@ -1,13 +1,8 @@
-"""問答 prompt caching 開關（spec 022 WP4）。
+"""問答 prompt caching 開關（spec 022 WP4；2026-11-06 預設改開）。
 
-⚠️ 這裡釘住的是一個**違反直覺**的結論：chat 用量稀疏時，開 prompt caching 會讓成本**變高**。
-
-Anthropic 快取寫入付 1.25×(5m) / 2×(1h) 的 input 價、讀取才 0.1×，
-5m 需 2 次、1h 需 3 次以上讀取才回本。一天只問一兩題且分散在不同時段時，
-每題都是「寫入後從未被讀取就過期」＝每題多付 25–100% input 費用換零收益。
-
-這跟 Gemini 的 cachedContents 直覺相反（那個是先付一筆存起來、按存放時間計費），
-所以預設必須是關的，且要有測試防止有人「順手打開優化一下」。
+原本預設關，理由是「chat 稀疏、跨題重用不到」。但單題內的 server-side 工具迴圈
+每次 web_search/web_fetch 都把整個前綴重送一輪——未快取時 68k 前綴每輪約 NT$11。
+所以只要用到一次工具，5m 快取（寫 1.25×、讀 0.1×）就回本。TTL 仍應從 5m 起，不是 1h。
 """
 from __future__ import annotations
 
@@ -30,10 +25,12 @@ def _captured(monkeypatch):
     return calls
 
 
-def test_default_is_off():
-    """預設關閉——見檔頭的成本說明。改這個預設前請先看 log 的 cache_read_input_tokens。"""
-    assert settings.enable_claude_prompt_cache is False
-    assert settings.claude_cache_ttl == "5m"   # 開的話也該從 5m 起，不是 1h
+def test_default_is_on_with_short_ttl():
+    """預設開——見檔頭。檢查 Settings 預設值而非 .env，避免本機設定影響。"""
+    from config import Settings
+    assert Settings.model_fields["enable_claude_prompt_cache"].default is True
+    assert Settings.model_fields["claude_cache_ttl"].default == "5m"
+    assert Settings.model_fields["claude_chat_fetch_uses"].default == 2
 
 
 def test_no_cache_control_when_disabled(monkeypatch, _captured):
