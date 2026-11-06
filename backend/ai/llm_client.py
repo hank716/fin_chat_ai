@@ -77,7 +77,9 @@ class AnthropicDecisionLLM:
         )
         draft, usage, attempts = claude_client.generate_structured(
             BriefDraft,
-            system=prompts.build_decision_system(verify=not frugal),
+            system=prompts.build_decision_system(
+                verify=not frugal, fetch_budget=settings.claude_brief_fetch_uses,
+            ),
             user_prompt=prompts.build_decision_prompt(
                 features, "[]" if frugal else facts_json, calibration,
             ),
@@ -149,7 +151,9 @@ class OpenAIDecisionLLM:
         )
         draft, usage, attempts, version = openai_client.generate_structured(
             BriefDraft,
-            system=prompts.build_decision_system(verify=not frugal),
+            system=prompts.build_decision_system(
+                verify=not frugal, fetch_budget=settings.openai_brief_fetch_uses,
+            ),
             user_prompt=prompts.build_decision_prompt(
                 features, "[]" if frugal else facts_json, calibration,
             ),

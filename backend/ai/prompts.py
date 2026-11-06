@@ -457,7 +457,29 @@ BREVITY_RULES = """## 篇幅（違反視為失敗）
 """
 
 
-def build_decision_system(*, verify: bool = True) -> str:
+def fetch_budget_rules(fetch_budget: int) -> str:
+    """查證額度 + 優先順序（2026-11-06 加入）。
+
+    加入前模型看不到額度：facts pack 常有 7–9 則、額度 5，它在用掉 3–4 次後就停，
+    剩下的線索標 unverifiable 不開（10/28–11/6 共 18 則，31%）。被略過的多數確實無關，
+    但也包含台灣央行公告、聯電訂單、景氣燈號這類該查的——缺的是排序，不是額度。
+    """
+    return f"""## 查證額度與優先順序
+
+本次 `web_fetch` 最多 **{fetch_budget} 次**（每開一個 URL 算一次，打不開也算）。facts pack 的線索通常比額度多，
+請先依下列順序排好，再由高到低逐則開啟：
+
+1. **台股直接相關**：台灣政府機關（央行、主計總處、金管會、經濟部）公告、台灣總經數據（景氣燈號、出口、CPI）、
+   features 內的台股個股或族群新聞。
+2. **會傳導到台股的國際事件**：Fed 與美國總經數據、美股科技/半導體龍頭、重大地緣政治。
+3. **其餘**：其他國家央行、加密貨幣、與台股關聯弱的事件——前兩類查完、還有額度才開。
+
+額度還沒用完時不要提前結束查證，把剩餘次數用在下一順位的線索上；只有明顯不是新聞的頁面
+（利率總覽、行情列表、首頁）可以直接跳過。沒開的線索照樣記進 `fact_checks` 標 `unverifiable`，
+`note` 寫「未開啟（優先順序較低）」或「非新聞頁」。"""
+
+
+def build_decision_system(*, verify: bool = True, fetch_budget: int | None = None) -> str:
     """決策層 system prompt：寫作規範 + 篇幅上限 + 段落定義 + 查證契約。
 
     `FULL_BRIEF_RULES` 是產品規格（寫作風格、8 個 section、watchlist 規則），與供應商無關，
@@ -468,8 +490,13 @@ def build_decision_system(*, verify: bool = True) -> str:
 
     篇幅上限在 2026-08-07 加入：Opus 5 預設寫得比前代長，而 thinking + 可見輸出**合計**
     以 output 費率計價（$25/MTok），實測單篇 output 32,236 tokens ≈ NT$25.8。
+
+    `fetch_budget` 給了就附上額度與優先順序（見 fetch_budget_rules）；值要跨日固定，
+    否則 system prompt 變動會打掉 prompt cache 前綴。
     """
     tail = VERIFICATION_CONTRACT if verify else NO_VERIFICATION_NOTE
+    if verify and fetch_budget:
+        tail = f"{tail}\n{fetch_budget_rules(int(fetch_budget))}"
     return f"{FULL_BRIEF_RULES}\n\n{BREVITY_RULES}\n\n{tail}"
 
 

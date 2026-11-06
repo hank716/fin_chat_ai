@@ -159,3 +159,41 @@ def test_normal_brief_keeps_tools_and_brief_effort(monkeypatch):
     assert captured["effort"] == "medium"
     assert captured["cacheable"] is True
     assert "## 查證契約" in captured["system"]
+
+
+def test_brief_system_states_fetch_budget_and_taiwan_priority(monkeypatch):
+    """模型看不到額度時會提前停手、略過台股相關線索（10/28–11/6 實測 31%）。"""
+    from ai import llm_client
+
+    captured: dict = {}
+
+    def _fake_generate_structured(model_cls, **kwargs):  # noqa: ARG001
+        captured.update(kwargs)
+        from ai.schemas import BriefDraft
+        return BriefDraft.model_construct(fact_checks=[]), {"input_tokens": 0}, []
+
+    monkeypatch.setattr(llm_client.claude_client, "generate_structured",
+                        _fake_generate_structured)
+    monkeypatch.setattr(llm_client.settings, "claude_brief_fetch_uses", 5)
+
+    llm_client.AnthropicDecisionLLM().draft_brief({"as_of": "2026-11-06"}, "[]", None)
+    system = captured["system"]
+    assert "## 查證額度與優先順序" in system
+    assert "最多 **5 次**" in system
+    assert system.index("台股直接相關") < system.index("其他國家央行")
+    # 工具額度 max_uses 與 prompt 寫的次數必須是同一個值
+    fetch_tool = next(t for t in captured["tools"] if t["name"] == "web_fetch")
+    assert fetch_tool["max_uses"] == 5
+
+
+def test_frugal_brief_has_no_budget_rules():
+    from ai import prompts
+    assert "查證額度" not in prompts.build_decision_system(verify=False, fetch_budget=5)
+    assert "查證額度" not in prompts.build_decision_system(verify=True)   # 沒給額度就不寫
+
+
+def test_budget_rules_are_byte_stable():
+    """system prompt 在 prompt cache 前綴內——同樣的額度必須產生逐字相同的文字。"""
+    from ai import prompts
+    assert (prompts.build_decision_system(fetch_budget=5)
+            == prompts.build_decision_system(fetch_budget=5))
